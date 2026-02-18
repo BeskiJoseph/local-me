@@ -1,0 +1,411 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/firestore_service.dart';
+import '../widgets/user_search_card.dart';
+import '../widgets/post_card.dart';
+import '../models/post.dart';
+import '../utils/proxy_helper.dart';
+import 'post_detail_screen.dart';
+
+/// Simple search screen with user and content search
+class SearchScreen extends StatefulWidget {
+  const SearchScreen({super.key});
+
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderStateMixin {
+  final TextEditingController _searchController = TextEditingController();
+  final FirestoreService _firestoreService = FirestoreService();
+  String _searchQuery = '';
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Search',
+          style: TextStyle(
+            fontFamily: 'Inter',
+            fontSize: 32,
+            fontWeight: FontWeight.w700,
+            color: Colors.black,
+            letterSpacing: -0.5,
+          ),
+        ),
+        centerTitle: false,
+        elevation: 0,
+        backgroundColor: Colors.white,
+      ),
+      backgroundColor: Colors.white,
+      body: Column(
+        children: [
+          // Simple Search Bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (value) {
+                setState(() {
+                  _searchQuery = value.trim();
+                });
+              },
+              style: const TextStyle(fontFamily: 'Inter', fontSize: 16),
+              decoration: InputDecoration(
+                hintText: 'Search users or posts...',
+                hintStyle: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.grey.shade500,
+                ),
+                prefixIcon: Icon(Icons.search, color: Colors.grey.shade500, size: 24),
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, color: Colors.grey),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _searchQuery = '';
+                          });
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: const Color(0xFFF3F4F6),
+              ),
+            ),
+          ),
+
+          // Tab Bar (only show when searching)
+          if (_searchQuery.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: TabBar(
+                controller: _tabController,
+                indicator: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                labelColor: Colors.white,
+                unselectedLabelColor: Theme.of(context).textTheme.bodyMedium?.color,
+                labelStyle: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                  fontFamily: 'Inter',
+                ),
+                unselectedLabelStyle: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 15,
+                  fontFamily: 'Inter',
+                ),
+                dividerColor: Colors.transparent,
+                tabs: const [
+                  Tab(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.person, size: 16),
+                        SizedBox(width: 8),
+                        Text('Users'),
+                      ],
+                    ),
+                  ),
+                  Tab(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.article, size: 16),
+                        SizedBox(width: 8),
+                        Text('Posts'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          const SizedBox(height: 16),
+
+          // Search Results
+          Expanded(
+            child: _searchQuery.isEmpty
+                ? _buildExploreGrid()
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildUserSearch(),
+                      _buildContentSearch(),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUserSearch() {
+    return StreamBuilder(
+      stream: _firestoreService.searchUsers(_searchQuery),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return _buildErrorState();
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return _buildNoResultsState('users');
+        }
+
+        final users = snapshot.data!.docs;
+
+        return ListView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: users.length,
+          itemBuilder: (context, index) {
+            final user = users[index];
+            return UserSearchCard(
+              userId: user.id,
+              userData: user.data() as Map<String, dynamic>,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildContentSearch() {
+    return StreamBuilder(
+      stream: _firestoreService.searchPosts(_searchQuery),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return _buildErrorState();
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return _buildNoResultsState('posts');
+        }
+
+        final posts = snapshot.data!.docs;
+
+        return ListView.builder(
+          padding: const EdgeInsets.only(left: 16, right: 16, bottom: 80),
+          itemCount: posts.length,
+          itemBuilder: (context, index) {
+            final doc = posts[index];
+            final post = Post.fromFirestore(doc);
+            return PostCard(post: post);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildExploreGrid() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const SizedBox.shrink();
+
+    return FutureBuilder<List<Post>>(
+      future: FirestoreService.getRecommendedFeed(userId: user.uid, limit: 30),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final posts = snapshot.data ?? [];
+        if (posts.isEmpty) return _buildEmptyState();
+
+        return GridView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 2,
+            mainAxisSpacing: 2,
+            childAspectRatio: 0.8, // Slightly taller for reels/images
+          ),
+          itemCount: posts.length,
+          itemBuilder: (context, index) {
+            final post = posts[index];
+            return GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => PostDetailScreen(post: post),
+                  ),
+                );
+              },
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (post.mediaUrl != null)
+                    Image.network(
+                      ProxyHelper.getUrl(post.thumbnailUrl ?? post.mediaUrl!),
+                      fit: BoxFit.cover,
+                    )
+                  else
+                    Container(
+                      color: Colors.grey.shade100,
+                      padding: const EdgeInsets.all(8),
+                      child: Center(
+                        child: Text(
+                          post.title,
+                          maxLines: 4,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  if (post.mediaType == 'video')
+                    const Positioned(
+                      top: 8,
+                      right: 8,
+                      child: Icon(Icons.play_circle_outline, color: Colors.white, size: 20),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.search,
+            size: 80,
+            color: Colors.grey.shade400,
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'Search Users \u0026 Posts',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'Inter',
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Start typing to find what you\'re looking for',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w400,
+              fontFamily: 'Inter',
+              color: Colors.grey,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoResultsState(String type) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            type == 'users' ? Icons.person_off_outlined : Icons.article_outlined,
+            size: 64,
+            color: Colors.grey.shade400,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No $type found',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'Inter',
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Try a different search term',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w400,
+              fontFamily: 'Inter',
+              color: Colors.grey,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.error_outline,
+            size: 64,
+            color: Colors.red.shade300,
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Something went wrong',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'Inter',
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Please try again',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w400,
+              fontFamily: 'Inter',
+              color: Colors.grey,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
