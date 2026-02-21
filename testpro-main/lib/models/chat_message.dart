@@ -1,6 +1,3 @@
-
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class ChatMessage {
   final String id;
   final String senderId;
@@ -18,16 +15,29 @@ class ChatMessage {
     required this.timestamp,
   });
 
-  factory ChatMessage.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final Map<String, dynamic> data = json['data'] ?? json;
+    final String actualId = json['id'] as String? ?? '';
+    
+    DateTime parseDate(dynamic date) {
+      if (date == null) return DateTime.now();
+      if (date is DateTime) return date;
+      return DateTime.tryParse(date.toString()) ?? DateTime.now();
+    }
+
     return ChatMessage(
-      id: doc.id,
+      id: actualId,
       senderId: data['senderId'] ?? '',
       senderName: data['senderName'] ?? '',
       senderProfileImage: data['senderProfileImage'],
       text: data['text'] ?? '',
-      timestamp: (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      timestamp: parseDate(data['timestamp']),
     );
+  }
+
+  // Backward compatibility
+  factory ChatMessage.fromMap(Map<String, dynamic> data, [String? id]) {
+    return ChatMessage.fromJson({...data, if (id != null) 'id': id});
   }
 
   Map<String, dynamic> toMap() {
@@ -36,7 +46,7 @@ class ChatMessage {
       'senderName': senderName,
       'senderProfileImage': senderProfileImage,
       'text': text,
-      'timestamp': FieldValue.serverTimestamp(),
+      'timestamp': timestamp.toIso8601String(),
     };
   }
 }

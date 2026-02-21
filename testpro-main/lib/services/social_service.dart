@@ -1,10 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/post.dart';
 import '../models/user_profile.dart';
 import '../repositories/social_repository.dart';
 
 /// Facade for [SocialRepository].
-/// Provides static access to social interaction operations.
 class SocialService {
   static SocialRepository _repository = SocialRepository();
   
@@ -12,32 +10,24 @@ class SocialService {
   
   static set repository(SocialRepository repo) => _repository = repo;
 
-  static Future<void> toggleLikePost(String postId, String userId, {String? category, List<String>? tags}) {
-    return _repository.toggleLikePost(postId, userId, category: category, tags: tags);
-  }
-
-  static Future<void> setPostLike(String postId, String userId, bool shouldLike) {
-    return _repository.setPostLike(postId, userId, shouldLike);
+  static Future<void> toggleLikePost(String postId, String userId) {
+    return _repository.toggleLikePost(postId, userId);
   }
 
   static Stream<bool> isPostLikedStream(String postId, String userId) {
     return _repository.isPostLikedStream(postId, userId);
   }
 
-  static Future<void> followUser(String currentUserId, String targetUserId) {
-    return _repository.followUser(currentUserId, targetUserId);
-  }
-
-  static Future<void> unfollowUser(String currentUserId, String targetUserId) {
-    return _repository.unfollowUser(currentUserId, targetUserId);
+  static Future<void> toggleFollowUser(String targetUserId) {
+    return _repository.toggleFollowUser(targetUserId);
   }
 
   static Stream<List<UserProfile>> followersStream(String userId) {
     return _repository.followersStream(userId);
   }
 
-  static Stream<bool> isUserFollowedStream(String currentUserId, String targetUserId) {
-    return _repository.isUserFollowedStream(currentUserId, targetUserId);
+  static Stream<bool> isUserFollowedStream(String userId, String targetUserId) {
+    return _repository.isUserFollowedStream(userId, targetUserId);
   }
 
   static Stream<List<Post>> likedPostsStream(String userId) {

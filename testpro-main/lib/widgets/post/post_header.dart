@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../models/post.dart';
+import '../../services/auth_service.dart';
 import '../../core/utils/time_utils.dart';
 import '../../core/utils/navigation_utils.dart';
 import '../../shared/widgets/user_avatar.dart';
@@ -43,7 +44,11 @@ class PostHeader extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    post.authorName,
+                    (post.authorName.isEmpty || post.authorName == 'User') 
+                        ? (AuthService.currentUser?.uid == post.authorId 
+                            ? (AuthService.currentUser?.displayName ?? AuthService.currentUser?.email?.split('@')[0] ?? 'User')
+                            : 'User')
+                        : post.authorName,
                     style: const TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 15,

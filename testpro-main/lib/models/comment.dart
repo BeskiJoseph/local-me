@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class Comment {
   final String id;
   final String postId;
@@ -19,36 +17,36 @@ class Comment {
     required this.createdAt,
   });
 
-  factory Comment.fromMap(String id, Map<String, dynamic> data) {
-    final rawCreatedAt = data['createdAt'];
-    DateTime created;
-    if (rawCreatedAt is Timestamp) {
-      created = rawCreatedAt.toDate();
-    } else if (rawCreatedAt is DateTime) {
-      created = rawCreatedAt;
-    } else {
-      created = DateTime.now();
+  factory Comment.fromJson(Map<String, dynamic> json) {
+    DateTime parseDate(dynamic date) {
+      if (date == null) return DateTime.now();
+      if (date is DateTime) return date;
+      return DateTime.tryParse(date.toString()) ?? DateTime.now();
     }
 
     return Comment(
-      id: id,
-      postId: data['postId'] as String? ?? '',
-      authorId: data['authorId'] as String? ?? '',
-      authorName: data['authorName'] as String? ?? 'Unknown',
-      authorProfileImage: data['authorProfileImage'] as String?,
-      text: data['text'] as String? ?? '',
-      createdAt: created,
+      id: json['id'] as String? ?? '',
+      postId: json['postId'] as String? ?? '',
+      authorId: json['authorId'] as String? ?? '',
+      authorName: json['authorName'] as String? ?? 'User',
+      authorProfileImage: json['authorProfileImage'] as String?,
+      text: json['text'] as String? ?? '',
+      createdAt: parseDate(json['createdAt']),
     );
   }
 
-  Map<String, dynamic> toMap() {
+  factory Comment.fromMap(Map<String, dynamic> map) => Comment.fromJson(map);
+
+
+  Map<String, dynamic> toJson() {
     return {
+      'id': id,
       'postId': postId,
       'authorId': authorId,
       'authorName': authorName,
       'authorProfileImage': authorProfileImage,
       'text': text,
-      'createdAt': createdAt,
+      'createdAt': createdAt.toIso8601String(),
     };
   }
 }

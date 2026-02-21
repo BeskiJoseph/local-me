@@ -1,14 +1,14 @@
 import express from 'express';
-import admin from 'firebase-admin';
+import admin, { db } from '../config/firebase.js';
 import logger from '../utils/logger.js';
-import { verifyFirebaseToken } from '../middleware/auth.js';
+import authenticate from '../middleware/auth.js';
+import AuditService from '../services/auditService.js';
 import { body, validationResult } from 'express-validator';
 
 const router = express.Router();
-const db = admin.firestore();
 
 // Apply auth middleware to all interaction routes
-router.use(verifyFirebaseToken);
+router.use(authenticate);
 
 /**
  * @route   POST /api/interactions/like
@@ -65,10 +65,22 @@ router.post(
                 }
             });
 
-            res.json({ success: true });
+            // Log Audit Action after successful transaction
+            await AuditService.logAction({
+                userId,
+                action: 'POST_LIKE_TOGGLE',
+                metadata: { postId },
+                req
+            });
+
+            return res.json({
+                success: true,
+                data: { status: 'active' },
+                error: null
+            });
         } catch (error) {
             logger.error('Like Error', { error: error.message, postId, userId });
-            res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: error.message });
         }
     }
 );
@@ -119,9 +131,21 @@ router.post(
                 }).catch(err => logger.error('Notification Error', { err: err.message }));
             });
 
-            res.json({ success: true, commentId: commentRef.id });
+            // Log Audit Action after successful transaction
+            await AuditService.logAction({
+                userId,
+                action: 'POST_COMMENT_CREATED',
+                metadata: { postId, commentId: commentRef.id },
+                req
+            });
+
+            return res.json({
+                success: true,
+                data: { commentId: commentRef.id },
+                error: null
+            });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: error.message });
         }
     }
 );
@@ -176,9 +200,13 @@ router.post(
                     }).catch(err => logger.error('Notification Error', { err: err.message }));
                 }
             });
-            res.json({ success: true });
+            return res.json({
+                success: true,
+                data: { status: 'active' },
+                error: null
+            });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: error.message });
         }
     }
 );
@@ -222,9 +250,13 @@ router.post(
                     });
                 }
             });
-            res.json({ success: true });
+            return res.json({
+                success: true,
+                data: { status: 'active' },
+                error: null
+            });
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: error.message });
         }
     }
 );
@@ -250,4 +282,152 @@ async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, t
     await db.collection('notifications').add(notificationData);
 }
 
+/**
+ * @route   GET /api/interactions/comments/:postId
+ * @desc    Get comments for a post
+ */
+router.get('/comments/:postId', authenticate, async (req, res, next) => {
+    try {
+        const snapshot = await db.collection('comments')
+            .where('postId', '==', req.params.postId)
+            .orderBy('createdAt', 'desc')
+            .get();
+
+        const comments = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            createdAt: doc.data().createdAt?.toDate()?.toISOString()
+        }));
+
+        return res.json({
+            success: true,
+            data: comments,
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+/**
+ * @route   POST /api/interactions/likes/batch
+ * @desc    Check likes for multiple post IDs in a single call (Optimized for feed)
+ */
+router.post('/likes/batch', authenticate, async (req, res, next) => {
+    try {
+        const { postIds } = req.body;
+        if (!postIds || !Array.isArray(postIds) || postIds.length === 0) {
+            return res.json({ success: true, data: {}, error: null });
+        }
+
+        const userId = req.user.uid;
+
+        // Firestore 'in' queries are limited to 30 items
+        const chunks = [];
+        for (let i = 0; i < postIds.length; i += 30) {
+            chunks.push(postIds.slice(i, i + 30));
+        }
+
+        const results = {};
+        await Promise.all(chunks.map(async (chunk) => {
+            const snapshot = await db.collection('likes')
+                .where('userId', '==', userId)
+                .where('postId', 'in', chunk)
+                .get();
+
+            snapshot.docs.forEach(doc => {
+                results[doc.data().postId] = true;
+            });
+        }));
+
+        // Fill in missing with false for clarity
+        postIds.forEach(id => {
+            if (!results[id]) results[id] = false;
+        });
+
+        return res.json({
+            success: true,
+            data: results,
+            error: null
+        });
+    } catch (err) {
+        return next(err);
+    }
+});
+
+/**
+ * @route   GET /api/interactions/likes/check
+ * @desc    Check if current user liked a post and get canonical likeCount
+ */
+router.get('/likes/check', authenticate, async (req, res, next) => {
+    try {
+        const { postId } = req.query;
+        if (!postId) return res.status(400).json({ error: 'postId query param required' });
+
+        const userId = req.user.uid;
+        const likeId = `${postId}_${userId}`;
+        const [likeDoc, postDoc] = await Promise.all([
+            db.collection('likes').doc(likeId).get(),
+            db.collection('posts').doc(postId).get()
+        ]);
+
+        return res.json({
+            success: true,
+            data: {
+                liked: likeDoc.exists,
+                likeCount: postDoc.exists ? (postDoc.data().likeCount || 0) : 0
+            },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   GET /api/interactions/follows/check
+ * @desc    Check if current user follows a target user
+ */
+router.get('/follows/check', authenticate, async (req, res, next) => {
+    try {
+        const { targetUserId } = req.query;
+        if (!targetUserId) return res.status(400).json({ error: 'targetUserId query param required' });
+
+        const userId = req.user.uid;
+        const followId = `${userId}_${targetUserId}`;
+        const followDoc = await db.collection('follows').doc(followId).get();
+
+        return res.json({
+            success: true,
+            data: { followed: followDoc.exists },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   GET /api/interactions/events/check
+ * @desc    Check if current user is attending an event
+ */
+router.get('/events/check', authenticate, async (req, res, next) => {
+    try {
+        const { eventId } = req.query;
+        if (!eventId) return res.status(400).json({ error: 'eventId query param required' });
+
+        const userId = req.user.uid;
+        const attendanceId = `${eventId}_${userId}`;
+        const attendanceDoc = await db.collection('event_attendance').doc(attendanceId).get();
+
+        return res.json({
+            success: true,
+            data: { attending: attendanceDoc.exists },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
 export default router;
+

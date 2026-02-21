@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../models/notification.dart';
-import '../services/firestore_service.dart';
+import '../services/auth_service.dart';
+import '../services/backend_service.dart';
 import '../utils/proxy_helper.dart';
+import '../config/app_theme.dart';
 import 'post_detail_screen.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
@@ -16,71 +16,320 @@ class ActivityScreen extends StatefulWidget {
   State<ActivityScreen> createState() => _ActivityScreenState();
 }
 
-class _ActivityScreenState extends State<ActivityScreen> {
-  final String _currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+class _ActivityScreenState extends State<ActivityScreen>
+    with SingleTickerProviderStateMixin {
+  final String _currentUserId = AuthService.currentUser?.uid ?? '';
+  late TabController _tabController;
+  
+  List<ActivityNotification> _notifications = [];
+  bool _isLoading = true;
+  bool _hasMore = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _loadNotifications(refresh: true);
+  }
+
+  Future<void> _loadNotifications({bool refresh = false}) async {
+    if (!mounted) return;
+    if (refresh) {
+      setState(() {
+        _isLoading = true;
+        _notifications.clear();
+      });
+    }
+
+    try {
+      final response = await BackendService.getNotifications();
+      if (!mounted) return;
+
+      if (response.success && response.data != null) {
+        setState(() {
+          final List<ActivityNotification> items = response.data!
+              .map((e) => ActivityNotification.fromJson(e))
+              .toList();
+              
+          if (refresh) {
+            _notifications = items;
+          } else {
+            _notifications.addAll(items);
+          }
+          
+          _isLoading = false;
+          _hasMore = false; // Backend currently returns all, so we stop here
+        });
+      } else {
+        setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      debugPrint('Error loading notifications: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: AppTheme.cardWhite,
         elevation: 0,
+        automaticallyImplyLeading: false,
         title: const Text(
-          'Activity',
+          'Notification Central',
           style: TextStyle(
-            color: Colors.black,
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'Inter',
+            fontFamily: AppTheme.fontFamily,
+            color: AppTheme.textPrimary,
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
           ),
         ),
+        actions: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Icon(Icons.notifications_outlined, color: AppTheme.textPrimary, size: 26),
+              ),
+              // Dynamic badge from local state
+              Builder(
+                builder: (context) {
+                  final unreadCount = _notifications.where((n) => !n.isRead).length;
+                  if (unreadCount == 0) return const SizedBox.shrink();
+                  return Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: const BoxDecoration(
+                        color: AppTheme.badgeRed,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          unreadCount > 9 ? '9+' : '$unreadCount',
+                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ],
       ),
-      body: StreamBuilder<List<ActivityNotification>>(
-        stream: FirestoreService.notificationsStream(_currentUserId),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: Column(
+        children: [
+          // ── Tab Row ──────────────────────────────────────────
+          Container(
+            color: AppTheme.cardWhite,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Row(
+              children: [
+                _PillTab(
+                  label: 'All',
+                  isSelected: _tabController.index == 0,
+                  onTap: () => setState(() => _tabController.index = 0),
+                ),
+                const SizedBox(width: 8),
+                _PillTab(
+                  label: 'Mentions',
+                  isSelected: _tabController.index == 1,
+                  onTap: () => setState(() => _tabController.index = 1),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () {},
+                  child: const Text(
+                    'Mark all as read',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontFamily,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: AppTheme.border),
 
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
-
-          final notifications = snapshot.data ?? [];
-
-          if (notifications.isEmpty) {
-            return const EmptyStateWidget(
-              icon: Icons.notifications_none,
-              title: 'No activity yet',
-            );
-          }
-
-          return ListView.builder(
-            itemCount: notifications.length,
-            itemBuilder: (context, index) {
-              return _buildNotificationItem(notifications[index]);
-            },
-          );
-        },
+          // ── Notification List ─────────────────────────────────
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () => _loadNotifications(refresh: true),
+              color: AppTheme.primary,
+              child: _buildNotificationList(),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildNotificationItem(ActivityNotification notification) {
-    return InkWell(
-      onTap: () => _handleNotificationTap(notification),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  Widget _buildNotificationList() {
+    if (_isLoading && _notifications.isEmpty) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppTheme.primary),
+      );
+    }
+    
+    if (_notifications.isEmpty) {
+      return const EmptyStateWidget(
+        icon: Icons.notifications_none_rounded,
+        title: 'No activity yet',
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      itemCount: _notifications.length,
+      itemBuilder: (context, index) {
+        // Simple section header logic
+        if (index == 5 && _notifications.length > 5) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Earlier',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontFamily,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+              _NotificationTile(
+                notification: _notifications[index],
+                onTap: () => _handleNotificationTap(_notifications[index]),
+              ),
+            ],
+          );
+        }
+        return _NotificationTile(
+          notification: _notifications[index],
+          onTap: () => _handleNotificationTap(_notifications[index]),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleNotificationTap(ActivityNotification notification) async {
+    if (!notification.isRead) {
+      // Optimistic update
+      setState(() {
+        final idx = _notifications.indexWhere((n) => n.id == notification.id);
+        if (idx != -1) {
+          _notifications[idx] = ActivityNotification(
+            id: notification.id,
+            fromUserId: notification.fromUserId,
+            fromUserName: notification.fromUserName,
+            fromUserProfileImage: notification.fromUserProfileImage,
+            toUserId: notification.toUserId,
+            type: notification.type,
+            postId: notification.postId,
+            postThumbnail: notification.postThumbnail,
+            commentText: notification.commentText,
+            timestamp: notification.timestamp,
+            isRead: true,
+          );
+        }
+      });
+      
+      try {
+        await BackendService.markNotificationAsRead(notification.id);
+      } catch (e) {
+        debugPrint('Error marking notification as read: $e');
+      }
+    }
+
+    if (!mounted) return;
+    
+    if (notification.postId != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => PostDetailScreen(postId: notification.postId!)),
+      );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pill Tab
+// ─────────────────────────────────────────────────────────────
+class _PillTab extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _PillTab({required this.label, required this.isSelected, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: AppTheme.durationFast,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         decoration: BoxDecoration(
-          color: notification.isRead ? Colors.white : Colors.blue.withOpacity(0.05),
-          border: Border(
-            bottom: BorderSide(color: Colors.grey.shade100),
+          color: isSelected ? AppTheme.primary : AppTheme.border,
+          borderRadius: BorderRadius.circular(AppTheme.radiusCircle),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: AppTheme.fontFamily,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: isSelected ? Colors.white : AppTheme.textSecondary,
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Notification Tile
+// ─────────────────────────────────────────────────────────────
+class _NotificationTile extends StatelessWidget {
+  final ActivityNotification notification;
+  final VoidCallback onTap;
+
+  const _NotificationTile({required this.notification, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        color: notification.isRead ? Colors.transparent : AppTheme.primaryLight.withOpacity(0.4),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildUserAvatar(notification),
+            UserAvatar(
+              imageUrl: notification.fromUserProfileImage,
+              name: notification.fromUserName,
+              radius: 22,
+              backgroundColor: AppTheme.primaryLight,
+              initialsColor: AppTheme.primary,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -89,14 +338,15 @@ class _ActivityScreenState extends State<ActivityScreen> {
                   RichText(
                     text: TextSpan(
                       style: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 15,
-                        color: Colors.black,
+                        fontFamily: AppTheme.fontFamily,
+                        fontSize: 14,
+                        color: AppTheme.textPrimary,
+                        height: 1.4,
                       ),
                       children: [
                         TextSpan(
                           text: notification.fromUserName,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         TextSpan(text: ' ${_getNotificationText(notification)}'),
                       ],
@@ -105,40 +355,29 @@ class _ActivityScreenState extends State<ActivityScreen> {
                   const SizedBox(height: 4),
                   Text(
                     timeago.format(notification.timestamp),
-                    style: TextStyle(
-                      color: Colors.grey.shade500,
-                      fontSize: 13,
+                    style: const TextStyle(
+                      fontFamily: AppTheme.fontFamily,
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
                     ),
                   ),
                 ],
               ),
             ),
             if (notification.postThumbnail != null)
-              _buildPostThumbnail(notification),
+              Container(
+                width: 44,
+                height: 44,
+                margin: const EdgeInsets.only(left: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  image: DecorationImage(
+                    image: NetworkImage(ProxyHelper.getUrl(notification.postThumbnail!)),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUserAvatar(ActivityNotification notification) {
-    return UserAvatar(
-      imageUrl: notification.fromUserProfileImage,
-      name: notification.fromUserName,
-      radius: 22,
-      initialsColor: Colors.white,
-    );
-  }
-
-  Widget _buildPostThumbnail(ActivityNotification notification) {
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(4),
-        image: DecorationImage(
-          image: NetworkImage(ProxyHelper.getUrl(notification.postThumbnail!)),
-          fit: BoxFit.cover,
         ),
       ),
     );
@@ -154,23 +393,6 @@ class _ActivityScreenState extends State<ActivityScreen> {
         return 'started following you.';
       case NotificationType.mention:
         return 'mentioned you in a post.';
-    }
-  }
-
-  void _handleNotificationTap(ActivityNotification notification) {
-    // Mark as read
-    if (!notification.isRead) {
-      FirestoreService.markNotificationAsRead(notification.id);
-    }
-
-    // Navigate to post if applicable
-    if (notification.postId != null) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => PostDetailScreen(postId: notification.postId!),
-        ),
-      );
     }
   }
 }

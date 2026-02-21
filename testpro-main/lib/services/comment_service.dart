@@ -1,70 +1,28 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import '../models/comment.dart';
-import '../models/notification.dart';
-import 'notification_data_service.dart';
+import 'backend_service.dart';
 
 class CommentService {
-  static final FirebaseFirestore _db = FirebaseFirestore.instance;
-
-  static Stream<List<Comment>> commentsStream(String postId) {
-    final query = _db
-        .collection('comments')
-        .where('postId', isEqualTo: postId)
-        .orderBy('createdAt', descending: true);
-
-    return query.snapshots().map((snapshot) {
-      return snapshot.docs
-          .map((doc) => Comment.fromMap(doc.id, doc.data()))
-          .toList();
-    });
+  /// One-shot stream: fetches comments once and completes.
+  /// The previous 5s polling was the single worst contributor to the
+  /// request storm — every open comment section fired a call every 5s.
+  /// Use pull-to-refresh or re-subscribe to get fresh comments.
+  static Stream<List<Comment>> commentsStream(String postId) async* {
+    final response = await BackendService.getComments(postId);
+    if (response.success && response.data != null) {
+      yield response.data!.map<Comment>((json) => Comment.fromJson(json)).toList();
+    } else {
+      yield [];
+    }
   }
 
+  /// Adds a comment to a post.
+  /// 
+  /// Note: authorId, authorName, and authorProfileImage are handled server-side.
   static Future<void> addComment({
     required String postId,
-    required String authorId,
-    required String authorName,
-    String? authorProfileImage,
     required String text,
   }) async {
-    final postRef = _db.collection('posts').doc(postId);
-    final commentsRef = _db.collection('comments');
-
-    await _db.runTransaction((transaction) async {
-      final postDoc = await transaction.get(postRef);
-      // Add comment
-      final newCommentRef = commentsRef.doc();
-      transaction.set(newCommentRef, {
-        'postId': postId,
-        'authorId': authorId,
-        'authorName': authorName,
-        'authorProfileImage': authorProfileImage,
-        'text': text,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      // Increment comment count
-      transaction.update(postRef, {'commentCount': FieldValue.increment(1)});
-
-      // Send Notification
-      if (postDoc.exists) {
-        final postData = postDoc.data() as Map<String, dynamic>;
-        final postAuthorId = postData['authorId'];
-        if (postAuthorId != authorId) {
-          NotificationDataService.sendNotification(
-            toUserId: postAuthorId,
-            fromUserId: authorId,
-            fromUserName: authorName,
-            fromUserProfileImage: authorProfileImage,
-            type: NotificationType.comment,
-            postId: postId,
-            postThumbnail: postData['thumbnailUrl'] ?? postData['mediaUrl'],
-            commentText: text,
-          );
-        }
-      }
-    }).catchError((e) {
-      if (kDebugMode) print("Add Comment Error: $e");
-      throw "Permission Denied. Please Check your Firebase Console > Firestore rules are published.";
-    });
+    final response = await BackendService.addComment(postId, text);
+    if (!response.success) throw response.error ?? "Failed to add comment via backend";
   }
 }

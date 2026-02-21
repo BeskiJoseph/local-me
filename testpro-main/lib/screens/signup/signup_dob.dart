@@ -60,6 +60,19 @@ class _SignupDobScreenState extends State<SignupDobScreen> {
   text: "Next",
   enabled: selectedDate != null,
   onTap: () {
+    final now = DateTime.now();
+    int age = now.year - selectedDate!.year;
+    if (now.month < selectedDate!.month || (now.month == selectedDate!.month && now.day < selectedDate!.day)) {
+      age--;
+    }
+
+    if (age < 13) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be at least 13 years old to use this app.')),
+      );
+      return;
+    }
+
     widget.data.dob =
         "${selectedDate!.day}/${selectedDate!.month}/${selectedDate!.year}";
 
@@ -78,11 +91,12 @@ class _SignupDobScreenState extends State<SignupDobScreen> {
   }
 
   Future<void> _pickDate() async {
+    final now = DateTime.now();
     final date = await showDatePicker(
       context: context,
       firstDate: DateTime(1950),
-      lastDate: DateTime.now(),
-      initialDate: DateTime(2000),
+      lastDate: now,
+      initialDate: DateTime(now.year - 13, now.month, now.day),
     );
 
     if (date != null) {

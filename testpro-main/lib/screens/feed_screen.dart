@@ -13,7 +13,8 @@ class FeedScreen extends StatefulWidget {
 
 class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  
+  int _currentTabIndex = 0;
+
   // In a real app, integrate location service. Using defaults for MVP/Demo.
   final String _userCity = "San Francisco";
   final String _userCountry = "USA";
@@ -22,6 +23,11 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) {
+        setState(() => _currentTabIndex = _tabController.index);
+      }
+    });
   }
 
   @override
@@ -58,38 +64,23 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
         actions: [
           IconButton(
             icon: const Icon(Icons.search, color: Colors.black),
-            onPressed: () {
-              // TODO: connect to search screen
-            },
+            onPressed: () {},
           ),
           IconButton(
             icon: const Icon(Icons.notifications_outlined, color: Colors.black),
-            onPressed: () {
-              // TODO: connect to notifications
-            },
+            onPressed: () {},
           ),
         ],
       ),
-      body: TabBarView(
-        controller: _tabController,
+      // IndexedStack keeps all tabs alive — no rebuild, no re-fetch on tab switch
+      body: IndexedStack(
+        index: _currentTabIndex,
         children: [
-          _buildFeedTab('local'),
-          _buildFeedTab('national'),
-          _buildFeedTab('global'),
+          PaginatedFeedList(feedType: 'local', userCity: _userCity, userCountry: _userCountry),
+          PaginatedFeedList(feedType: 'national', userCity: _userCity, userCountry: _userCountry),
+          const RecommendedFeedList(),
         ],
       ),
-    );
-  }
-
-  Widget _buildFeedTab(String feedType) {
-    if (feedType == 'global') {
-      return const RecommendedFeedList();
-    }
-
-    return PaginatedFeedList(
-      feedType: feedType,
-      userCity: _userCity,
-      userCountry: _userCountry,
     );
   }
 }

@@ -1,37 +1,27 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'backend_service.dart';
 
 class SearchService {
-  static final FirebaseFirestore _db = FirebaseFirestore.instance;
+  // Search users by username via backend
+  static Future<List<dynamic>> searchUsers(String query) async {
+    if (query.trim().isEmpty) return [];
 
-  // Search users by username
-  static Stream<QuerySnapshot> searchUsers(String query) {
-    if (query.isEmpty) {
-      return const Stream.empty();
-    }
-
-    // Search by username (case-insensitive prefix match)
-    // Basic implementation - for better results use Algolia/Typesense
-    return _db
-        .collection('users')
-        .where('username', isGreaterThanOrEqualTo: query)
-        .where('username', isLessThanOrEqualTo: '$query\uf8ff')
-        .limit(20)
-        .snapshots();
+    final response = await BackendService.search(
+      query: query.trim(),
+      type: 'users',
+      limit: 20,
+    );
+    return response.data ?? [];
   }
 
-  // Search posts by title
-  static Stream<QuerySnapshot> searchPosts(String query) {
-    if (query.isEmpty) {
-      return const Stream.empty();
-    }
+  // Search posts by text via backend
+  static Future<List<dynamic>> searchPosts(String query) async {
+    if (query.trim().isEmpty) return [];
 
-    return _db
-        .collection('posts')
-        .where('title', isGreaterThanOrEqualTo: query)
-        .where('title', isLessThanOrEqualTo: '$query\uf8ff')
-        .orderBy('title')
-        .orderBy('createdAt', descending: true)
-        .limit(20)
-        .snapshots();
+    final response = await BackendService.search(
+      query: query.trim(),
+      type: 'posts',
+      limit: 20,
+    );
+    return response.data ?? [];
   }
 }

@@ -33,8 +33,9 @@ class _SignupEmailScreenState extends State<SignupEmailScreen> {
               text: _isLoading ? "Sending..." : "Next",
               enabled: !_isLoading,
               onTap: () async {
-                if (emailController.text.isEmpty ||
-                    !emailController.text.contains('@')) {
+                final email = emailController.text.trim();
+                final emailRegex = RegExp(r"^[^@]+@[^@]+\.[^@]+");
+                if (email.isEmpty || !emailRegex.hasMatch(email)) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Please enter a valid email')),
                   );

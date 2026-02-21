@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 enum NotificationType {
   like,
   comment,
@@ -34,22 +32,25 @@ class ActivityNotification {
     this.isRead = false,
   });
 
-  factory ActivityNotification.fromFirestore(DocumentSnapshot doc) {
-    Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+  factory ActivityNotification.fromJson(Map<String, dynamic> json) {
+    DateTime parseDate(dynamic date) {
+      if (date == null) return DateTime.now();
+      if (date is DateTime) return date;
+      return DateTime.tryParse(date.toString()) ?? DateTime.now();
+    }
+
     return ActivityNotification(
-      id: doc.id,
-      fromUserId: data['fromUserId'] ?? '',
-      fromUserName: data['fromUserName'] ?? '',
-      fromUserProfileImage: data['fromUserProfileImage'],
-      toUserId: data['toUserId'] ?? '',
-      type: _parseType(data['type']),
-      postId: data['postId'],
-      postThumbnail: data['postThumbnail'],
-      commentText: data['commentText'],
-      timestamp: data['timestamp'] != null 
-          ? (data['timestamp'] as Timestamp).toDate() 
-          : DateTime.now(),
-      isRead: data['isRead'] ?? false,
+      id: json['id'] as String? ?? '',
+      fromUserId: json['fromUserId'] as String? ?? '',
+      fromUserName: json['fromUserName'] as String? ?? '',
+      fromUserProfileImage: json['fromUserProfileImage'] as String?,
+      toUserId: json['toUserId'] as String? ?? '',
+      type: _parseType(json['type'] as String?),
+      postId: json['postId'] as String?,
+      postThumbnail: json['postThumbnail'] as String?,
+      commentText: json['commentText'] as String?,
+      timestamp: parseDate(json['timestamp']),
+      isRead: json['isRead'] as bool? ?? false,
     );
   }
 
@@ -68,8 +69,9 @@ class ActivityNotification {
     }
   }
 
-  Map<String, dynamic> toMap() {
+  Map<String, dynamic> toJson() {
     return {
+      'id': id,
       'fromUserId': fromUserId,
       'fromUserName': fromUserName,
       'fromUserProfileImage': fromUserProfileImage,
@@ -78,7 +80,7 @@ class ActivityNotification {
       'postId': postId,
       'postThumbnail': postThumbnail,
       'commentText': commentText,
-      'timestamp': Timestamp.fromDate(timestamp),
+      'timestamp': timestamp.toIso8601String(),
       'isRead': isRead,
     };
   }

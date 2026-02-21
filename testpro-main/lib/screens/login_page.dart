@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
 import 'welcome_screen.dart';
 import 'verify_email_screen.dart';
-import '../services/firestore_service.dart';
+import '../services/user_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -119,7 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (result != null) {
         // Sync Google User Data to Firestore
         if (result.user != null) {
-           await FirestoreService.syncGoogleUser(result.user!);
+           await UserService.syncGoogleUser(result.user!.uid);
         }
 
         // Google accounts usually come verified, but good to check or enforce if policy requires

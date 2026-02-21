@@ -2,7 +2,7 @@ import { body, validationResult } from 'express-validator';
 import mongoSanitize from 'express-mongo-sanitize';
 import xss from 'xss-clean';
 import hpp from 'hpp';
-import { logSecurityEvent } from '../utils/logger.js';
+import logger, { logSecurityEvent } from '../utils/logger.js';
 
 // Sanitize request data
 export const sanitizeRequest = [
@@ -106,15 +106,18 @@ export const validateTokenExpiration = (req, res, next) => {
 
     // Firebase tokens are valid for 1 hour
     // This is already handled by Firebase Admin SDK, but we can add extra checks
+    // req.user.auth_time is the original login time
     const tokenAge = Date.now() / 1000 - (req.user.auth_time || 0);
-    const maxAge = 3600; // 1 hour in seconds
+    const maxAge = 24 * 3600; // 24 hours in seconds (Relaxed from 1h for better UX)
 
     if (tokenAge > maxAge) {
         logSecurityEvent('EXPIRED_TOKEN_USED', {
             ip: req.ip,
             userId: req.user.uid,
             tokenAge,
+            auth_time: req.user.auth_time
         });
+        logger.warn({ userId: req.user.uid, tokenAge, auth_time: req.user.auth_time, ip: req.ip }, 'Token expired check failed');
         return res.status(401).json({
             error: 'Token expired, please re-authenticate',
         });

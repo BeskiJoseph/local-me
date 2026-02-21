@@ -5,14 +5,14 @@ import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { verifyFirebaseToken } from '../middleware/auth.js';
+import authenticate from '../middleware/auth.js';
 import { uploadLimiter } from '../middleware/rateLimiter.js';
 import {
     validateFileUpload,
     validateFileMagicBytes,
     validateTokenExpiration,
     handleValidationErrors,
-} from '../middleware/security.js';
+} from '../middleware/sanitize.js';
 import { checkDailyUploadLimit, incrementDailyUploadCount } from '../middleware/uploadLimits.js';
 import { getVideoMetadata, processVideo } from '../utils/videoProcessor.js';
 import logger from '../utils/logger.js';
@@ -82,7 +82,7 @@ async function uploadToR2(file, key, bufferOverride = null) {
 router.post(
     '/profile',
     uploadLimiter,
-    verifyFirebaseToken,
+    authenticate,
     validateTokenExpiration,
     upload.single('file'),
     validateFileUpload,
@@ -103,7 +103,7 @@ router.post(
                 size: req.file.size,
             });
 
-            res.json({
+            return res.json({
                 key,
                 url: `${process.env.R2_PUBLIC_BASE_URL}/${key}`,
             });
@@ -113,7 +113,7 @@ router.post(
                 userId: req.user.uid,
                 error: err.message,
             });
-            res.status(500).json({
+            return res.status(500).json({
                 error: 'Upload failed',
                 requestId: req.requestId,
             });
@@ -125,7 +125,13 @@ router.post(
 router.post(
     '/post',
     uploadLimiter,
-    verifyFirebaseToken,
+    authenticate,
+    (req, res, next) => {
+        if (process.env.NODE_ENV !== 'production') {
+            logger.debug({ auth: req.headers.authorization?.substring(0, 20) }, 'Post upload auth check');
+        }
+        next();
+    },
     validateTokenExpiration,
     checkDailyUploadLimit,
     upload.single('file'),
@@ -188,7 +194,7 @@ router.post(
                 size: finalBuffer.length,
             });
 
-            res.json({
+            return res.json({
                 key: finalKey,
                 url: `${process.env.R2_PUBLIC_BASE_URL}/${finalKey}`,
             });
@@ -199,7 +205,7 @@ router.post(
                 error: err.message,
                 stack: err.stack
             });
-            res.status(500).json({
+            return res.status(500).json({
                 error: 'Upload failed',
                 requestId: req.requestId,
             });

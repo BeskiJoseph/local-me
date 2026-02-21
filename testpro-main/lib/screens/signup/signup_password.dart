@@ -19,7 +19,7 @@ class SignupPasswordScreen extends StatelessWidget {
         child: Column(
           children: [
             const Text(
-              "Create a strong password with at least 6 characters.",
+              "Create a strong password with at least 8 characters, including a letter and a number.",
               style: TextStyle(color: Colors.grey),
             ),
             const SizedBox(height: 20),
@@ -32,9 +32,13 @@ class SignupPasswordScreen extends StatelessWidget {
             PrimaryButton(
               text: "Next",
               onTap: () {
-                if (passwordController.text.length < 6) {
+                final password = passwordController.text;
+                final hasLetter = password.contains(RegExp(r'[a-zA-Z]'));
+                final hasNumber = password.contains(RegExp(r'[0-9]'));
+
+                if (password.length < 8 || !hasLetter || !hasNumber) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Password must be at least 6 characters')),
+                    const SnackBar(content: Text('Password must be at least 8 characters and include a letter and a number')),
                   );
                   return;
                 }

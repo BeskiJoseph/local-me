@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../models/post.dart';
-import '../services/firestore_service.dart';
+import '../services/social_service.dart';
+import '../services/comment_service.dart';
 import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
@@ -29,11 +30,35 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
   late PageController _pageController;
   int _currentIndex = 0;
   List<Post> _posts = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController();
+    _loadPosts();
+  }
+
+  Future<void> _loadPosts() async {
+    setState(() => _isLoading = true);
+    final result = await BackendService.getFeed(
+      type: widget.feedType == 'global' ? 'global' : 'discovery',
+      limit: 20,
+    );
+    
+    if (result.success && mounted) {
+      final loadedPosts = result.data!.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      loadedPosts.shuffle();
+      setState(() {
+        _posts = loadedPosts;
+        _isLoading = false;
+      });
+    } else if (mounted) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: ${result.error}')),
+      );
+    }
   }
 
   @override
@@ -62,61 +87,32 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
           ),
         ),
       ),
-      body: StreamBuilder<List<Post>>(
-        stream: FirestoreService.postsForFeed(
-          feedType: widget.feedType,
-          userCity: widget.userCity,
-          userCountry: widget.userCountry,
-        ),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            );
-          }
-
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                'Error: ${snapshot.error}',
-                style: const TextStyle(color: Colors.white),
-              ),
-            );
-          }
-
-          final posts = snapshot.data ?? [];
-          
-          if (posts.isEmpty) {
-            return const Center(
-              child: Text(
-                'No posts available',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
-            );
-          }
-
-          // Randomize posts
-          final randomPosts = List<Post>.from(posts)..shuffle(math.Random());
-          _posts = randomPosts;
-
-          return PageView.builder(
-            controller: _pageController,
-            scrollDirection: Axis.vertical,
-            onPageChanged: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-            },
-            itemCount: randomPosts.length,
-            itemBuilder: (context, index) {
-              return ReelPostItem(
-                post: randomPosts[index],
-                isCurrentPage: index == _currentIndex,
-              );
-            },
-          );
-        },
-      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator(color: Colors.white))
+          : _posts.isEmpty
+              ? const Center(
+                  child: Text(
+                    'No posts available',
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                )
+              : PageView.builder(
+                  controller: _pageController,
+                  scrollDirection: Axis.vertical,
+                  onPageChanged: (index) {
+                    setState(() {
+                      _currentIndex = index;
+                    });
+                  },
+                  itemCount: _posts.length,
+                  itemBuilder: (context, index) {
+                    return ReelPostItem(
+                      key: ValueKey(_posts[index].id),
+                      post: _posts[index],
+                      isCurrentPage: index == _currentIndex,
+                    );
+                  },
+                ),
     );
   }
 }
@@ -144,16 +140,23 @@ class _ReelPostItemState extends State<ReelPostItem> {
   @override
   void initState() {
     super.initState();
-    _initializeMedia();
+    if (widget.isCurrentPage) {
+      _initializeMedia();
+    }
   }
 
   @override
   void didUpdateWidget(ReelPostItem oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
-      _videoController?.play();
+      if (_videoController == null) {
+        _initializeMedia();
+      } else {
+        _videoController?.play();
+      }
     } else if (!widget.isCurrentPage && oldWidget.isCurrentPage) {
       _videoController?.pause();
+      // Optional: Dispose if far away to save even more memory
     }
   }
 
@@ -162,6 +165,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
       _videoController = VideoPlayerController.network(
         ProxyHelper.getUrl(widget.post.mediaUrl!),
       )..initialize().then((_) {
+        if (!mounted) return;
         setState(() {
           _isInitialized = true;
         });
@@ -528,7 +532,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
     }
 
     return StreamBuilder<bool>(
-      stream: FirestoreService.isPostLikedStream(widget.post.id, user.uid),
+      stream: SocialService.isPostLikedStream(widget.post.id, user.uid),
       builder: (context, snapshot) {
         final isLiked = snapshot.data ?? false;
         return _actionButton(
@@ -536,7 +540,8 @@ class _ReelPostItemState extends State<ReelPostItem> {
           widget.post.likeCount.toString(),
           () async {
             try {
-              await BackendService.toggleLike(widget.post.id);
+              final response = await BackendService.toggleLike(widget.post.id);
+              if (!response.success && mounted) throw response.error ?? "Failed";
             } catch (e) {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -584,7 +589,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
     }
 
     return StreamBuilder<bool>(
-      stream: FirestoreService.isUserFollowedStream(user.uid, widget.post.authorId),
+      stream: SocialService.isUserFollowedStream(user.uid, widget.post.authorId),
       builder: (context, snapshot) {
         final isFollowed = snapshot.data ?? false;
         return _actionButton(
@@ -592,7 +597,8 @@ class _ReelPostItemState extends State<ReelPostItem> {
           isFollowed ? 'Unfollow' : 'Follow',
           () async {
             try {
-              await BackendService.toggleFollow(widget.post.authorId);
+              final response = await BackendService.toggleFollow(widget.post.authorId);
+              if (!response.success && mounted) throw response.error ?? "Failed";
             } catch (e) {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -640,7 +646,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
 
   Widget _buildCommentsList(ScrollController scrollController) {
     return StreamBuilder(
-      stream: FirestoreService.commentsStream(widget.post.id),
+      stream: CommentService.commentsStream(widget.post.id),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -724,7 +730,12 @@ class _ReelPostItemState extends State<ReelPostItem> {
                     _commentController.clear();
                     FocusScope.of(context).unfocus();
 
-                    await BackendService.addComment(widget.post.id, text);
+                    final response = await BackendService.addComment(widget.post.id, text);
+                    if (!response.success && mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error: ${response.error}')),
+                      );
+                    }
                   }
                 },
               ),

@@ -1,9 +1,14 @@
-import 'dart:io';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'backend_service.dart';
+
+/// Top-level background message handler for FCM.
+/// Must be top-level to work in release mode.
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  if (kDebugMode) print('Handling background message: ${message.messageId}');
+}
 
 class NotificationService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
@@ -20,10 +25,10 @@ class NotificationService {
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
       if (kDebugMode) print('User granted permission');
       
-      // Get FCM Token
+      // Get Initial FCM Token
       String? token = await _messaging.getToken();
       if (token != null) {
-        _saveTokenToFirestore(token);
+        _saveTokenToBackend(token);
       }
     }
 
@@ -37,16 +42,18 @@ class NotificationService {
 
     await _localNotifications.initialize(initSettings);
 
-    // Handle incoming messages
+    // Handle incoming messages (Foreground)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       _showLocalNotification(message);
     });
 
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  }
+    // Handle token refresh (Critical for production stability)
+    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+      _saveTokenToBackend(newToken);
+    });
 
-  static Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-    if (kDebugMode) print('Handling background message: ${message.messageId}');
+    // Register Background Handler
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   }
 
   static void _showLocalNotification(RemoteMessage message) async {
@@ -66,19 +73,21 @@ class NotificationService {
     );
   }
 
-  static Future<void> _saveTokenToFirestore(String token) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+  static Future<void> _saveTokenToBackend(String token) async {
+    try {
+      await BackendService.updateProfile({
         'fcmToken': token,
       });
+      if (kDebugMode) debugPrint('FCM Token synced to backend');
+    } catch (e) {
+      if (kDebugMode) debugPrint('Failed to sync FCM token: $e');
     }
   }
 
   static Future<void> updateToken() async {
     String? token = await _messaging.getToken();
     if (token != null) {
-      _saveTokenToFirestore(token);
+      _saveTokenToBackend(token);
     }
   }
 }

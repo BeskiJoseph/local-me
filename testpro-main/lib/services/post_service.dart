@@ -1,12 +1,24 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
 import '../models/post.dart';
+import '../models/paginated_response.dart';
 import '../repositories/post_repository.dart';
 
+enum FeedEventType { postCreated, postDeleted }
+
+class FeedEvent {
+  final FeedEventType type;
+  final dynamic data;
+  FeedEvent(this.type, this.data);
+}
+
 /// Facade for [PostRepository].
-/// Provides static access to post-related operations while allowing
-/// the underlying repository to be swapped for testing.
 class PostService {
   static PostRepository _repository = PostRepository();
+  
+  static final _eventController = StreamController<FeedEvent>.broadcast();
+  static Stream<FeedEvent> get events => _eventController.stream;
+
+  static void emit(FeedEvent event) => _eventController.add(event);
 
   static PostRepository get repository => _repository;
 
@@ -14,9 +26,8 @@ class PostService {
     _repository = repo;
   }
 
+  /// Creates a new post.
   static Future<String> createPost({
-    required String authorId,
-    required String authorName,
     required String title,
     required String body,
     String scope = 'local',
@@ -28,11 +39,8 @@ class PostService {
     String? mediaUrl,
     String mediaType = 'image',
     String? thumbnailUrl,
-    String? authorProfileImage,
-  }) {
-    return _repository.createPost(
-      authorId: authorId,
-      authorName: authorName,
+  }) async {
+    final result = await _repository.createPost(
       title: title,
       body: body,
       scope: scope,
@@ -44,30 +52,32 @@ class PostService {
       mediaUrl: mediaUrl,
       mediaType: mediaType,
       thumbnailUrl: thumbnailUrl,
-      authorProfileImage: authorProfileImage,
     );
+    emit(FeedEvent(FeedEventType.postCreated, result));
+    return result;
   }
 
-  static Future<void> deletePost(String postId) {
-    return _repository.deletePost(postId);
+  static Future<void> deletePost(String postId) async {
+    await _repository.deletePost(postId);
+    emit(FeedEvent(FeedEventType.postDeleted, postId));
   }
 
   static Stream<List<Post>> postsByScope(String scope) {
     return _repository.postsByScope(scope);
   }
 
-  static Future<List<Post>> getPostsPaginated({
+  static Future<PaginatedResponse<Post>> getPostsPaginated({
     required String feedType,
     String? userCity,
     String? userCountry,
-    DocumentSnapshot? lastDocument,
+    String? afterId,
     int limit = 10,
   }) {
     return _repository.getPostsPaginated(
       feedType: feedType,
       userCity: userCity,
       userCountry: userCountry,
-      lastDocument: lastDocument,
+      afterId: afterId,
       limit: limit,
     );
   }
@@ -88,44 +98,31 @@ class PostService {
     return _repository.postsByAuthor(authorId);
   }
 
-  static Stream<QuerySnapshot> getPostsStream() {
-    return _repository.getPostsStream();
-  }
-
   // --- Event Related Methods ---
 
   static Stream<int> eventAttendeesCountStream(String eventId) {
     return _repository.eventAttendeesCountStream(eventId);
   }
 
-  static Stream<bool> isAttendingEventStream(String eventId, String userId) {
-    return _repository.isAttendingEventStream(eventId, userId);
-  }
-
   static Future<void> toggleEventAttendance(String eventId, String userId) {
     return _repository.toggleEventAttendance(eventId, userId);
   }
 
+  /// Creates a new event post.
   static Future<void> createEvent({
-    required String authorId,
-    required String authorName,
-    String? authorProfileImage,
     required String title,
     required String description,
     required String eventType,
     required DateTime eventDate,
     required String location,
-    required double latitude,
-    required double longitude,
+    double? latitude,
+    double? longitude,
     required String city,
     required String country,
     String? mediaUrl,
     bool isFree = true,
-  }) {
-    return _repository.createEvent(
-      authorId: authorId,
-      authorName: authorName,
-      authorProfileImage: authorProfileImage,
+  }) async {
+    await _repository.createEvent(
       title: title,
       description: description,
       eventType: eventType,
@@ -138,5 +135,10 @@ class PostService {
       mediaUrl: mediaUrl,
       isFree: isFree,
     );
+    emit(FeedEvent(FeedEventType.postCreated, null));
+  }
+  static Stream<bool> isAttendingEventStream(String eventId, String userId) {
+    return _repository.isAttendingEventStream(eventId, userId);
   }
 }
+

@@ -1,18 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
 import '../config/app_theme.dart';
 import '../services/backend_service.dart';
 import '../utils/proxy_helper.dart';
 import '../widgets/post_card.dart';
+import '../widgets/nextdoor_post_card.dart';
 import '../models/post.dart';
 import '../models/user_profile.dart';
+import '../models/paginated_response.dart';
 import 'edit_profile.dart';
-import '../core/utils/format_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 
-/// Threads-style profile screen
 class PersonalAccount extends StatefulWidget {
   final String? userId;
 
@@ -24,18 +22,112 @@ class PersonalAccount extends StatefulWidget {
 
 class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  bool _isFollowing = false;
-  bool _isLoading = false;
+  
+  // REST States
+  UserProfile? _profile;
+  List<Post> _posts = [];
+  bool _isLoadingProfile = true;
+  bool _isLoadingPosts = false;
+  String? _cursor;
+  bool _hasMore = true;
+  final Map<String, bool> _likedPostIds = {};
 
-  String get profileUserId => widget.userId ?? FirebaseAuth.instance.currentUser!.uid;
-  bool get isOwnProfile => widget.userId == null || widget.userId == FirebaseAuth.instance.currentUser?.uid;
+  String get profileUserId {
+    final uid = widget.userId ?? AuthService.currentUser?.uid;
+    return uid ?? '';
+  }
+
+  bool get isOwnProfile => widget.userId == null || widget.userId == AuthService.currentUser?.uid;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    if (!isOwnProfile) {
-      _checkIfFollowing();
+    _loadData();
+  }
+
+  @override
+  void didUpdateWidget(PersonalAccount oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userId != widget.userId) {
+      _loadData();
+    }
+  }
+
+  Future<void> _loadData() async {
+    if (profileUserId.isEmpty) return;
+    await Future.wait([
+      _loadProfile(),
+      _loadPosts(refresh: true),
+    ]);
+  }
+
+  Future<void> _loadProfile() async {
+    if (!mounted) return;
+    setState(() => _isLoadingProfile = true);
+    try {
+      final response = await BackendService.getProfile(profileUserId);
+      if (!mounted) return;
+      if (response.success && response.data != null) {
+        setState(() {
+          _profile = UserProfile.fromJson(response.data!);
+          _isLoadingProfile = false;
+        });
+      } else {
+        setState(() => _isLoadingProfile = false);
+      }
+    } catch (e) {
+      debugPrint('Error loading profile: $e');
+      if (mounted) setState(() => _isLoadingProfile = false);
+    }
+  }
+
+  Future<void> _loadPosts({bool refresh = false}) async {
+    if (_isLoadingPosts) return;
+    if (!refresh && !_hasMore) return;
+
+    if (mounted) setState(() => _isLoadingPosts = true);
+
+    try {
+      final response = await BackendService.getPosts(
+        authorId: profileUserId,
+        afterId: refresh ? null : _cursor,
+        limit: 10,
+      );
+
+      if (!mounted) return;
+
+      if (response.success && response.data != null) {
+        final List<dynamic> data = response.data!;
+        final String? nextCursor = response.pagination?.cursor;
+        final List<Post> newPosts = data.map((e) => Post.fromJson(e)).toList();
+
+        // ── Batch Lookups (Prevent N+1) ──
+        final List<String> postIds = newPosts.map((p) => p.id).toList();
+        if (postIds.isNotEmpty) {
+           final likeResp = await BackendService.getLikesBatch(postIds);
+           if (likeResp.success && likeResp.data != null) {
+              setState(() {
+                _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
+              });
+           }
+        }
+
+        setState(() {
+          if (refresh) {
+            _posts.clear();
+          }
+          _posts.addAll(newPosts);
+          _cursor = nextCursor;
+          _hasMore = nextCursor != null;
+          _isLoadingPosts = false;
+        });
+      } else {
+        setState(() => _isLoadingPosts = false);
+      }
+    } catch (e) {
+      debugPrint('Error loading profile posts: $e');
+      if (mounted) setState(() => _isLoadingPosts = false);
     }
   }
 
@@ -45,593 +137,448 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     super.dispose();
   }
 
-  Future<void> _checkIfFollowing() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    FirestoreService.isUserFollowedStream(user.uid, profileUserId).listen((following) {
-      if (mounted) {
-        setState(() {
-          _isFollowing = following;
-        });
-      }
-    });
-  }
-
-  Future<void> _toggleFollow() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      await BackendService.toggleFollow(profileUserId);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _signOut() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Sign Out'),
-        content: const Text('Are you sure you want to sign out?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sign Out'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      await AuthService.signOut();
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    if (profileUserId.isEmpty) {
+      return const Scaffold(
+        body: Center(child: Text('Please log in to view profile')),
+      );
+    }
+
+    if (_isLoadingProfile && _profile == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final profile = _profile;
+    final user = AuthService.currentUser;
+    
+    // Improved username logic with fallbacks
+    String username = 'User';
+    if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
+      username = profile.username;
+    } else if (user?.displayName != null && user!.displayName!.isNotEmpty) {
+      username = user.displayName!;
+    } else if (user?.email != null) {
+      username = user!.email!.split('@')[0];
+    }
+
+    final String? profileImage = profile?.profileImageUrl ?? (isOwnProfile ? user?.photoURL : null);
+
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: StreamBuilder<UserProfile?>(
-        stream: FirestoreService.userProfileStream(profileUserId),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (snapshot.connectionState == ConnectionState.active && (snapshot.data == null)) {
-            if (!isOwnProfile) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.person_off_outlined, size: 64, color: Colors.grey),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'User not found',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'The requested profile does not exist.',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ],
-                ),
-              );
-            }
-            // If it's own profile but missing doc, we continue and let _buildNewProfileHeader handle fallback
-          }
-
-          final profile = snapshot.data;
-
-          return CustomScrollView(
-            slivers: [
-              // Threads-style App Bar
-              SliverAppBar(
-                pinned: true,
-                backgroundColor: Colors.white,
-                elevation: 0,
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back_ios, color: Colors.black),
-                  onPressed: () => Navigator.of(context).canPop() ? Navigator.pop(context) : null,
-                ),
-                title: Text(
-                  profile?.username ?? FirebaseAuth.instance.currentUser?.displayName ?? 'User',
-                  style: const TextStyle(
-                    fontFamily: 'Inter',
-                    fontWeight: FontWeight.w700,
-                    fontSize: 20,
-                    color: Colors.black,
-                  ),
-                ),
-                centerTitle: true,
-                actions: [
-                  if (isOwnProfile)
-                    IconButton(
-                      icon: const Icon(Icons.more_horiz, color: Colors.black),
-                      onPressed: _signOut,
-                    ),
-                ],
-              ),
-
-              // Profile Content
+      backgroundColor: const Color(0xFFF7F8FA),
+      body: RefreshIndicator(
+        onRefresh: _loadData,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+              // ── Unified Profile Header (Banner + Avatar + Info) ──────────────────────────
               SliverToBoxAdapter(
                 child: Column(
                   children: [
-                    _buildNewProfileHeader(profile),
-                    const Divider(height: 1),
-                    _buildTabBar(),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.center,
+                      children: [
+                        // Banner (Shortened)
+                        Container(
+                          height: 100,
+                          width: double.infinity,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Color(0xFF2E7D6A),
+                                Color(0xFF1A4D42),
+                              ],
+                            ),
+                          ),
+                        ),
+                        // Back & Settings Icons
+                        Positioned(
+                          top: 10,
+                          left: 10,
+                          child: Navigator.of(context).canPop()
+                              ? IconButton(
+                                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                  onPressed: () => Navigator.pop(context),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        Positioned(
+                          top: 10,
+                          right: 10,
+                          child: IconButton(
+                            icon: Icon(
+                              isOwnProfile ? Icons.settings_outlined : Icons.more_horiz,
+                              color: Colors.white,
+                            ),
+                            onPressed: () async {
+                              if (isOwnProfile) {
+                                final result = await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => EditProfileScreen(profile: profile),
+                                  ),
+                                );
+                                if (result == true) {
+                                  _loadData();
+                                }
+                              }
+                            },
+                          ),
+                        ),
+                        // Overlapping Avatar (Ensured on top via Stack order)
+                        Positioned(
+                          bottom: -54, // Centered on the bottom edge (radius is 54)
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                            child: UserAvatar(
+                              imageUrl: profileImage,
+                              name: username,
+                              radius: 54,
+                              initialsFontSize: 40,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    
+                    const SizedBox(height: 54 + 16), // Padding for the overlapping avatar
+
+                    // Username & Verification
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          username,
+                          style: const TextStyle(
+                            fontSize: 28, // Slightly larger
+                            fontWeight: FontWeight.w900, // Extra bold for "Beski" look
+                            fontFamily: AppTheme.fontFamily,
+                            color: Color(0xFF1A1A1A),
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                           padding: const EdgeInsets.all(2),
+                           decoration: const BoxDecoration(color: Color(0xFF2E7D6A), shape: BoxShape.circle),
+                           child: const Icon(Icons.check, color: Colors.white, size: 10),
+                        ),
+                      ],
+                    ),
+
+                    // Location
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.location_on, size: 16, color: Color(0xFF8A8A8A)),
+                        const SizedBox(width: 4),
+                        Text(
+                          profile?.location ?? 'Location not set',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            color: Color(0xFF8A8A8A),
+                            fontFamily: AppTheme.fontFamily,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Bio (About us) - Positioned in between per user request
+                    if (profile?.about != null && profile!.about!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 40),
+                        child: Text(
+                          profile.about!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF4A4A4A),
+                            height: 1.4,
+                            fontFamily: AppTheme.fontFamily,
+                          ),
+                        ),
+                      ),
+
+                    const SizedBox(height: 24),
+
+                    // Own Profile Actions (Matching the screenshot)
+                    if (isOwnProfile)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _ActionBtn(
+                                label: 'Edit profile',
+                                color: const Color(0xFF2E7D6A), // Teal like screenshot
+                                isOutlined: false,
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => EditProfileScreen(profile: profile),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _ActionBtn(
+                                label: '${profile?.followingCount ?? 0}', // Stats in button
+                                icon: Icons.people_outline,
+                                color: const Color(0xFF2E7D6A),
+                                isOutlined: false,
+                                onTap: () {},
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 32),
                   ],
                 ),
               ),
 
-              // Tab Content
+              // ── Sticky Tab Bar ─────────────────────────────────
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _SliverTabHeaderDelegate(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
+                    ),
+                    child: TabBar(
+                      controller: _tabController,
+                      indicatorColor: AppTheme.primary,
+                      indicatorWeight: 2,
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      labelColor: const Color(0xFF1A1A1A),
+                      unselectedLabelColor: const Color(0xFF8A8A8A),
+                      labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, fontFamily: AppTheme.fontFamily),
+                      unselectedLabelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, fontFamily: AppTheme.fontFamily),
+                      tabs: const [
+                        Tab(text: "Posts"),
+                        Tab(text: "ArtiZone"),
+                        Tab(text: "Events"),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Posts List ─────────────────────────────────────
               SliverFillRemaining(
                 child: TabBarView(
                   controller: _tabController,
                   children: [
-                    _buildPostsGrid(),
-                    _buildFavoritesTab(),
-                    _buildFollowersTab(),
+                    _buildPostsTab(),
+                    _buildMediaGrid(),
+                    _buildEventsTab(),
                   ],
                 ),
               ),
-            ],
-          );
-        },
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildThreadsStat(String count, String label) {
+  Widget _buildPostsTab() {
+    if (_posts.isEmpty && !_isLoadingPosts) {
+      return const Center(child: Text('No posts yet'));
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      itemCount: _posts.length + (_hasMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == _posts.length) {
+          _loadPosts();
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        }
+        return NextdoorStylePostCard(
+          post: _posts[index],
+          initialIsLiked: _likedPostIds[_posts[index].id],
+        );
+      },
+    );
+  }
+
+  Widget _buildStatItem(String count, String label) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           count,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF1A1A1A),
+            fontFamily: AppTheme.fontFamily,
+          ),
         ),
+        const SizedBox(height: 2),
         Text(
           label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Colors.grey,
-              ),
+          style: const TextStyle(
+            fontSize: 12,
+            color: Color(0xFF8A8A8A),
+            fontWeight: FontWeight.w500,
+            fontFamily: AppTheme.fontFamily,
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildTabBar() {
+  Widget _buildVerticalDivider() {
     return Container(
-      height: 44, // Tab Height: 44px
-      child: TabBar(
-        controller: _tabController,
-        labelColor: const Color(0xFF2563EB), // Active Color
-        unselectedLabelColor: const Color(0xFF9CA3AF), // Inactive Color
-        indicatorColor: const Color(0xFF2563EB), // Indicator Color
-        indicatorWeight: 2, // Height 2px
-        indicatorSize: TabBarIndicatorSize.tab, // Full width of tab? "No pill background" implies line.
-        // Spec says "Radius: 2px", default indicator is square used to be.
-        // We can use a custom decoration or shape if needed, but standard underline with weight 2 is close.
-        dividerColor: Colors.transparent, // Clean look
-        labelStyle: const TextStyle(
-          fontFamily: 'Inter',
-          fontWeight: FontWeight.w600, // Active Weight: 600
-          fontSize: 14, // Size: 14px
-        ),
-        unselectedLabelStyle: const TextStyle(
-          fontFamily: 'Inter',
-          fontWeight: FontWeight.w500, // Inactive Weight: 500
-          fontSize: 14, // Size: 14px
-        ),
-        tabs: const [
-          Tab(text: "Posts"),
-          Tab(text: "Favorites"),
-          Tab(text: "Followers"),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPostsGrid() {
-    return StreamBuilder<List<Post>>(
-      stream: FirestoreService.postsByAuthor(profileUserId),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.post_add_outlined, size: 64, color: Colors.grey),
-                const SizedBox(height: AppTheme.spacing16),
-                Text(
-                  'Create your first post',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: AppTheme.spacing8),
-                Text(
-                  'Share your point of view.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey,
-                      ),
-                ),
-                const SizedBox(height: AppTheme.spacing24),
-                ElevatedButton(
-                  onPressed: () {},
-                  child: const Text('Create'),
-                ),
-              ],
-            ),
-          );
-        }
-
-        final posts = snapshot.data!;
-
-        return ListView.builder(
-          padding: const EdgeInsets.only(top: 8), // Minimal top padding
-          physics: const NeverScrollableScrollPhysics(), // Scroll handled by CustomScrollView
-          shrinkWrap: true, // Needed because it's inside CustomScrollView/SliverFillRemaining setup? 
-          // Actually, if we use SliverChildBuilderDelegate inside a SliverList it would be better but we are in a TabBarView.
-          // In TabBarView + CustomScrollView (pinned header), we ideally use NestedScrollView structure.
-          // But with current structure (CustomScrollView -> SliverFillRemaining -> TabBarView -> ListView),
-          // We need the ListView to NOT scroll itself but let the parent CustomScrollView handle it?
-          // No, SliverFillRemaining makes the TabBarView take remaining space. The ListView INSIDE should scroll.
-          // So physics: AlwaysScrollableScrollPhysics() or default.
-          // But previously we had issues. 
-          // However, the standard behavior for a tab view is to scroll.
-          // Let's use default physics (remove physics: NeverScrollable...)
-          itemCount: posts.length,
-          itemBuilder: (context, index) {
-            final post = posts[index];
-            return PostCard(post: post);
-          },
-        );
-      },
+      height: 20,
+      width: 1,
+      color: const Color(0xFFEEEEEE),
     );
   }
 
   Widget _buildMediaGrid() {
-    return StreamBuilder<List<Post>>(
-      stream: FirestoreService.postsByAuthor(profileUserId),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final posts = snapshot.data?.where((post) => post.mediaUrl != null).toList() ?? [];
-
-        if (posts.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey),
-                const SizedBox(height: AppTheme.spacing16),
-                Text(
-                  'No media yet',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ],
-            ),
-          );
-        }
-
-        return GridView.builder(
-          padding: const EdgeInsets.all(2),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            crossAxisSpacing: 2,
-            mainAxisSpacing: 2,
-          ),
-          itemCount: posts.length,
-          itemBuilder: (context, index) {
-            final post = posts[index];
-            return GestureDetector(
-              onTap: () {},
-              child: Image.network(
-                ProxyHelper.getUrl(post.mediaUrl!),
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: Colors.grey.shade800,
-                    child: const Icon(Icons.broken_image, color: Colors.grey),
-                  );
-                },
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildFavoritesTab() {
-    return StreamBuilder<List<Post>>(
-      stream: FirestoreService.likedPostsStream(profileUserId),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final posts = snapshot.data ?? [];
-
-        if (posts.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.favorite_border, size: 64, color: Colors.grey[300]),
-                const SizedBox(height: 16),
-                const Text(
-                  'No favorites yet',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF6B7280),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: posts.length,
-          itemBuilder: (context, index) {
-            return PostCard(post: posts[index]);
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildFollowersTab() {
-    // For now, simple empty state with design
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.people_outline, size: 64, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          const Text(
-            'No followers yet',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF6B7280),
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Share your profile to get discovered.',
-            style: TextStyle(
-              fontSize: 14,
-              color: Color(0xFF9CA3AF),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyTab(String tabName) {
-    return Center(
-      child: Text(
-        '$tabName coming soon',
-        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              color: Colors.grey,
-            ),
-      ),
-    );
-  }
-
-  Widget _buildNewProfileHeader(UserProfile? profile) {
-    final authUser = FirebaseAuth.instance.currentUser;
-    
-    // Ensure username is not empty for display
-    final String username;
-    if (profile != null && profile.username.isNotEmpty) {
-      username = profile.username;
-    } else if (authUser?.displayName != null && authUser!.displayName!.isNotEmpty) {
-      username = authUser.displayName!;
-    } else {
-      username = 'User';
+    final mediaPosts = _posts.where((p) => p.category == 'ArtiZone').toList();
+    if (mediaPosts.isEmpty && !_isLoadingPosts) {
+      return const Center(child: Text('No ArtiZone posts yet'));
     }
-
-    final profileImage = profile?.profileImageUrl ?? authUser?.photoURL;
-    final subscribers = profile?.subscribers ?? 0;
-    final contents = profile?.contents ?? 0;
-
-    return Padding(
-      padding: const EdgeInsets.all(16), // Padding: 16px
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              // Profile Avatar: Size 72x72 (Radius 36), Margin Right 14
-              Container(
-                margin: const EdgeInsets.only(right: 14),
-                child: UserAvatar(
-                  imageUrl: profileImage,
-                  name: username,
-                  radius: 36,
-                  initialsFontSize: 24,
-                ),
-              ),
-              
-              // Name & Stats
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Username: 20px, Weight 600, Color #111827
-                    Text(
-                      username,
-                      style: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 20, // Increased to 20px
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF111827),
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6), // Margin Top 6px
-                    
-                    // Stats Row
-                    Row(
-                      children: [
-                        _buildStatItem('$contents', 'Posts'),
-                        const SizedBox(width: 24), // Spacing increased to 24px
-                        _buildStatItem(_formatCount(subscribers), 'Followers'),
-                        const SizedBox(width: 24), // Spacing increased to 24px
-                        _buildStatItem('180', 'Following'),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          
-          const SizedBox(height: 24),
-          
-          // Action Buttons
-          if (isOwnProfile)
-            SizedBox(
-              width: double.infinity,
-              height: 40, // Height 40px
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => EditProfileScreen(profile: profile),
-                    ),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB), // Primary Blue
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), // Radius 12px
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  elevation: 0,
-                ),
-                child: const Text(
-                  'Edit Profile',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 14, // Text 14px
-                    fontWeight: FontWeight.w600, // Weight 600
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            )
-          else
-             Row(
-              children: [
-                Expanded(
-                  child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : SizedBox(
-                          height: 40,
-                          child: ElevatedButton(
-                            onPressed: _toggleFollow,
-                            style: ElevatedButton.styleFrom(
-                               backgroundColor: _isFollowing ? Colors.grey[200] : const Color(0xFF2563EB),
-                               foregroundColor: _isFollowing ? Colors.black : Colors.white,
-                               elevation: 0,
-                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                               padding: EdgeInsets.zero,
-                            ),
-                            child: Text(
-                              _isFollowing ? 'Following' : 'Follow',
-                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                            ),
-                          ),
-                        ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: SizedBox(
-                    height: 40,
-                    child: OutlinedButton(
-                      onPressed: () {},
-                      style: OutlinedButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        side: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      child: const Text(
-                        'Message',
-                        style: TextStyle(color: Colors.black, fontWeight: FontWeight.w600, fontSize: 14),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-        ],
-      ),
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      itemCount: mediaPosts.length + (_hasMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == mediaPosts.length) {
+          _loadPosts();
+          return const Center(child: Padding(
+            padding: EdgeInsets.all(16.0),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ));
+        }
+        return NextdoorStylePostCard(
+          post: mediaPosts[index],
+          initialIsLiked: _likedPostIds[mediaPosts[index].id],
+        );
+      },
     );
   }
 
-  Widget _buildStatItem(String count, String label) {
+  Widget _buildEventsTab() {
+    final eventPosts = _posts.where((p) => p.isEvent).toList();
+    if (eventPosts.isEmpty && !_isLoadingPosts) {
+      return const Center(child: Text('No events yet'));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      itemCount: eventPosts.length + (_hasMore ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == eventPosts.length) {
+          _loadPosts();
+          return const Center(child: Padding(
+            padding: EdgeInsets.all(16.0),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ));
+        }
+        return NextdoorStylePostCard(
+          post: eventPosts[index],
+          initialIsLiked: _likedPostIds[eventPosts[index].id],
+        );
+      },
+    );
+  }
+}
+
+class _ActionBtn extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final Color color;
+  final bool isOutlined;
+  final VoidCallback onTap;
+
+  const _ActionBtn({
+    required this.label,
+    this.icon,
+    required this.color,
+    this.isOutlined = false,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {},
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            count,
-            style: const TextStyle(
-              fontFamily: 'Inter',
-              fontSize: 18, // Number 18px (was 16)
-              fontWeight: FontWeight.w600, // Weight 600
-              color: Color(0xFF111827),
+      onTap: onTap,
+      child: Container(
+        height: 38, // More compact height
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isOutlined ? const Color(0xFFEEEEEE) : color,
+          borderRadius: BorderRadius.circular(10), // Slightly tighter radius
+          boxShadow: isOutlined ? null : [
+            BoxShadow(
+              color: color.withOpacity(0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            )
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: isOutlined ? const Color(0xFF1A1A1A) : Colors.white,
+                fontSize: 14, // Smaller, sleeker font
+                fontWeight: FontWeight.w600,
+                fontFamily: AppTheme.fontFamily,
+                letterSpacing: 0.1,
+              ),
             ),
-          ),
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'Inter',
-              fontSize: 12, // Label 12px
-              fontWeight: FontWeight.w400, // Weight 400
-              color: Color(0xFF6B7280), // Muted #6B7280
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+}
 
-  String _formatCount(int count) => FormatUtils.formatCount(count);
+
+
+class _SliverTabHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final Widget child;
+  _SliverTabHeaderDelegate({required this.child});
+
+  @override
+  double get minExtent => 48;
+  @override
+  double get maxExtent => 48;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return child;
+  }
+
+  @override
+  bool shouldRebuild(_SliverTabHeaderDelegate oldDelegate) => true;
 }

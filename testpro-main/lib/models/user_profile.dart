@@ -31,27 +31,31 @@ class UserProfile {
     required this.contents,
   });
 
-  factory UserProfile.fromMap(String id, Map<String, dynamic> data) {
+  factory UserProfile.fromJson(Map<String, dynamic> json) {
     return UserProfile(
-      id: id,
-      email: data['email'] as String? ?? '',
-      username: data['username'] as String? ?? '',
-      firstName: data['firstName'] as String?,
-      lastName: data['lastName'] as String?,
-      location: data['location'] as String?,
-      dob: data['dob'] as String?,
-      phone: data['phone'] as String?,
-      gender: data['gender'] as String?,
-      about: data['about'] as String?,
-      profileImageUrl: data['profileImageUrl'] as String?,
-      subscribers: data['subscribers'] as int? ?? 0,
-      followingCount: data['followingCount'] as int? ?? 0,
-      contents: data['contents'] as int? ?? 0,
+      id: json['uid'] as String? ?? json['id'] as String? ?? '',
+      email: json['email'] as String? ?? '',
+      username: json['username'] as String? ?? '',
+      firstName: json['firstName'] as String?,
+      lastName: json['lastName'] as String?,
+      location: json['location'] as String?,
+      dob: json['dob'] as String?,
+      phone: json['phone'] as String?,
+      gender: json['gender'] as String?,
+      about: json['about'] as String?,
+      profileImageUrl: json['profileImageUrl'] as String?,
+      subscribers: json['subscribers'] as int? ?? 0,
+      followingCount: json['followingCount'] as int? ?? 0,
+      contents: json['contents'] as int? ?? 0,
     );
   }
 
-  Map<String, dynamic> toMap() {
+  factory UserProfile.fromMap(Map<String, dynamic> map) => UserProfile.fromJson(map);
+
+
+  Map<String, dynamic> toJson() {
     return {
+      'id': id,
       'email': email,
       'username': username,
       'firstName': firstName,
@@ -68,4 +72,3 @@ class UserProfile {
     };
   }
 }
-

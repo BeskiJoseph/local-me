@@ -15,6 +15,9 @@ class SignupOtpScreen extends StatefulWidget {
 class _SignupOtpScreenState extends State<SignupOtpScreen> {
   final List<TextEditingController> _controllers = List.generate(6, (_) => TextEditingController());
   bool _isLoading = false;
+  int _resendCooldown = 0;
+  int _attempts = 0;
+  final int _maxAttempts = 5;
 
   @override
   Widget build(BuildContext context) {
@@ -58,6 +61,16 @@ class _SignupOtpScreenState extends State<SignupOtpScreen> {
                 );
               }),
             ),
+            const SizedBox(height: 20),
+            
+            // Resend Label/Button
+            if (_resendCooldown > 0)
+              Text("Resend code in $_resendCooldown s", style: const TextStyle(color: Colors.grey))
+            else
+              TextButton(
+                onPressed: _resendOtp,
+                child: const Text("Resend code"),
+              ),
 
             const Spacer(),
             
@@ -65,6 +78,13 @@ class _SignupOtpScreenState extends State<SignupOtpScreen> {
               text: _isLoading ? "Verifying..." : "Next",
               enabled: !_isLoading,
               onTap: () async {
+                if (_attempts >= _maxAttempts) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Too many attempts. Please try again later.')),
+                  );
+                  return;
+                }
+
                 String otp = _controllers.map((e) => e.text).join();
                 if (otp.length != 6) {
                    ScaffoldMessenger.of(context).showSnackBar(
@@ -73,7 +93,10 @@ class _SignupOtpScreenState extends State<SignupOtpScreen> {
                   return;
                 }
 
-                setState(() => _isLoading = true);
+                setState(() {
+                  _isLoading = true;
+                  _attempts++;
+                });
 
                 try {
                   await OtpService.verifyOtp(widget.data.email ?? "", otp);
@@ -101,5 +124,35 @@ class _SignupOtpScreenState extends State<SignupOtpScreen> {
         ),
       ),
     );
+  }
+
+  void _resendOtp() async {
+    setState(() => _resendCooldown = 30);
+    _startCooldownTimer();
+    try {
+      await OtpService.sendOtp(widget.data.email ?? "");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Code resent!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
+      }
+    }
+  }
+
+  void _startCooldownTimer() {
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return false;
+      setState(() {
+        _resendCooldown--;
+      });
+      return _resendCooldown > 0;
+    });
   }
 }

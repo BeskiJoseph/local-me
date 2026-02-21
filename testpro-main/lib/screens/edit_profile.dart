@@ -1,9 +1,14 @@
-
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image_picker/image_picker.dart';
 import '../models/user_profile.dart';
+import '../services/backend_service.dart';
+import '../services/auth_service.dart';
+import '../services/media_upload_service.dart';
+import '../config/app_theme.dart';
+import '../services/location_service.dart';
 import '../utils/proxy_helper.dart';
-import '../services/firestore_service.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final UserProfile? profile;
@@ -15,468 +20,331 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController();
-  final _firstNameController = TextEditingController();
-  final _lastNameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _phoneController = TextEditingController();
+  final _nameController = TextEditingController();
   final _locationController = TextEditingController();
-  final _dobController = TextEditingController();
   final _aboutController = TextEditingController();
-
-  String? _imageUrl;
+  
+  final ImagePicker _picker = ImagePicker();
+  File? _imageFile;
   bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _loadProfileData();
-  }
-
-  void _loadProfileData() {
+    final user = AuthService.currentUser;
+    String nameToSet = '';
+    
     if (widget.profile != null) {
-      _usernameController.text = widget.profile!.username;
-      _firstNameController.text = widget.profile!.firstName ?? '';
-      _lastNameController.text = widget.profile!.lastName ?? '';
-      _emailController.text = widget.profile!.email;
-      _phoneController.text = widget.profile!.phone ?? '';
-      _locationController.text = widget.profile!.location ?? '';
-      _dobController.text = widget.profile!.dob ?? '';
+      nameToSet = widget.profile!.username;
+      if (nameToSet.isEmpty || nameToSet == 'User' || nameToSet == 'Unknown') {
+        nameToSet = user?.displayName ?? user?.email?.split('@')[0] ?? '';
+      }
+      _locationController.text = widget.profile!.location ?? LocationService.getLocationString();
       _aboutController.text = widget.profile!.about ?? '';
-      _imageUrl = widget.profile!.profileImageUrl;
     }
+
+    // Final safety check: if still empty, use email prefix
+    if (nameToSet.isEmpty && user?.email != null) {
+      nameToSet = user!.email!.split('@')[0];
+    }
+    
+    _nameController.text = nameToSet;
+    if (kDebugMode) debugPrint('👤 EditProfile initialized with name: "$nameToSet"');
   }
 
   @override
   void dispose() {
-    _usernameController.dispose();
-    _firstNameController.dispose();
-    _lastNameController.dispose();
-    _emailController.dispose();
-    _phoneController.dispose();
+    _nameController.dispose();
     _locationController.dispose();
-    _dobController.dispose();
     _aboutController.dispose();
     super.dispose();
   }
 
-  void _pickImage() {
-    // TODO: Backend team will implement image picker
-    // This will call image picker and upload logic
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Image picker - Backend integration pending')),
-    );
-  }
-
-  Future<void> _selectDate() async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now().subtract(const Duration(days: 6570)), // 18 years ago
-      firstDate: DateTime(1900),
-      lastDate: DateTime.now(),
-    );
-
-    if (picked != null) {
+  Future<void> _pickImage() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
       setState(() {
-        _dobController.text = '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+        _imageFile = File(image.path);
       });
     }
   }
 
   Future<void> _saveProfile() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    final user = FirebaseAuth.instance.currentUser;
+    final user = AuthService.currentUser;
     if (user == null) return;
 
-    setState(() {
-      _isLoading = true;
-    });
+    final name = _nameController.text.trim();
+    final about = _aboutController.text.trim();
+    final location = _locationController.text.trim();
+
+    if (name.length < 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name must be at least 3 characters')),
+      );
+      return;
+    }
+
+    if (about.length > 200) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('About section cannot exceed 200 characters')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
 
     try {
-      await FirestoreService.updateUserProfile(
-        userId: user.uid,
-        displayName: _usernameController.text.trim(),
-        about: _aboutController.text.trim(),
-        profileImageUrl: _imageUrl,
-      );
+      String? profileImageUrl = widget.profile?.profileImageUrl;
 
-      if (mounted) {
+      // 1. Upload new image if selected
+      if (_imageFile != null) {
+        final bytes = await _imageFile!.readAsBytes();
+        final uploadedUrl = await MediaUploadService.uploadProfileImage(
+          userId: user.uid,
+          data: bytes,
+          fileExtension: _imageFile!.path.split('.').last,
+        );
+        if (uploadedUrl != null) {
+          profileImageUrl = uploadedUrl;
+        }
+      }
+
+      // 2. Update via backend
+      final response = await BackendService.updateProfile({
+        'username': _nameController.text.trim(),
+        'about': _aboutController.text.trim(),
+        'location': _locationController.text.trim(),
+        if (profileImageUrl != null) 'profileImageUrl': profileImageUrl,
+      });
+
+      if (!mounted) return;
+
+      if (response.success) {
+        Navigator.pop(context, true); // Return true to trigger refresh
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profile updated successfully')),
         );
-        Navigator.pop(context);
+      } else {
+        throw Exception(response.error ?? 'Failed to update profile');
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error updating profile: $e')),
+          SnackBar(content: Text('Error: $e')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F7FB),
+      backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
-        title: const Text('Edit Profile'),
         backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF1F2937)),
+          onPressed: () => Navigator.pop(context),
+        ),
+        centerTitle: true,
+        title: const Text(
+          'Edit Profile',
+          style: TextStyle(
+            color: Color(0xFF1F2937),
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
+          ),
+        ),
         actions: [
-          TextButton(
-            onPressed: _isLoading ? null : _saveProfile,
-            child: _isLoading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text(
-                    'Save',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF4C5EFF),
+          Padding(
+            padding: const EdgeInsets.only(right: 16, top: 10, bottom: 10),
+            child: SizedBox(
+              height: 36,
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : _saveProfile,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF006D6D),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+                child: _isLoading 
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text('Save', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              ),
+            ),
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(color: const Color(0xFFF1F5F9), height: 1),
+        ),
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            // --- TOP PROFILE INFO CARD ---
+            Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Center(
+                    child: GestureDetector(
+                      onTap: _pickImage,
+                      child: Stack(
+                        children: [
+                          Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.grey[200],
+                              border: Border.all(color: Colors.white, width: 4),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                              image: _imageFile != null 
+                                ? DecorationImage(image: FileImage(_imageFile!), fit: BoxFit.cover)
+                                : (widget.profile?.profileImageUrl != null 
+                                    ? DecorationImage(
+                                        image: NetworkImage(ProxyHelper.getUrl(widget.profile!.profileImageUrl!)),
+                                        fit: BoxFit.cover,
+                                      )
+                                    : null),
+                            ),
+                            child: (widget.profile?.profileImageUrl == null && _imageFile == null)
+                                ? const Icon(Icons.person, size: 50, color: Colors.grey)
+                                : null,
+                          ),
+                          Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF006D6D),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
+                  const SizedBox(height: 32),
+                  // Name Field
+                  _buildLabelInput(label: 'Name', controller: _nameController),
+                  const SizedBox(height: 16),
+                  // Location Field (READ ONLY)
+                  _buildLocationInput(controller: _locationController),
+                ],
+              ),
+            ),
+
+            // --- ABOUT SECTION ---
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              color: Colors.white,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('About', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF1E293B))),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFBFBFB),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFF1F5F9)),
+                    ),
+                    child: TextField(
+                      controller: _aboutController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                        hintText: 'Add more about yourself...',
+                        hintStyle: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                        contentPadding: EdgeInsets.all(16),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 48),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLabelInput({required String label, required TextEditingController controller}) {
+    final user = AuthService.currentUser;
+    final String fallbackHint = user?.displayName ?? user?.email?.split('@')[0] ?? 'Your Name';
+    
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFBFBFB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Row(
+        children: [
+          Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF1E293B))),
+          const SizedBox(width: 16),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              style: const TextStyle(fontSize: 15, color: Color(0xFF64748B)),
+              decoration: InputDecoration(
+                border: InputBorder.none, 
+                isDense: true,
+                hintText: fallbackHint,
+                hintStyle: const TextStyle(color: Color(0xFFCBD5E0), fontSize: 15),
+              ),
+            ),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Profile Picture Section
-              Center(
-                child: Stack(
-                  children: [
-                    CircleAvatar(
-                      radius: 60,
-                      backgroundColor: Colors.grey.shade300,
-                      backgroundImage: _imageUrl != null
-                          ? NetworkImage(ProxyHelper.getUrl(_imageUrl!))
-                          : null,
-                      child: _imageUrl == null
-                          ? const Icon(Icons.person, size: 60, color: Colors.white)
-                          : null,
-                    ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: GestureDetector(
-                        onTap: _pickImage,
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF4C5EFF),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 3),
-                          ),
-                          child: const Icon(
-                            Icons.camera_alt,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 32),
+    );
+  }
 
-              // Username
-              const Text(
-                'Username',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _usernameController,
-                decoration: InputDecoration(
-                  hintText: 'Enter username',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Username is required';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-
-              // First Name
-              const Text(
-                'First Name',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _firstNameController,
-                decoration: InputDecoration(
-                  hintText: 'Enter first name',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // Last Name
-              const Text(
-                'Last Name',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _lastNameController,
-                decoration: InputDecoration(
-                  hintText: 'Enter last name',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // Email
-              const Text(
-                'Email',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  hintText: 'Enter email',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Email is required';
-                  }
-                  if (!value.contains('@')) {
-                    return 'Enter a valid email';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-
-              // Phone
-              const Text(
-                'Phone',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _phoneController,
-                keyboardType: TextInputType.phone,
-                decoration: InputDecoration(
-                  hintText: 'Enter phone number',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // Location
-              const Text(
-                'Location',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _locationController,
-                decoration: InputDecoration(
-                  hintText: 'Enter location',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // Date of Birth
-              const Text(
-                'Date of Birth',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _dobController,
-                readOnly: true,
-                onTap: _selectDate,
-                decoration: InputDecoration(
-                  hintText: 'Select date of birth',
-                  filled: true,
-                  fillColor: Colors.white,
-                  suffixIcon: const Icon(Icons.calendar_today),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // About
-              const Text(
-                'About',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87,
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _aboutController,
-                maxLines: 4,
-                decoration: InputDecoration(
-                  hintText: 'Tell us about yourself...',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Color(0xFF4C5EFF), width: 2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 32),
-            ],
+  Widget _buildLocationInput({required TextEditingController controller}) {
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFBFBFB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF1F5F9)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.location_on_outlined, color: Color(0xFF1E293B), size: 18),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              controller.text,
+              style: const TextStyle(fontSize: 15, color: Color(0xFF94A3B8)), // Greyed out since read-only
+            ),
           ),
-        ),
+          const Icon(Icons.lock_outline, color: Color(0xFFCBD5E0), size: 16), // Optional: indicates read-only
+        ],
       ),
     );
   }

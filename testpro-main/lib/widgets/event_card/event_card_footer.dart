@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
-import '../../services/firestore_service.dart';
+import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
 import '../../shared/widgets/user_avatar.dart';
 import '../../screens/post_detail_screen.dart';
@@ -105,7 +105,11 @@ class _EventCardFooterState extends State<EventCardFooter> {
                       ),
                     ),
                     Text(
-                      widget.post.authorName,
+                      (widget.post.authorName.isEmpty || widget.post.authorName == 'User')
+                          ? (user?.uid == widget.post.authorId
+                              ? (user?.displayName ?? user?.email?.split('@')[0] ?? 'User')
+                              : 'User')
+                          : widget.post.authorName,
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -123,7 +127,7 @@ class _EventCardFooterState extends State<EventCardFooter> {
           // Interaction Row
           StreamBuilder<bool>(
             stream: user != null
-                ? FirestoreService.isPostLikedStream(widget.post.id, user.uid)
+                ? SocialService.isPostLikedStream(widget.post.id, user.uid)
                 : Stream.value(false),
             builder: (context, snapshot) {
               final streamLiked = snapshot.data ?? false;
@@ -151,7 +155,8 @@ class _EventCardFooterState extends State<EventCardFooter> {
                         });
 
                         try {
-                          await BackendService.toggleLike(widget.post.id);
+                          final response = await BackendService.toggleLike(widget.post.id);
+                          if (!response.success) throw response.error ?? "Toggle failed";
                         } catch (e) {
                           if (mounted) {
                             setState(() {

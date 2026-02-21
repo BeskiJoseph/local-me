@@ -1,16 +1,12 @@
-import 'dart:typed_data';
-
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image_picker/image_picker.dart';
+import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
-import '../services/firestore_service.dart';
-import '../services/geocoding_service.dart';
+import '../services/post_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class CreateEventScreen extends StatefulWidget {
   const CreateEventScreen({super.key});
@@ -21,693 +17,437 @@ class CreateEventScreen extends StatefulWidget {
 
 class _CreateEventScreenState extends State<CreateEventScreen> {
   final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _dateController = TextEditingController();
+  final TextEditingController _timeController = TextEditingController();
   final TextEditingController _locationController = TextEditingController();
-  
-  String _eventType = 'Music Festival';
-  DateTime? _eventDate;
-  TimeOfDay? _eventTime;
-  
-  Uint8List? _mediaBytes;
-  Uint8List? _thumbnailBytes;
-  String? _mediaExtension;
-  String _mediaType = 'image';
-  bool _isSubmitting = false;
-  bool _isGeneratingThumbnail = false;
-  bool _isFreeEvent = true;
-
+  final TextEditingController _tagsController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
+  File? _coverImage;
+  bool _isSubmitting = false;
+  DateTime? _selectedDate;
+  TimeOfDay? _selectedTime;
 
-  final List<String> _eventTypes = [
-    'Music Festival',
-    'Food & Dining',
-    'Sports',
-    'Arts & Culture',
-    'Community Gathering',
-    'Charity',
-    'Workshop',
-    'Conference',
-    'Party',
-    'Other',
-  ];
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _dateController.dispose();
+    _timeController.dispose();
+    _locationController.dispose();
+    _tagsController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      setState(() {
+        _coverImage = File(image.path);
+      });
+    }
+  }
 
   Future<void> _pickDate() async {
-    final date = await showDatePicker(
+    final DateTime? picked = await showDatePicker(
       context: context,
       initialDate: DateTime.now(),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Color(0xFF00B87C),
-            ),
-          ),
-          child: child!,
-        );
-      },
     );
-
-    if (date != null) {
+    if (picked != null) {
       setState(() {
-        _eventDate = date;
+        _selectedDate = picked;
+        _dateController.text = "${picked.day}/${picked.month}/${picked.year}";
       });
     }
   }
 
   Future<void> _pickTime() async {
-    final time = await showTimePicker(
+    final TimeOfDay? picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Color(0xFF00B87C),
-            ),
-          ),
-          child: child!,
-        );
-      },
     );
-
-    if (time != null) {
+    if (picked != null) {
       setState(() {
-        _eventTime = time;
+        _selectedTime = picked;
+        _timeController.text = picked.format(context);
       });
     }
-  }
-
-  Future<void> _pickMedia() async {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(20),
-            topRight: Radius.circular(20),
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                margin: const EdgeInsets.only(top: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.all(20),
-                child: Text(
-                  'Add Event Photo',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'Inter',
-                  ),
-                ),
-              ),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00B87C).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.camera_alt, color: Color(0xFF00B87C)),
-                ),
-                title: const Text('Take Photo'),
-                onTap: () async {
-                  Navigator.pop(context);
-                  final file = await _picker.pickImage(source: ImageSource.camera);
-                  _processMedia(file, 'image', 'jpg');
-                },
-              ),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00B87C).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.photo_library, color: Color(0xFF00B87C)),
-                ),
-                title: const Text('Choose from Gallery'),
-                onTap: () async {
-                  Navigator.pop(context);
-                  final file = await _picker.pickImage(source: ImageSource.gallery);
-                  _processMedia(file, 'image', 'jpg');
-                },
-              ),
-              const SizedBox(height: 20),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _processMedia(XFile? file, String type, String extension) async {
-    if (file == null) return;
-    
-    final bytes = await file.readAsBytes();
-
-    setState(() {
-      _mediaBytes = bytes;
-      _mediaType = type;
-      _mediaExtension = extension;
-    });
   }
 
   Future<void> _submit() async {
     final user = AuthService.currentUser;
     if (user == null) return;
 
-    if (_titleController.text.trim().isEmpty ||
-        _descriptionController.text.trim().isEmpty ||
-        _eventDate == null ||
-        _eventTime == null ||
-        _locationController.text.trim().isEmpty) {
+    if (_titleController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: const [
-              Icon(Icons.warning_amber_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Expanded(child: Text('Please fill in all event details')),
-            ],
-          ),
-          backgroundColor: Colors.orange,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
+        const SnackBar(content: Text('Please enter an event title')),
       );
       return;
     }
 
-    setState(() {
-      _isSubmitting = true;
-    });
-
-    try {
-      // Get Location
-      final position = await Geolocator.getCurrentPosition();
-
-      final place = await GeocodingService.getPlace(
-        position.latitude,
-        position.longitude,
+    if (_selectedDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a date')),
       );
+      return;
+    }
 
-      final city = place['city'] ?? 'Unknown';
-      final country = place['country'] ?? 'Unknown';
-
-      String? mediaUrl;
-      String? thumbnailUrl;
-
-      if (_mediaBytes != null) {
-        mediaUrl = await MediaUploadService.uploadPostMedia(
-          postId: user.uid,
-          data: _mediaBytes!,
-          fileExtension: _mediaExtension ?? 'jpg',
-          mediaType: _mediaType,
-        );
+    setState(() => _isSubmitting = true);
+    
+    try {
+      Position? position;
+      try {
+        position = await Geolocator.getCurrentPosition().timeout(const Duration(seconds: 5));
+      } catch (e) {
+        debugPrint('Location detection failed (optional): $e');
       }
-
-      String? authorProfileImage = user.photoURL;
-      if (authorProfileImage == null) {
-        final userProfile = await FirestoreService.getUserProfile(user.uid);
-        authorProfileImage = userProfile?.profileImageUrl;
+      
+      String? coverImageUrl;
+      if (_coverImage != null) {
+        coverImageUrl = await MediaUploadService.uploadPostMedia(
+          postId: '${user.uid}_${DateTime.now().millisecondsSinceEpoch}',
+          data: await _coverImage!.readAsBytes(),
+          fileExtension: 'jpg',
+          mediaType: 'image',
+        );
       }
 
       // Combine date and time
-      final eventDateTime = DateTime(
-        _eventDate!.year,
-        _eventDate!.month,
-        _eventDate!.day,
-        _eventTime!.hour,
-        _eventTime!.minute,
-      );
+      DateTime eventDateTime = _selectedDate!;
+      if (_selectedTime != null) {
+        eventDateTime = DateTime(
+          _selectedDate!.year,
+          _selectedDate!.month,
+          _selectedDate!.day,
+          _selectedTime!.hour,
+          _selectedTime!.minute,
+        );
+      }
 
-      await FirestoreService.createEvent(
-        authorId: user.uid,
-        authorName: user.displayName ?? user.email ?? 'Organizer',
-        authorProfileImage: authorProfileImage,
+      await PostService.createEvent(
         title: _titleController.text.trim(),
-        description: _descriptionController.text.trim(),
-        eventType: _eventType,
+        description: '', // Can be improved if we add a description field
+        eventType: 'Classic',
         eventDate: eventDateTime,
         location: _locationController.text.trim(),
-        latitude: position.latitude,
-        longitude: position.longitude,
-        city: city,
-        country: country,
-        mediaUrl: mediaUrl,
-        isFree: _isFreeEvent,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        city: 'Agastiswaram',
+        country: 'India',
+        mediaUrl: coverImageUrl,
+        isFree: true,
       );
 
       if (mounted) {
+        Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: const [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 12),
-                Text('Event created successfully!'),
-              ],
-            ),
-            backgroundColor: const Color(0xFF00B87C),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
+          const SnackBar(content: Text('Event created successfully!')),
         );
-        Navigator.pop(context);
       }
     } catch (e) {
+      debugPrint('Error creating event: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.error_outline, color: Colors.white),
-                const SizedBox(width: 12),
-                Expanded(child: Text('Error: ${e.toString()}')),
-              ],
-            ),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
+          SnackBar(content: Text('Error: $e')),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
-  }
-
-  String _formatDate(DateTime date) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${months[date.month - 1]} ${date.day}, ${date.year}';
-  }
-
-  String _formatTime(TimeOfDay time) {
-    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
-    final minute = time.minute.toString().padLeft(2, '0');
-    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
-    return '$hour:$minute $period';
-  }
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _descriptionController.dispose();
-    _locationController.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F7FB),
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
+        scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.black),
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF1F2937), size: 24),
           onPressed: () => Navigator.pop(context),
         ),
+        centerTitle: true,
         title: const Text(
           'Create Event',
           style: TextStyle(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'Inter',
+            color: Color(0xFF1F2937),
+            fontWeight: FontWeight.w700,
+            fontSize: 18,
+            fontFamily: AppTheme.fontFamily,
           ),
         ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Event Image
-            if (_mediaBytes == null)
-              GestureDetector(
-                onTap: _pickMedia,
-                child: Container(
-                  width: double.infinity,
-                  height: 200,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey.shade300, width: 2, style: BorderStyle.solid),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.add_photo_alternate, size: 48, color: Colors.grey.shade400),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Add Event Photo',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            if (_mediaBytes != null)
-              Stack(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: Image.memory(_mediaBytes!, fit: BoxFit.cover),
-                    ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.black.withOpacity(0.5),
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _mediaBytes = null;
-                        });
-                      },
-                    ),
-                  ),
-                ],
-              ),
-
-            const SizedBox(height: 20),
-
-            // Event Title
-            _buildTextField(
-              controller: _titleController,
-              label: 'Event Title',
-              hint: 'Give your event a catchy name',
-              icon: Icons.celebration,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Event Type
-            _buildDropdown(
-              label: 'Event Type',
-              value: _eventType,
-              items: _eventTypes,
-              onChanged: (val) => setState(() => _eventType = val!),
-              icon: Icons.category,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Date and Time Row
-            Row(
-              children: [
-                Expanded(
-                  child: _buildDateTimeSelector(
-                    label: 'Date',
-                    value: _eventDate != null ? _formatDate(_eventDate!) : null,
-                    icon: Icons.calendar_today,
-                    onTap: _pickDate,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildDateTimeSelector(
-                    label: 'Time',
-                    value: _eventTime != null ? _formatTime(_eventTime!) : null,
-                    icon: Icons.access_time,
-                    onTap: _pickTime,
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 16),
-
-            // Location
-            _buildTextField(
-              controller: _locationController,
-              label: 'Location',
-              hint: '123 Main St, New York, NY',
-              icon: Icons.location_on,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Description
-            _buildTextField(
-              controller: _descriptionController,
-              label: 'Description',
-              hint: 'Tell people what to expect...',
-              icon: Icons.description,
-              maxLines: 5,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Free Event Toggle
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.monetization_on_outlined, color: Colors.grey.shade700),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'Free Event',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                  ),
-                  Switch(
-                    value: _isFreeEvent,
-                    onChanged: (val) => setState(() => _isFreeEvent = val),
-                    activeColor: const Color(0xFF00B87C),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 32),
-
-            // Create Event Button
-            Container(
-              width: double.infinity,
-              height: 56,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF00B87C), Color(0xFF00D68F)],
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF00B87C).withOpacity(0.4),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16, top: 10, bottom: 10),
+            child: SizedBox(
+              height: 36,
               child: ElevatedButton(
                 onPressed: _isSubmitting ? null : _submit,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.transparent,
-                  shadowColor: Colors.transparent,
+                  backgroundColor: const Color(0xFF006D6D),
+                  foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(20),
                   ),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
                 ),
-                child: _isSubmitting
-                    ? const SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      )
-                    : const Text(
-                        'Create Event',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'Inter',
-                        ),
+                child: _isSubmitting 
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text(
+                      'Post +',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
                       ),
+                    ),
               ),
             ),
-          ],
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(color: const Color(0xFFF1F5F9), height: 1),
         ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // --- Event Title (Heading) ---
+                  const Text(
+                    'Event Title',
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF4A5D7E),
+                      fontFamily: 'serif',
+                      height: 1.1,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _buildSlimInput(controller: _titleController, hintText: 'Event Title'),
+                  
+                  const SizedBox(height: 32),
+
+                  // --- Event Description (Subheading) ---
+                  const Text(
+                    'Event Description (optional)',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF94A3B8),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  
+                  // --- Cover Image Box ---
+                  Container(
+                    width: double.infinity,
+                    height: 160,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFBFBFB),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFF1F5F9), width: 1.5),
+                    ),
+                    child: _coverImage != null 
+                      ? Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.file(_coverImage!, fit: BoxFit.cover),
+                            ),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: GestureDetector(
+                                onTap: () => setState(() => _coverImage = null),
+                                child: Container(
+                                  padding: const EdgeInsets.all(4),
+                                  decoration: const BoxDecoration(
+                                    color: Colors.black54,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.close, color: Colors.white, size: 16),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              bottom: 8,
+                              right: 8,
+                              child: _buildActionPill(
+                                icon: Icons.camera_alt,
+                                label: 'Change',
+                                onTap: _pickImage,
+                              ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.camera_alt_rounded, size: 48, color: Color(0xFFE2E8F0)),
+                            const SizedBox(height: 16),
+                            _buildActionPill(
+                              icon: Icons.camera_alt,
+                              label: 'Add Cover Image',
+                              onTap: _pickImage,
+                            ),
+                          ],
+                        ),
+                  ),
+                  
+                  const SizedBox(height: 32),
+
+                  // --- Date Selection ---
+                  _buildSectionLabel(icon: Icons.calendar_today_rounded, title: 'Date', hasArrow: true),
+                  _buildSlimInput(
+                    controller: _dateController, 
+                    hintText: 'Select Date', 
+                    isReadOnly: true,
+                    prefixIcon: Icons.calendar_today_outlined,
+                    onTap: _pickDate,
+                  ),
+                  
+                  const SizedBox(height: 24),
+
+                  // --- Time Selection ---
+                  _buildSectionLabel(icon: Icons.access_time_rounded, title: 'Time', hasArrow: true),
+                  _buildSlimInput(
+                    controller: _timeController, 
+                    hintText: 'Select Time', 
+                    isReadOnly: true,
+                    prefixIcon: Icons.access_time_outlined,
+                    onTap: _pickTime,
+                  ),
+                  
+                  const SizedBox(height: 24),
+
+                  // --- Location ---
+                  _buildSectionLabel(icon: Icons.location_on_rounded, title: 'Location'),
+                  _buildSlimInput(
+                    controller: _locationController, 
+                    hintText: 'Enter Location',
+                    prefixIcon: Icons.location_on_outlined,
+                  ),
+                  
+                  const SizedBox(height: 24),
+
+                  // --- Tags ---
+                  _buildSectionLabel(icon: Icons.local_offer_rounded, title: 'Tags (optional)'),
+                  _buildSlimInput(controller: _tagsController, hintText: 'Add tags, separated by commas'),
+                  
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildTextField({
-    required TextEditingController controller,
-    required String label,
-    required String hint,
-    required IconData icon,
-    int maxLines = 1,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+  Widget _buildSectionLabel({required IconData icon, required String title, bool hasArrow = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: const Color(0xFF475569)),
+          const SizedBox(width: 12),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1E293B),
+              fontFamily: 'Inter',
+            ),
           ),
+          if (hasArrow) ...[
+            const Spacer(),
+            const Icon(Icons.chevron_right_rounded, size: 20, color: Color(0xFFCBD5E0)),
+          ]
         ],
       ),
+    );
+  }
+
+  Widget _buildSlimInput({
+    required TextEditingController controller,
+    required String hintText,
+    bool isReadOnly = false,
+    IconData? prefixIcon,
+    VoidCallback? onTap,
+  }) {
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFF1F5F9), width: 1.5),
+      ),
+      alignment: Alignment.centerLeft,
       child: TextField(
         controller: controller,
-        maxLines: maxLines,
-        style: const TextStyle(fontSize: 16, fontFamily: 'Inter'),
+        readOnly: isReadOnly,
+        onTap: onTap,
+        style: const TextStyle(fontSize: 15, color: Color(0xFF334155), fontFamily: 'Inter'),
         decoration: InputDecoration(
-          labelText: label,
-          hintText: hint,
-          hintStyle: TextStyle(color: Colors.grey.shade400),
-          prefixIcon: Icon(icon, color: const Color(0xFF00B87C)),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.all(16),
-          alignLabelWithHint: maxLines > 1,
+          hintText: hintText,
+          // CRITICAL: Prevent double borders by overriding global theme
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          filled: false,
+          fillColor: Colors.transparent,
+          isDense: true,
+          contentPadding: EdgeInsets.zero,
+          hintStyle: const TextStyle(fontSize: 15, color: Color(0xFFCBD5E0), fontFamily: 'Inter'),
+          prefixIcon: prefixIcon != null 
+              ? Icon(prefixIcon, color: const Color(0xFFCBD5E0), size: 18) 
+              : null,
+          prefixIconConstraints: const BoxConstraints(minWidth: 32, minHeight: 0),
         ),
       ),
     );
   }
 
-  Widget _buildDropdown({
-    required String label,
-    required String value,
-    required List<String> items,
-    required ValueChanged<String?> onChanged,
-    required IconData icon,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: DropdownButtonFormField<String>(
-        value: value,
-        style: const TextStyle(fontSize: 16, fontFamily: 'Inter', color: Colors.black),
-        decoration: InputDecoration(
-          labelText: label,
-          prefixIcon: Icon(icon, color: const Color(0xFF00B87C)),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.all(16),
-        ),
-        items: items.map((item) {
-          return DropdownMenuItem(
-            value: item,
-            child: Text(item),
-          );
-        }).toList(),
-        onChanged: onChanged,
-      ),
-    );
-  }
-
-  Widget _buildDateTimeSelector({
-    required String label,
-    required String? value,
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
+  Widget _buildActionPill({required IconData icon, required String label, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 4,
               offset: const Offset(0, 2),
             ),
           ],
+          border: Border.all(color: const Color(0xFFE2E8F0)),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Icon(icon, size: 16, color: const Color(0xFF00B87C)),
-                const SizedBox(width: 8),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade600,
-                    fontFamily: 'Inter',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
+            Icon(icon, size: 18, color: const Color(0xFF006D6D)),
+            const SizedBox(width: 10),
             Text(
-              value ?? 'Select $label',
-              style: TextStyle(
-                fontSize: 15,
+              label,
+              style: const TextStyle(
+                fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: value != null ? Colors.black : Colors.grey.shade400,
+                color: Color(0xFF1E293B),
                 fontFamily: 'Inter',
               ),
             ),

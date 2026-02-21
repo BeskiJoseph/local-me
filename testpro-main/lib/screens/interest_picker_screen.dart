@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/firestore_service.dart';
+import '../services/feed_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class InterestPickerScreen extends StatefulWidget {
@@ -31,16 +31,8 @@ class _InterestPickerScreenState extends State<InterestPickerScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
-        for (var cat in _selectedCategories) {
-          await FirestoreService.logUserActivity(
-            userId: user.uid,
-            postId: 'initial_seed',
-            category: cat,
-            tags: [],
-            watchTime: 10, // Artificial boost for selected categories
-            liked: true,
-          );
-        }
+        // TODO: Implement a proper interests sync to backend if needed
+        // For now, selecting interests just lets the user proceed
       }
       if (mounted) Navigator.of(context).pop();
     } catch (e) {

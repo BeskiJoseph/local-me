@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'auth_service.dart';
 
 /// Client-side wrapper for uploading media to your backend,
 /// which then talks to Cloudflare R2 securely.
@@ -27,13 +28,15 @@ class MediaUploadService {
       return apiUrl;
     }
 
-    // 2. Default to localhost for development
-    // ⚠️ Update this to your actual production backend URL for production builds
-    const defaultUrl = 'http://localhost:4000';
+    // 2. Resolve default local URL based on platform (Development only)
+    String defaultUrl = 'http://localhost:4000';
+    if (!kIsWeb && kDebugMode && defaultTargetPlatform == TargetPlatform.android) {
+      // Android emulators use 10.0.2.2 to access the host's localhost
+      defaultUrl = 'http://10.0.2.2:4000';
+    }
     
     if (kDebugMode) {
        debugPrint('ℹ️ Using default API URL: $defaultUrl');
-       debugPrint('ℹ️ Set API_URL via --dart-define=API_URL=... for custom backend');
     }
     
     return defaultUrl;
@@ -45,19 +48,22 @@ class MediaUploadService {
     required String mediaType,
     required String path, // e.g. "/api/upload/profile" or "/api/upload/post"
     Map<String, String>? extraFields,
+    bool isRetry = false,
   }) async {
-    final User? user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
+    // 1. Get token (Refresh only on 401 retry)
+    final idToken = await AuthService.getIdToken(forceRefresh: isRetry);
+    if (idToken == null) {
       throw StateError('User must be signed in to upload media.');
     }
-
-    if (kDebugMode) debugPrint('Getting Firebase ID token...');
-    final idToken = await user.getIdToken();
-    if (kDebugMode) debugPrint('Got Firebase ID token');
     
+    if (kDebugMode && idToken.length > 10) {
+      debugPrint('🔑 Upload Token (first 10): ${idToken.substring(0, 10)}...');
+    }
+
     final uri = Uri.parse('$baseUrl$path');
     if (kDebugMode) debugPrint('Uploading to: $uri');
 
+    // 2. Build Multipart Request
     final request = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer $idToken'
       ..fields['mediaType'] = mediaType
@@ -67,10 +73,7 @@ class MediaUploadService {
       request.fields.addAll(extraFields);
     }
 
-    // Determine MIME type based on media type and extension
-    final mimeType = mediaType == 'video' 
-      ? 'video/mp4'
-      : 'image/jpeg'; // Default to JPEG for images
+    final mimeType = mediaType == 'video' ? 'video/mp4' : 'image/jpeg';
 
     request.files.add(
       http.MultipartFile.fromBytes(
@@ -84,26 +87,60 @@ class MediaUploadService {
       ),
     );
 
-    if (kDebugMode) debugPrint('Sending request...');
-    final streamed = await request.send().timeout(
-      const Duration(seconds: 30),
-      onTimeout: () {
-        throw TimeoutException('Upload request timeout after 30 seconds');
-      },
-    );
+    // 3. Send Request (Increased timeout for enterprise-grade video support)
+    if (kDebugMode) debugPrint('Sending request${isRetry ? ' (Retry)' : ''}...');
+    final streamed = await request.send().timeout(const Duration(seconds: 120));
     
-    if (kDebugMode) debugPrint('Got response, reading body...');
     final response = await http.Response.fromStream(streamed);
     if (kDebugMode) debugPrint('Response received: ${response.statusCode}');
+
+    // 4. Handle 401 with Retry
+    if (response.statusCode == 401 && !isRetry) {
+      if (kDebugMode) debugPrint('🔄 Upload 401: Retrying with forced token refresh...');
+      
+      // Small cooldown to let Firebase auth catch up or network settle
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      return await _upload(
+        data: data,
+        fileExtension: fileExtension,
+        mediaType: mediaType,
+        path: path,
+        extraFields: extraFields,
+        isRetry: true,
+      );
+    }
 
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
       return body['url'] as String?;
     } else {
-      // You may want to log the full body/status in a real app.
       throw Exception(
         'Upload failed with status ${response.statusCode}: ${response.body}',
       );
+    }
+  }
+
+  /// Compresses an image to max 1080px width at 75% quality.
+  /// Skips compression on web (flutter_image_compress not supported).
+  /// Target: < 300KB per image.
+  static Future<Uint8List> _compressImage(Uint8List data) async {
+    if (kIsWeb) return data; // Web doesn't support flutter_image_compress
+    try {
+      final compressed = await FlutterImageCompress.compressWithList(
+        data,
+        minWidth: 1080,
+        minHeight: 1080,
+        quality: 75,
+        format: CompressFormat.jpeg,
+      );
+      if (kDebugMode) {
+        debugPrint('🗜️ Image compressed: ${data.length ~/ 1024}KB → ${compressed.length ~/ 1024}KB');
+      }
+      return compressed;
+    } catch (e) {
+      if (kDebugMode) debugPrint('⚠️ Image compression failed, using original: $e');
+      return data; // Fallback to original if compression fails
     }
   }
 
@@ -111,9 +148,10 @@ class MediaUploadService {
     required String userId,
     required Uint8List data,
     String fileExtension = 'jpg',
-  }) {
+  }) async {
+    final compressed = await _compressImage(data);
     return _upload(
-      data: data,
+      data: compressed,
       fileExtension: fileExtension,
       mediaType: 'image',
       path: '/api/upload/profile',
@@ -126,9 +164,11 @@ class MediaUploadService {
     required Uint8List data,
     String fileExtension = 'jpg',
     String mediaType = 'image', // 'image' or 'video'
-  }) {
+  }) async {
+    // Only compress images — videos are handled differently
+    final uploadData = mediaType == 'image' ? await _compressImage(data) : data;
     return _upload(
-      data: data,
+      data: uploadData,
       fileExtension: fileExtension,
       mediaType: mediaType,
       path: '/api/upload/post',

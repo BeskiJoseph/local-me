@@ -1,26 +1,20 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/chat_message.dart';
-import '../models/post.dart'; // Just in case, though not used in method signatures here
+import 'backend_service.dart';
 
 class ChatService {
-  static final FirebaseFirestore _db = FirebaseFirestore.instance;
-
+  // Note: Streams are difficult to replace with JSON REST.
+  // Converting to a periodic poll or simple retrieval for now.
   static Stream<List<ChatMessage>> messagesStream(String eventId) {
-    return _db.collection('posts')
-        .doc(eventId)
-        .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .limit(100)
-        .snapshots()
-        .map((snapshot) => snapshot.docs
-            .map((doc) => ChatMessage.fromFirestore(doc))
-            .toList());
+    return Stream.periodic(const Duration(seconds: 15))
+        .asyncMap((_) => BackendService.getMessages(eventId))
+        .map((response) {
+          if (!response.success || response.data == null) return <ChatMessage>[];
+          return response.data!.map<ChatMessage>((json) => ChatMessage.fromJson(json)).toList();
+        });
   }
 
   static Future<void> sendChatMessage(String eventId, ChatMessage message) async {
-    await _db.collection('posts')
-        .doc(eventId)
-        .collection('messages')
-        .add(message.toMap());
+    final response = await BackendService.sendChatMessage(eventId, message.text);
+    if (!response.success) throw response.error ?? "Failed to send message via backend";
   }
 }

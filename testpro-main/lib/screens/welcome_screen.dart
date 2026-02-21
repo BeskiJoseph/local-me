@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import '../models/signup_data.dart';
 import 'signup/signup_email.dart';
-import '../utils/location_service.dart';
+import '../services/location_service.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../services/firestore_service.dart';
+import '../services/user_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({super.key});
@@ -173,11 +174,17 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   Future<void> _initLocation() async {
     try {
-      final position = await LocationService.getCurrentLocation();
+      // Use LocationService for the logic, but we still need the raw coordinates for the signup data model
+      await LocationService.detectLocation();
+      
+      // Get position for early signup data
+      final position = await Geolocator.getLastKnownPosition() ?? 
+                       await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.low);
+      
       data.latitude = position.latitude;
       data.longitude = position.longitude;
     } catch (e) {
-      debugPrint("Location error: $e");
+      debugPrint("Location initialization error: $e");
     }
 
     if (mounted) {
@@ -250,7 +257,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       UserCredential? result = await AuthService.signInWithGoogle();
       if (result != null && result.user != null && mounted) {
         // Create/Sync user profile in Firestore
-        await FirestoreService.syncGoogleUser(result.user!);
+        await UserService.syncGoogleUser(result.user!.uid);
         
         Navigator.pushReplacement(
           context,
@@ -1055,7 +1062,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                           builder: (context, value, child) {
                             return Transform.scale(
                               scale: 0.8 + (value * 0.2),
-                              child: Opacity(opacity: value, child: child),
+                              child: Opacity(opacity: value.clamp(0.0, 1.0), child: child),
                             );
                           },
                           child: Container(

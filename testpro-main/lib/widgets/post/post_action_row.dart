@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
-import '../../services/firestore_service.dart';
+import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
 import '../../screens/post_detail_screen.dart';
 
@@ -54,7 +54,8 @@ class _PostActionRowState extends State<PostActionRow> {
             ? widget.onLikeToggle!(widget.post.id)
             : BackendService.toggleLike(widget.post.id);
 
-        toggleFuture.then((success) {
+        toggleFuture.then((response) {
+          final bool success = response is bool ? response : (response as dynamic).success;
           if (!success && mounted) {
             setState(() {
               _optimisticLiked = null;
@@ -82,7 +83,7 @@ class _PostActionRowState extends State<PostActionRow> {
     final userId = widget.currentUserId ?? AuthService.currentUser?.uid;
     final stream = widget.isLikedStream ??
         (userId != null
-            ? FirestoreService.isPostLikedStream(widget.post.id, userId)
+            ? SocialService.isPostLikedStream(widget.post.id, userId)
             : Stream.value(false));
 
     return Padding(

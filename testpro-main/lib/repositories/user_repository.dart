@@ -1,57 +1,68 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import '../models/user_profile.dart';
 import '../models/signup_data.dart';
+import '../services/backend_service.dart';
 
 /// Repository for handling User Profile operations.
-/// Accepts [FirebaseFirestore] and [FirebaseAuth] for dependency injection.
 class UserRepository {
-  final FirebaseFirestore _db;
-  final FirebaseAuth _auth;
+  UserRepository();
 
-  UserRepository({
-    FirebaseFirestore? firestore,
-    FirebaseAuth? auth,
-  })  : _db = firestore ?? FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+  // In-memory profile cache: uid → {data, fetchedAt}
+  static final Map<String, Map<String, dynamic>> _profileCache = {};
+  static const _cacheDuration = Duration(minutes: 5);
 
-  Stream<UserProfile?> userProfileStream(String userId) {
-    return _db.collection('users').doc(userId).snapshots().map((doc) {
-      if (!doc.exists) return null;
-      return UserProfile.fromMap(doc.id, doc.data()!);
-    });
+  static bool _isCacheValid(String uid) {
+    final entry = _profileCache[uid];
+    if (entry == null) return false;
+    final age = DateTime.now().difference(entry['fetchedAt'] as DateTime);
+    return age < _cacheDuration;
   }
 
+  /// Returns a one-shot stream that emits the profile once and completes.
+  Stream<UserProfile?> userProfileStream(String userId) async* {
+    final initial = await getUserProfile(userId);
+    yield initial;
+
+    await for (final _ in Stream.periodic(const Duration(minutes: 5))) {
+      invalidateCache(userId);
+      yield await getUserProfile(userId);
+    }
+  }
+
+  static Future<Map<String, dynamic>?> getCachedProfile(String uid) async {
+    if (_isCacheValid(uid)) {
+      return _profileCache[uid]!['data'] as Map<String, dynamic>?;
+    }
+    final response = await BackendService.getProfile(uid);
+    if (response.success) {
+      final data = response.data!;
+      _profileCache[uid] = {'data': data, 'fetchedAt': DateTime.now()};
+      return data;
+    }
+    return null;
+  }
+
+  static void invalidateCache(String uid) => _profileCache.remove(uid);
+
   Future<UserProfile?> getUserProfile(String userId) async {
-    final doc = await _db.collection('users').doc(userId).get();
-    if (!doc.exists) return null;
-    return UserProfile.fromMap(doc.id, doc.data()!);
+    final data = await getCachedProfile(userId);
+    if (data == null) return null;
+    return UserProfile.fromJson(data);
   }
 
   Future<void> createUserProfile({
-    required User user,
+    required String uid,
+    required String? displayName,
+    required String? photoURL,
     required SignupData data,
     String? profileImageUrl,
   }) async {
-    final profile = UserProfile(
-      id: user.uid,
-      email: user.email ?? data.email ?? '',
-      username: data.username ?? user.displayName ?? '',
-      firstName: data.firstName,
-      lastName: data.lastName,
-      location: data.location,
-      dob: data.dob,
-      phone: null,
-      gender: null,
-      about: null,
-      profileImageUrl: profileImageUrl ?? user.photoURL,
-      subscribers: 0,
-      followingCount: 0,
-      contents: 0,
-    );
-
-    await _db.collection('users').doc(user.uid).set(profile.toMap());
+    final response = await BackendService.updateProfile({
+      'username': data.username ?? displayName ?? '',
+      'firstName': data.firstName,
+      'lastName': data.lastName,
+      'profileImageUrl': profileImageUrl ?? photoURL,
+    });
+    if (!response.success) throw response.error ?? "Failed to create profile";
   }
 
   Future<void> updateUserProfile({
@@ -59,123 +70,20 @@ class UserRepository {
     String? displayName,
     String? about,
     String? profileImageUrl,
+    String? location,
   }) async {
-    final Map<String, dynamic> data = {};
-    if (displayName != null) {
-      data['username'] = displayName;
-    }
-    if (about != null) {
-      data['about'] = about;
-    }
-    if (profileImageUrl != null) {
-      data['profileImageUrl'] = profileImageUrl;
-    }
-
-    if (data.isEmpty) return;
-
-    await _db.collection('users').doc(userId).update(data);
-  }
-
-  Future<void> syncGoogleUser(User user) async {
-    final userDoc = _db.collection('users').doc(user.uid);
-    final snapshot = await userDoc.get();
-
-    if (!snapshot.exists) {
-      // Create new profile
-      final profile = UserProfile(
-        id: user.uid,
-        email: user.email ?? '',
-        username: user.displayName ?? 'User',
-        firstName: null,
-        lastName: null,
-        location: null,
-        dob: null,
-        phone: null,
-        gender: null,
-        about: null,
-        profileImageUrl: user.photoURL,
-        subscribers: 0,
-        followingCount: 0,
-        contents: 0,
-      );
-      await userDoc.set(profile.toMap());
-    } else {
-      // Update existing profile photo if changed (optional, but good for sync)
-      if (user.photoURL != null) {
-        await userDoc.update({'profileImageUrl': user.photoURL});
-      }
-    }
-  }
-
-  Future<void> incrementContentCount(String userId) async {
-    final userRef = _db.collection('users').doc(userId);
-    // Use transaction for atomic update
-    await _db.runTransaction((transaction) async {
-      final snapshot = await transaction.get(userRef);
-      if (!snapshot.exists) return;
-      final current = snapshot.get('contents') as int? ?? 0;
-      transaction.update(userRef, {'contents': current + 1});
-    }).catchError((e, stack) {
-      if (kDebugMode) {
-        print("Increment Content Count Error: $e");
-        print("Stack trace: $stack");
-      }
+    final response = await BackendService.updateProfile({
+      if (displayName != null) 'username': displayName,
+      if (about != null) 'about': about,
+      if (profileImageUrl != null) 'profileImageUrl': profileImageUrl,
+      if (location != null) 'location': location,
     });
+    if (!response.success) throw response.error ?? "Update failed";
+    invalidateCache(userId);
   }
 
-  Future<void> recalculateUserStats(String userId) async {
-    try {
-      // Count actual posts
-      final postsSnapshot = await _db
-          .collection('posts')
-          .where('authorId', isEqualTo: userId)
-          .get();
-      final contentCount = postsSnapshot.docs.length;
-
-      // Count actual followers
-      final followersSnapshot = await _db
-          .collection('users')
-          .doc(userId)
-          .collection('followers')
-          .get();
-      final subscriberCount = followersSnapshot.docs.length;
-
-      // Get current user data or create new profile
-      final userDoc = await _db.collection('users').doc(userId).get();
-      
-      if (!userDoc.exists) {
-        // Create a basic profile if it doesn't exist
-        final user = _auth.currentUser;
-        await _db.collection('users').doc(userId).set({
-          'email': user?.email ?? '',
-          'username': user?.displayName ?? 'User',
-          'firstName': null,
-          'lastName': null,
-          'location': null,
-          'dob': null,
-          'phone': null,
-          'gender': null,
-          'about': null,
-          'profileImageUrl': user?.photoURL,
-          'contents': contentCount,
-          'subscribers': subscriberCount,
-        });
-      } else {
-        // Update existing profile with correct counts
-        await _db.collection('users').doc(userId).update({
-          'contents': contentCount,
-          'subscribers': subscriberCount,
-        });
-      }
-
-      if (kDebugMode) {
-        print("Recalculated stats for $userId: $contentCount contents, $subscriberCount subscribers");
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print("Error recalculating stats: $e");
-      }
-      rethrow;
-    }
+  Future<void> syncGoogleUser(String uid) async {
+    invalidateCache(uid);
+    await getCachedProfile(uid);
   }
 }

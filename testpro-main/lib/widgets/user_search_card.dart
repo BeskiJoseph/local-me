@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../services/firestore_service.dart';
 import '../config/app_theme.dart';
 import '../services/backend_service.dart';
-import '../utils/proxy_helper.dart';
-import '../screens/personal_account.dart';
+import '../services/auth_service.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/utils/navigation_utils.dart';
 
@@ -24,7 +21,6 @@ class UserSearchCard extends StatefulWidget {
 }
 
 class _UserSearchCardState extends State<UserSearchCard> {
-  final FirestoreService _firestoreService = FirestoreService();
   bool _isFollowing = false;
   bool _isLoading = false;
 
@@ -35,30 +31,49 @@ class _UserSearchCardState extends State<UserSearchCard> {
   }
 
   Future<void> _checkIfFollowing() async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = AuthService.currentUser;
     if (user == null || user.uid == widget.userId) return;
 
-    FirestoreService.isUserFollowedStream(user.uid, widget.userId).listen((following) {
-      if (mounted) {
+    try {
+      final response = await BackendService.checkFollowState(widget.userId);
+      if (mounted && response.success) {
         setState(() {
-          _isFollowing = following;
+          _isFollowing = response.data ?? false;
         });
       }
-    });
+    } catch (e) {
+      debugPrint('Error checking follow state: $e');
+    }
   }
 
   Future<void> _toggleFollow() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    final user = AuthService.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in to follow')),
+      );
+      return;
+    }
 
     setState(() {
       _isLoading = true;
+      _isFollowing = !_isFollowing; // Optimistic update
     });
 
     try {
       await BackendService.toggleFollow(widget.userId);
+      // Optional: Refresh actual state from backend
+      final response = await BackendService.checkFollowState(widget.userId);
+      if (mounted && response.success) {
+        setState(() {
+          _isFollowing = response.data ?? false;
+        });
+      }
     } catch (e) {
       if (mounted) {
+        setState(() {
+          _isFollowing = !_isFollowing; // Revert on error
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
         );
@@ -78,7 +93,7 @@ class _UserSearchCardState extends State<UserSearchCard> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUser = FirebaseAuth.instance.currentUser;
+    final currentUser = AuthService.currentUser;
     final isOwnProfile = currentUser?.uid == widget.userId;
 
     final username = widget.userData['username'] ?? 'Unknown';
@@ -87,6 +102,12 @@ class _UserSearchCardState extends State<UserSearchCard> {
     final subscribers = widget.userData['subscribers'] ?? 0;
 
     return Card(
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        side: const BorderSide(color: Color(0xFFF2F2F2)),
+      ),
       child: InkWell(
         onTap: _navigateToProfile,
         borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
@@ -110,21 +131,35 @@ class _UserSearchCardState extends State<UserSearchCard> {
                   children: [
                     Text(
                       username,
-                      style: Theme.of(context).textTheme.titleMedium,
+                      style: const TextStyle(
+                        fontFamily: AppTheme.fontFamily,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1A1A1A),
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     if (about != null && about.isNotEmpty)
                       Text(
                         about,
-                        style: Theme.of(context).textTheme.bodySmall,
+                        style: const TextStyle(
+                          fontFamily: AppTheme.fontFamily,
+                          fontSize: 14,
+                          color: Color(0xFF8A8A8A),
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     const SizedBox(height: AppTheme.spacing4),
                     Text(
                       '$subscribers ${subscribers == 1 ? 'follower' : 'followers'}',
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: const TextStyle(
+                        fontFamily: AppTheme.fontFamily,
+                        fontSize: 12,
+                        color: Color(0xFF8A8A8A),
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ],
                 ),
@@ -136,23 +171,36 @@ class _UserSearchCardState extends State<UserSearchCard> {
                     ? const SizedBox(
                         width: 24,
                         height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
                       )
-                    : OutlinedButton(
-                        onPressed: _toggleFollow,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: AppTheme.spacing16,
-                            vertical: AppTheme.spacing8,
+                    : SizedBox(
+                        height: 32,
+                        child: OutlinedButton(
+                          onPressed: _toggleFollow,
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            backgroundColor: _isFollowing
+                                ? Colors.transparent
+                                : AppTheme.primary,
+                            foregroundColor: _isFollowing
+                                ? AppTheme.primary
+                                : Colors.white,
+                            side: BorderSide(
+                              color: AppTheme.primary,
+                              width: _isFollowing ? 1 : 0,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
                           ),
-                          backgroundColor: _isFollowing
-                              ? null
-                              : Theme.of(context).colorScheme.primary,
-                          foregroundColor: _isFollowing
-                              ? null
-                              : Theme.of(context).colorScheme.onPrimary,
+                          child: Text(
+                            _isFollowing ? 'Following' : 'Follow',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
-                        child: Text(_isFollowing ? 'Following' : 'Follow'),
                       ),
             ],
           ),

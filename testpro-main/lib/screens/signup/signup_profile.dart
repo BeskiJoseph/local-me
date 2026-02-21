@@ -8,7 +8,7 @@ import '../../widgets/primary_button.dart';
 import '../../models/signup_data.dart';
 import '../../services/auth_service.dart';
 import '../../services/media_upload_service.dart';
-import '../../services/firestore_service.dart';
+import '../../services/user_service.dart';
 import '../home_screen.dart';
 
 class SignupProfileScreen extends StatefulWidget {
@@ -106,8 +106,10 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
     }
 
     if (result.user != null) {
-      await FirestoreService.createUserProfile(
-        user: result.user!,
+      await UserService.createUserProfile(
+        uid: result.user!.uid,
+        displayName: result.user!.displayName,
+        photoURL: result.user!.photoURL,
         data: widget.data,
         profileImageUrl: imageUrl,
       );
@@ -131,18 +133,10 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
         );
       } on FirebaseAuthException catch (e) {
         if (e.code == 'email-already-in-use') {
-          // User exists, try signing in
-          try {
-            result = await AuthService.signInWithEmail(
-              widget.data.email!,
-              widget.data.password!,
-            );
-          } catch (signInError) {
-             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Account exists but login failed: ${signInError.toString()}')),
-            );
-            return;
-          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('An account already exists with this email. Please log in instead.')),
+          );
+          return;
         } else {
           rethrow;
         }

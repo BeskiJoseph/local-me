@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class Post {
   final String id;
   final String authorId;
@@ -55,54 +53,49 @@ class Post {
     required this.attendeeCount,
   });
 
-  factory Post.fromMap(String id, Map<String, dynamic> data) {
-    final rawCreatedAt = data['createdAt'];
-    DateTime created;
-    if (rawCreatedAt is Timestamp) {
-      created = rawCreatedAt.toDate();
-    } else if (rawCreatedAt is DateTime) {
-      created = rawCreatedAt;
-    } else {
-      created = DateTime.tryParse(rawCreatedAt?.toString() ?? '') ?? DateTime.now();
+  factory Post.fromJson(Map<String, dynamic> json) {
+    DateTime parseDate(dynamic date) {
+      if (date == null) return DateTime.now();
+      if (date is DateTime) return date;
+      return DateTime.tryParse(date.toString()) ?? DateTime.now();
     }
 
     return Post(
-      id: id,
-      authorId: data['authorId'] as String? ?? '',
-      authorName: data['authorName'] as String? ?? '',
-      title: data['title'] as String? ?? '',
-      body: data['body'] as String? ?? '',
-      scope: data['scope'] as String? ?? 'local',
-      mediaUrl: data['mediaUrl'] as String?,
-      mediaType: data['mediaType'] as String? ?? 'image',
-      createdAt: created,
-      likeCount: data['likeCount'] as int? ?? 0,
-      commentCount: data['commentCount'] as int? ?? 0,
-      latitude: (data['latitude'] as num?)?.toDouble(),
-      longitude: (data['longitude'] as num?)?.toDouble(),
-      city: data['city'] as String?,
-      country: data['country'] as String?,
-      category: data['category'] as String? ?? 'General',
-      authorProfileImage: data['authorProfileImage'] as String?,
-      thumbnailUrl: data['thumbnailUrl'] as String?,
-      // Event fields
-      isEvent: data['isEvent'] ?? false,
-      eventType: data['eventType'] as String?,
-      eventDate: data['eventDate'] != null 
-          ? (data['eventDate'] as Timestamp).toDate() 
-          : null,
-      eventLocation: data['eventLocation'] as String?,
-      isFree: data['isFree'] as bool?,
-      attendeeCount: data['attendeeCount'] as int? ?? 0,
+      id: json['id'] as String? ?? json['postId'] as String? ?? '',
+      authorId: json['authorId'] as String? ?? '',
+      authorName: json['authorName'] as String? ?? 'User',
+      title: json['title'] as String? ?? '',
+      body: json['body'] as String? ?? json['text'] as String? ?? '',
+      scope: json['scope'] as String? ?? 'local',
+      mediaUrl: json['mediaUrl'] as String?,
+      mediaType: json['mediaType'] as String? ?? 'image',
+      createdAt: parseDate(json['createdAt']),
+      likeCount: json['likeCount'] as int? ?? 0,
+      commentCount: json['commentCount'] as int? ?? 0,
+      latitude: (json['latitude'] as num?)?.toDouble() ??
+          (json['location']?['lat'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble() ??
+          (json['location']?['lng'] as num?)?.toDouble(),
+      city: json['city'] as String? ?? json['location']?['name'] as String?,
+      country: json['country'] as String?,
+      category: json['category'] as String? ?? 'General',
+      authorProfileImage: json['authorProfileImage'] as String?,
+      thumbnailUrl: json['thumbnailUrl'] as String?,
+      isEvent: json['isEvent'] as bool? ?? false,
+      eventType: json['eventType'] as String?,
+      eventDate: json['eventDate'] != null ? parseDate(json['eventDate']) : null,
+      eventLocation: json['eventLocation'] as String?,
+      isFree: json['isFree'] as bool?,
+      attendeeCount: json['attendeeCount'] as int? ?? 0,
     );
   }
 
-  factory Post.fromFirestore(DocumentSnapshot doc) {
-    return Post.fromMap(doc.id, doc.data() as Map<String, dynamic>);
-  }
+  factory Post.fromMap(Map<String, dynamic> map) => Post.fromJson(map);
 
-  Map<String, dynamic> toMap() {
+
+  Map<String, dynamic> toJson() {
     return {
+      'id': id,
       'authorId': authorId,
       'authorName': authorName,
       'title': title,
@@ -110,7 +103,7 @@ class Post {
       'scope': scope,
       'mediaUrl': mediaUrl,
       'mediaType': mediaType,
-      'createdAt': createdAt,
+      'createdAt': createdAt.toIso8601String(),
       'likeCount': likeCount,
       'commentCount': commentCount,
       'latitude': latitude,
@@ -120,10 +113,9 @@ class Post {
       'category': category,
       'authorProfileImage': authorProfileImage,
       'thumbnailUrl': thumbnailUrl,
-      // Event fields
       'isEvent': isEvent,
       'eventType': eventType,
-      'eventDate': eventDate != null ? Timestamp.fromDate(eventDate!) : null,
+      'eventDate': eventDate?.toIso8601String(),
       'eventLocation': eventLocation,
       'isFree': isFree,
       'attendeeCount': attendeeCount,

@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../services/firestore_service.dart';
+import '../../services/post_service.dart';
 import '../../models/post.dart';
+import '../../models/paginated_response.dart';
+import '../../services/backend_service.dart';
 import '../post_card.dart';
+import '../nextdoor_post_card.dart';
 
 class PaginatedFeedList extends StatefulWidget {
   final String feedType;
@@ -20,108 +23,139 @@ class PaginatedFeedList extends StatefulWidget {
   State<PaginatedFeedList> createState() => _PaginatedFeedListState();
 }
 
-class _PaginatedFeedListState extends State<PaginatedFeedList> {
+class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final List<Post> _posts = [];
   bool _isLoading = false;
   bool _hasMore = true;
-  DocumentSnapshot? _lastDocument;
+  String? _cursor;
   String? _error;
+  final Map<String, bool> _likedPostIds = {};
+  
+  // Debounce scroll triggers to prevent rapid-fire requests
+  Timer? _debounce;
+  StreamSubscription? _eventSubscription;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
     _loadMorePosts();
     _scrollController.addListener(_onScroll);
+    _eventSubscription = PostService.events.listen(_handleFeedEvent);
+  }
+
+  void _handleFeedEvent(FeedEvent event) {
+    if (!mounted) return;
+
+    switch (event.type) {
+      case FeedEventType.postCreated:
+        // For a true production app, we'd check if the new post matches 
+        // this feed's criteria (city, category, etc.)
+        // For now, we refresh to ensure correct sorting and data integrity
+        _loadMorePosts(refresh: true);
+        break;
+      case FeedEventType.postDeleted:
+        setState(() {
+          _posts.removeWhere((p) => p.id == event.data);
+        });
+        break;
+    }
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _eventSubscription?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
 
   void _onScroll() {
-    if (_scrollController.hasClients &&
-        _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
-        !_isLoading &&
-        _hasMore) {
-      _loadMorePosts();
-    }
+    if (_debounce?.isActive ?? false) return;
+
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (_scrollController.hasClients &&
+          _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
+          !_isLoading &&
+          _hasMore &&
+          _error == null) {
+        _loadMorePosts();
+      }
+    });
   }
 
   Future<void> _loadMorePosts({bool refresh = false}) async {
     if (_isLoading) return;
     if (!refresh && !_hasMore) return;
 
+    debugPrint('🚀 FEED API CALLED: ${widget.feedType}');
+
     if (refresh) {
       if (mounted) {
         setState(() {
           _posts.clear();
-          _lastDocument = null;
+          _cursor = null;
           _hasMore = true;
           _error = null;
           _isLoading = true;
         });
       }
     } else {
-      if (mounted) setState(() => _isLoading = true);
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _error = null;
+        });
+      }
     }
 
     try {
-      final newPosts = await FirestoreService.getPostsPaginated(
+      final response = await PostService.getPostsPaginated(
         feedType: widget.feedType,
         userCity: widget.userCity,
         userCountry: widget.userCountry,
-        lastDocument: _lastDocument,
+        afterId: _cursor,
         limit: 10,
       );
-      
-      // We need to track the last document from the query to support pagination.
-      // But getPostsPaginated returns List<Post>.
-      // The current implementation of FirestoreService.getPostsPaginated uses a simple query 
-      // and returns mapped posts, losing the DocumentSnapshot.
-      // This is a limitation of the current facade.
-      // However, for this refactor, we will assume for now that if we get < 10 posts, we are done.
-      // And we rely on the implementation detailed behavior.
-      // Ideally, getPostsPaginated should return a wrapper with the last cursor.
-      // For now, we will handle what we can:
-      
-      if (mounted) {
-         setState(() {
-          if (refresh) _posts.clear();
-          
-          final uniqueNew = newPosts.where((p) => !_posts.any((existing) => existing.id == p.id));
-          _posts.addAll(uniqueNew);
 
-          if (newPosts.length < 10) {
+      final data = response.data;
+      final nextCursor = response.nextCursor;
+
+      if (mounted) {
+        setState(() {
+          if (refresh) {
+            _posts.clear();
+            _likedPostIds.clear();
+          }
+          
+          final existingIds = _posts.map((p) => p.id).toSet();
+          final uniqueNew = data.where((p) => !existingIds.contains(p.id)).toList();
+          
+          _posts.addAll(uniqueNew);
+          
+          _cursor = nextCursor;
+          _hasMore = nextCursor != null;
+          
+          if (_posts.isEmpty && !refresh) {
             _hasMore = false;
-          } else {
-             // Since we don't have the DocumentSnapshot, we can't properly paginate via startAfterDocument
-             // unless we fetch snapshots here or update the service.
-             // But let's assume the previous code was somehow working or broken in the same way.
-             // Actually strict pagination requires the snapshot. 
-             // IF the service returns posts, we can't get the snapshot back from a Post object easily 
-             // unless we store it in the Post object (which is bad practice) or fetch locally.
-             
-             // WORKAROUND: We will temporarily fetch the snapshot locally to allow pagination to work,
-             // duplicating logic slightly, OR just accept that proper pagination needs service update.
-             // Given the scope "Decompose", I will try to respect the original logic which was 
-             // fetching snapshots locally in the original file! 
-             // Wait, the original file lines 387-401 fetched locally!
-             // So I SHOULD continue to fetch locally OR update the service.
-             // Updating service is better, but risky.
-             // I will use local fetching logic from the original file to guarantee behavior.
           }
         });
+
+        // ── Batch Lookups (Prevent N+1) ──
+        final List<String> newPostIds = data.map((p) => p.id).toList();
+        if (newPostIds.isNotEmpty) {
+           BackendService.getLikesBatch(newPostIds).then((likeResp) {
+             if (mounted && likeResp.success && likeResp.data != null) {
+                setState(() {
+                  _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
+                });
+             }
+           });
+        }
       }
-      
-      // Re-implementing local fetch to get _lastDocument matches original behavior
-      // The original code lines 387-411 did the fetch manually.
-      // So I should probably NOT call FirestoreService.getPostsPaginated but do it manually 
-      // OR update FirestoreService to return snapshots.
-      // I'll do it manually to match original file which had the logic inline.
-      
     } catch (e) {
       debugPrint('Error loading posts: $e');
       if (mounted) setState(() => _error = e.toString());
@@ -129,75 +163,14 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
-  
-  // Overriding _loadMorePosts to use manual logic as per original file to save _lastDocument
-  Future<void> _loadMorePostsManual({bool refresh = false}) async {
-     if (_isLoading) return;
-     if (!refresh && !_hasMore) return;
-     
-    if (refresh) {
-      if (mounted) {
-        setState(() {
-          _posts.clear();
-          _lastDocument = null;
-          _hasMore = true;
-          _error = null;
-          _isLoading = true;
-        });
-      }
-    } else {
-      if (mounted) setState(() => _isLoading = true);
-    }
-    
-    try {
-      Query<Map<String, dynamic>> query = FirebaseFirestore.instance
-          .collection('posts')
-          .orderBy('createdAt', descending: true);
-
-      if (widget.feedType == 'local' && widget.userCity != null) {
-        query = query.where('city', isEqualTo: widget.userCity);
-      } else if (widget.feedType == 'national' && widget.userCountry != null) {
-        query = query.where('country', isEqualTo: widget.userCountry);
-      }
-
-      if (_lastDocument != null) {
-        query = query.startAfterDocument(_lastDocument!);
-      }
-
-      final querySnapshot = await query.limit(10).get();
-
-      if (mounted) {
-        if (querySnapshot.docs.isEmpty) {
-          setState(() => _hasMore = false);
-        } else {
-          _lastDocument = querySnapshot.docs.last;
-          final newPosts = querySnapshot.docs.map((doc) => Post.fromFirestore(doc)).toList();
-          setState(() {
-            if (refresh) _posts.clear();
-            
-            // Dedupe
-            final existingIds = _posts.map((p) => p.id).toSet();
-            final uniqueNew = newPosts.where((p) => !existingIds.contains(p.id));
-            _posts.addAll(uniqueNew);
-            
-            if (newPosts.length < 10) _hasMore = false;
-          });
-        }
-      }
-    } catch (e) {
-       debugPrint('Error loading posts: $e');
-       if (mounted) setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
 
   Future<void> _onRefresh() async {
-    await _loadMorePostsManual(refresh: true);
+    await _loadMorePosts(refresh: true);
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required by AutomaticKeepAliveClientMixin
     if (_posts.isEmpty && _isLoading) {
       return _buildLoadingState();
     }
@@ -216,9 +189,12 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> {
       child: ListView.builder(
         controller: _scrollController,
         padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _posts.length + (_hasMore ? 1 : 0),
+        itemCount: _posts.length + (_hasMore || _error != null ? 1 : 0),
         itemBuilder: (context, index) {
           if (index == _posts.length) {
+            if (_error != null) {
+              return _buildRetryFooter();
+            }
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(16.0),
@@ -227,8 +203,30 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> {
             );
           }
           final post = _posts[index];
-          return PostCard(post: post);
+          return NextdoorStylePostCard(
+            post: post,
+            initialIsLiked: _likedPostIds[post.id],
+          );
         },
+      ),
+    );
+  }
+
+  void _loadMorePostsManual({bool refresh = false}) {
+    _loadMorePosts(refresh: refresh);
+  }
+
+  Widget _buildRetryFooter() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: [
+          const Text('Failed to load more posts'),
+          TextButton(
+            onPressed: () => _loadMorePosts(),
+            child: const Text('Try Again'),
+          ),
+        ],
       ),
     );
   }

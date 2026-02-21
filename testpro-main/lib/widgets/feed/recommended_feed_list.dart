@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../services/firestore_service.dart';
+import '../../services/feed_service.dart';
 import '../../models/post.dart';
+import '../../services/auth_service.dart';
 import '../post_card.dart';
 import '../../screens/interest_picker_screen.dart';
 
@@ -14,21 +14,37 @@ class RecommendedFeedList extends StatefulWidget {
   State<RecommendedFeedList> createState() => _RecommendedFeedListState();
 }
 
-class _RecommendedFeedListState extends State<RecommendedFeedList> {
+class _RecommendedFeedListState extends State<RecommendedFeedList> with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final List<Post> _posts = [];
   bool _isLoading = false;
   bool _hasMore = true;
-  DocumentSnapshot? _lastDocument;
+  String? _afterId;
+  String? _error;
   final String _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
+  final Map<String, bool> _likedPostIds = {};
+  
+  Timer? _debounce;
+
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
     super.initState();
     _loadMorePosts();
-    _scrollController.addListener(() {
-      if (_scrollController.hasClients && 
-          _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (_debounce?.isActive ?? false) return;
+
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (_scrollController.hasClients &&
+          _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
+          !_isLoading &&
+          _hasMore &&
+          _error == null) {
         _loadMorePosts();
       }
     });
@@ -36,6 +52,7 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _scrollController.dispose();
     super.dispose();
   }
@@ -44,53 +61,71 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> {
     if (_isLoading) return;
     if (!refresh && !_hasMore) return;
 
+    debugPrint('🚀 RECOMMENDED FEED API CALLED');
+
     if (refresh) {
       if (mounted) {
         setState(() {
           _posts.clear();
           _hasMore = true;
-          _lastDocument = null;
+          _afterId = null;
+          _error = null;
           _isLoading = true;
         });
       }
     } else {
-      if (mounted) setState(() => _isLoading = true);
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _error = null;
+        });
+      }
     }
 
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return;
+      final user = AuthService.currentUser;
+      if (user == null) {
+        if (mounted) setState(() => _error = 'User not authenticated');
+        return;
+      }
 
-      final newPosts = await FirestoreService.getRecommendedFeed(
+      final lastId = _posts.isNotEmpty ? _posts.last.id : null;
+      final newPosts = await FeedService.getRecommendedFeed(
         userId: user.uid,
         sessionId: _sessionId,
-        lastDocument: _lastDocument,
+        afterId: lastId,
         limit: 10,
       );
 
       if (mounted) {
         setState(() {
-          // If we are refreshing, we already cleared list.
-          // If not refreshing, we append.
-          
           if (refresh) {
-            _posts.clear(); // Safety clear again
-            _posts.addAll(newPosts);
-          } else {
-            // Deduplicate just in case
-            final existingIds = _posts.map((p) => p.id).toSet();
-            final uniqueNew = newPosts.where((p) => !existingIds.contains(p.id));
-            _posts.addAll(uniqueNew);
+            _posts.clear();
+            _likedPostIds.clear();
           }
+          
+          final existingIds = _posts.map((p) => p.id).toSet();
+          final uniqueNew = newPosts.where((p) => !existingIds.contains(p.id));
+          _posts.addAll(uniqueNew);
 
           if (newPosts.length < 10) _hasMore = false;
-          
-          // For pagination in V3, usually we update _lastDocument if strict pagination,
-          // but mixed feed strategy is complex. Here we assume generic pagination/session.
         });
+
+        // ── Batch Lookups (Prevent N+1) ──
+        final List<String> postIds = newPosts.map((p) => p.id).toList();
+        if (postIds.isNotEmpty) {
+           BackendService.getLikesBatch(postIds).then((likeResp) {
+             if (mounted && likeResp.success && likeResp.data != null) {
+                setState(() {
+                  _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
+                });
+             }
+           });
+        }
       }
     } catch (e) {
       debugPrint('Error loading recommended posts: $e');
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -98,46 +133,97 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required by AutomaticKeepAliveClientMixin
     if (_posts.isEmpty && _isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
+    if (_error != null && _posts.isEmpty) {
+      return _buildErrorState(_error!);
+    }
+
     if (_posts.isEmpty && !_isLoading) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text('No recommendations yet. Interact more!'),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => const InterestPickerScreen()),
-                );
-              },
-              child: const Text('Pick Interests'),
-            ),
-          ],
-        ),
-      );
+      return _buildEmptyState();
     }
 
     return RefreshIndicator(
       onRefresh: () => _loadMorePosts(refresh: true),
+      color: const Color(0xFF6C5CE7),
       child: ListView.builder(
         controller: _scrollController,
         padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _posts.length + (_hasMore ? 1 : 0),
+        itemCount: _posts.length + (_hasMore || _error != null ? 1 : 0),
         itemBuilder: (context, index) {
           if (index == _posts.length) {
-            return const Center(child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ));
+            if (_error != null) {
+              return _buildRetryFooter();
+            }
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
           }
           final post = _posts[index];
-          return PostCard(post: post);
+          return NextdoorStylePostCard(
+            post: post,
+            initialIsLiked: _likedPostIds[post.id],
+          );
         },
+      ),
+    );
+  }
+
+  Widget _buildRetryFooter() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        children: [
+          const Text('Failed to load more posts'),
+          TextButton(
+            onPressed: () => _loadMorePosts(),
+            child: const Text('Try Again'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState(String error) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          const SizedBox(height: 16),
+          Text('Error: $error'),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () => _loadMorePosts(refresh: true),
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('No recommendations yet. Interact more!'),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const InterestPickerScreen()),
+              );
+            },
+            child: const Text('Pick Interests'),
+          ),
+        ],
       ),
     );
   }

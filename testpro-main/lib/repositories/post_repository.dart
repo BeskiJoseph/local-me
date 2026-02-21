@@ -1,33 +1,13 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import '../models/post.dart';
+import '../models/paginated_response.dart';
+import '../services/backend_service.dart';
 
 /// Repository for handling Post and Event data operations.
-/// Accepts [FirebaseFirestore] and [FirebaseAuth] for dependency injection.
 class PostRepository {
-  final FirebaseFirestore _db;
-  final FirebaseAuth _auth;
+  PostRepository();
 
-  PostRepository({
-    FirebaseFirestore? firestore,
-    FirebaseAuth? auth,
-  })  : _db = firestore ?? FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
-
-  List<Post> _postsFromQuerySnapshot(
-    QuerySnapshot<Map<String, dynamic>> snapshot,
-  ) {
-    final posts = snapshot.docs
-        .map((doc) => Post.fromMap(doc.id, doc.data()))
-        .toList();
-    posts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return posts;
-  }
-
+  /// Creates a post via REST.
   Future<String> createPost({
-    required String authorId,
-    required String authorName,
     required String title,
     required String body,
     String scope = 'local',
@@ -39,203 +19,142 @@ class PostRepository {
     String? mediaUrl,
     String mediaType = 'image',
     String? thumbnailUrl,
-    String? authorProfileImage,
   }) async {
-    final ref = _db.collection('posts').doc();
-    await ref.set({
-      'authorId': authorId,
-      'authorName': authorName,
-      'authorProfileImage': authorProfileImage,
+    final response = await BackendService.createPost({
       'title': title,
       'body': body,
-      'scope': scope,
-      'mediaUrl': mediaUrl,
-      'mediaType': mediaType,
-      'createdAt': FieldValue.serverTimestamp(),
-      'likeCount': 0,
-      'commentCount': 0,
-      'latitude': latitude,
-      'longitude': longitude,
+      'text': '$title\n$body'.trim(),
+      'category': category,
       'city': city,
       'country': country,
-      'category': category,
+      'mediaUrl': mediaUrl,
+      'mediaType': mediaType,
       'thumbnailUrl': thumbnailUrl,
+      'location': (latitude != null && longitude != null) ? {
+        'lat': latitude,
+        'lng': longitude,
+        'name': city ?? 'Unknown'
+      } : null,
+      'tags': [category],
     });
-    return ref.id;
+
+    if (!response.success) throw response.error ?? "Failed to create post";
+    return response.data!;
   }
 
   Future<void> deletePost(String postId) async {
-    final user = _auth.currentUser;
-    if (user == null) throw "Not logged in";
-    await _db.collection('posts').doc(postId).delete();
+    final response = await BackendService.deletePost(postId);
+    if (!response.success) throw response.error ?? "Failed to delete post";
   }
 
-  Stream<List<Post>> postsByScope(String scope) {
-    final query = _db.collection('posts').where('scope', isEqualTo: scope);
-    if (kIsWeb) {
-      return Stream.periodic(const Duration(seconds: 2))
-          .asyncMap((_) => query.get())
-          .map(_postsFromQuerySnapshot)
-          .asBroadcastStream();
-    }
-    return query.snapshots().map(_postsFromQuerySnapshot);
-  }
-
-  Future<List<Post>> getPostsPaginated({
+  Future<PaginatedResponse<Post>> getPostsPaginated({
     required String feedType,
     String? userCity,
     String? userCountry,
-    DocumentSnapshot? lastDocument,
+    String? afterId,
     int limit = 10,
   }) async {
-    Query<Map<String, dynamic>> query = _db.collection('posts')
-        .orderBy('createdAt', descending: true);
+    final response = await BackendService.getFeed(
+      cursor: afterId,
+      limit: limit,
+      type: feedType,
+    );
+    
+    if (!response.success) throw response.error ?? "Failed to fetch feed";
+    
+    final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+    
+    return PaginatedResponse<Post>(
+      data: posts,
+      nextCursor: response.pagination?.cursor,
+      hasMore: response.pagination?.hasMore ?? false,
+    );
+  }
 
-    if (feedType == 'local' && userCity != null) {
-      query = query.where('city', isEqualTo: userCity);
-    } else if (feedType == 'national' && userCountry != null) {
-      query = query.where('country', isEqualTo: userCountry);
+  Stream<List<Post>> postsByAuthor(String authorId) async* {
+    final response = await BackendService.getPosts(authorId: authorId);
+    if (response.success) {
+      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      yield posts;
     }
+  }
 
-    if (lastDocument != null) {
-      query = query.startAfterDocument(lastDocument);
+  Stream<int> eventAttendeesCountStream(String eventId) async* {
+    final response = await BackendService.getPost(eventId);
+    if (response.success) {
+      yield response.data!['attendeeCount'] as int? ?? 0;
     }
+  }
 
-    query = query.limit(limit);
+  Future<void> toggleEventAttendance(String eventId, String userId) async {
+    final response = await BackendService.toggleEventJoin(eventId);
+    if (!response.success) throw response.error ?? "Action failed";
+  }
 
-    final snapshot = await query.get();
-    return snapshot.docs.map((doc) => Post.fromFirestore(doc)).toList();
+  Future<void> createEvent({
+    required String title,
+    required String description,
+    required String eventType,
+    required DateTime eventDate,
+    required String location,
+    double? latitude,
+    double? longitude,
+    required String city,
+    required String country,
+    String? mediaUrl,
+    bool isFree = true,
+  }) async {
+    final response = await BackendService.createPost({
+      'text': description,
+      'title': title,
+      'category': 'Events',
+      'city': city,
+      'country': country,
+      'mediaUrl': mediaUrl,
+      'mediaType': 'image',
+      'location': (latitude != null && longitude != null) ? {
+        'lat': latitude,
+        'lng': longitude,
+        'name': city,
+      } : null,
+      'isEvent': true,
+      'eventDate': eventDate.toIso8601String(),
+      'eventLocation': location,
+      'isFree': isFree,
+      'eventType': eventType,
+      'tags': ['Events'],
+    });
+
+    if (!response.success) throw response.error ?? "Failed to create event";
+  }
+
+  Stream<List<Post>> postsByScope(String scope) async* {
+    final response = await BackendService.getPosts(category: scope);
+    if (response.success) {
+      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      yield posts;
+    }
   }
 
   Stream<List<Post>> postsForFeed({
     required String feedType,
     String? userCity,
     String? userCountry,
-  }) {
-    Query<Map<String, dynamic>> query = _db.collection('posts');
-
-    if (feedType == 'local' && userCity != null) {
-      query = query.where('city', isEqualTo: userCity);
-    } else if (feedType == 'national' && userCountry != null) {
-      query = query.where('country', isEqualTo: userCountry);
+  }) async* {
+    final response = await BackendService.getFeed(
+      type: feedType,
+      limit: 20,
+    );
+    if (response.success) {
+      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      yield posts;
     }
-    
-    query = query.orderBy('createdAt', descending: true).limit(20);
-
-    if (kIsWeb) {
-      return Stream.periodic(const Duration(seconds: 2))
-          .asyncMap((_) => query.get())
-          .map(_postsFromQuerySnapshot)
-          .asBroadcastStream();
+  }
+  Stream<bool> isAttendingEventStream(String eventId, String userId) async* {
+    final response = await BackendService.checkEventAttendance(eventId);
+    if (response.success) {
+      yield response.data ?? false;
     }
-
-    return query.snapshots().map(_postsFromQuerySnapshot);
-  }
-
-  Stream<List<Post>> postsByAuthor(String authorId) {
-    final query =
-        _db.collection('posts').where('authorId', isEqualTo: authorId);
-
-    if (kIsWeb) {
-      return Stream.periodic(const Duration(seconds: 2))
-          .asyncMap((_) => query.get())
-          .map(_postsFromQuerySnapshot)
-          .asBroadcastStream();
-    }
-
-    return query.snapshots().map(_postsFromQuerySnapshot);
-  }
-
-  Stream<QuerySnapshot> getPostsStream() {
-    return _db
-        .collection('posts')
-        .orderBy('createdAt', descending: true)
-        .limit(50)
-        .snapshots();
-  }
-
-  // Event related methods
-  Stream<int> eventAttendeesCountStream(String eventId) {
-    return _db
-        .collection('posts')
-        .doc(eventId)
-        .snapshots()
-        .map((doc) => doc.data()?['attendeeCount'] as int? ?? 0);
-  }
-
-  Stream<bool> isAttendingEventStream(String eventId, String userId) {
-    final attendanceId = '${eventId}_$userId';
-    return _db
-        .collection('event_attendance')
-        .doc(attendanceId)
-        .snapshots()
-        .map((doc) => doc.exists);
-  }
-
-  Future<void> toggleEventAttendance(String eventId, String userId) async {
-    final postRef = _db.collection('posts').doc(eventId);
-    final attendanceId = '${eventId}_$userId';
-    final attendanceRef = _db.collection('event_attendance').doc(attendanceId);
-
-    await _db.runTransaction((transaction) async {
-      final attendanceDoc = await transaction.get(attendanceRef);
-
-      if (attendanceDoc.exists) {
-        transaction.delete(attendanceRef);
-        transaction.update(postRef, {'attendeeCount': FieldValue.increment(-1)});
-      } else {
-        transaction.set(attendanceRef, {
-          'eventId': eventId,
-          'userId': userId,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        transaction.update(postRef, {'attendeeCount': FieldValue.increment(1)});
-      }
-    }).catchError((e) {
-      if (kDebugMode) print("Attendance Toggle Error: $e");
-      throw "Action failed. Check your connection.";
-    });
-  }
-
-  Future<void> createEvent({
-    required String authorId,
-    required String authorName,
-    String? authorProfileImage,
-    required String title,
-    required String description,
-    required String eventType,
-    required DateTime eventDate,
-    required String location,
-    required double latitude,
-    required double longitude,
-    required String city,
-    required String country,
-    String? mediaUrl,
-    bool isFree = true,
-  }) async {
-    await _db.collection('posts').add({
-      'authorId': authorId,
-      'authorName': authorName,
-      'authorProfileImage': authorProfileImage,
-      'title': title,
-      'body': description,
-      'eventType': eventType,
-      'eventDate': Timestamp.fromDate(eventDate),
-      'eventLocation': location,
-      'latitude': latitude,
-      'longitude': longitude,
-      'city': city,
-      'country': country,
-      'mediaUrl': mediaUrl,
-      'mediaType': 'image',
-      'isFree': isFree,
-      'isEvent': true,
-      'createdAt': FieldValue.serverTimestamp(),
-      'likeCount': 0,
-      'commentCount': 0,
-      'attendeeCount': 0,
-      'category': 'Events',
-      'scope': 'global',
-    });
   }
 }
+

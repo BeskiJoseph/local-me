@@ -1,26 +1,27 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import '../models/notification.dart';
+import 'backend_service.dart';
 
 class NotificationDataService {
-  static final FirebaseFirestore _db = FirebaseFirestore.instance;
+  /// Polls every 5 minutes — notifications don't need near-real-time updates.
+  /// Previous 15s polling was contributing to the request storm.
+  static Stream<List<ActivityNotification>> notificationsStream(String userId) async* {
+    yield await _fetch(userId);
+    await for (final _ in Stream.periodic(const Duration(minutes: 5))) {
+      yield await _fetch(userId);
+    }
+  }
 
-  static Stream<List<ActivityNotification>> notificationsStream(String userId) {
-    return _db
-        .collection('notifications')
-        .where('toUserId', isEqualTo: userId)
-        .orderBy('timestamp', descending: true)
-        .limit(50)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => ActivityNotification.fromFirestore(doc))
-          .toList();
-    });
+  static Future<List<ActivityNotification>> _fetch(String userId) async {
+    final response = await BackendService.getNotifications();
+    if (response.success) {
+      return response.data!.map((json) => ActivityNotification.fromJson(json)).toList();
+    }
+    return [];
   }
 
   static Future<void> markNotificationAsRead(String notificationId) async {
-    await _db.collection('notifications').doc(notificationId).update({'isRead': true});
+    final response = await BackendService.markNotificationAsRead(notificationId);
+    if (!response.success) throw response.error ?? "Failed to mark as read";
   }
 
   static Future<void> sendNotification({
@@ -33,23 +34,6 @@ class NotificationDataService {
     String? postThumbnail,
     String? commentText,
   }) async {
-    try {
-      if (toUserId == fromUserId) return; // Don't notify self
-      
-      await _db.collection('notifications').add({
-        'toUserId': toUserId,
-        'fromUserId': fromUserId,
-        'fromUserName': fromUserName,
-        'fromUserProfileImage': fromUserProfileImage,
-        'type': type.name,
-        'postId': postId,
-        'postThumbnail': postThumbnail,
-        'commentText': commentText,
-        'timestamp': FieldValue.serverTimestamp(),
-        'isRead': false,
-      });
-    } catch (e) {
-      debugPrint('Error sending notification: $e');
-    }
+    // Notifications are sent server-side — no client action needed.
   }
 }

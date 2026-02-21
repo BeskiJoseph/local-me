@@ -1,12 +1,15 @@
 import express from 'express';
 import sgMail from '@sendgrid/mail';
 import crypto from 'crypto';
-import admin from 'firebase-admin';
+import admin, { db } from '../config/firebase.js';
 import logger from '../utils/logger.js';
 import { body, validationResult } from 'express-validator';
+import { authLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
-const db = admin.firestore();
+
+// Apply strict rate limiting to all OTP routes
+router.use(authLimiter);
 
 // Initialize SendGrid
 if (process.env.SENDGRID_API_KEY) {
@@ -70,11 +73,11 @@ router.post(
             await sgMail.send(msg);
 
             logger.info('OTP Sent', { email, requestId: req.requestId });
-            res.json({ message: 'OTP sent successfully' });
+            return res.json({ message: 'OTP sent successfully' });
 
         } catch (error) {
             logger.error('OTP Send Error', { error: error.message, email, requestId: req.requestId });
-            res.status(500).json({ error: 'Failed to send OTP' });
+            return res.status(500).json({ error: 'Failed to send OTP' });
         }
     }
 );
@@ -121,11 +124,11 @@ router.post(
             await db.collection('otps').doc(email).delete();
 
             logger.info('OTP Verified', { email, requestId: req.requestId });
-            res.json({ message: 'OTP verified successfully' });
+            return res.json({ message: 'OTP verified successfully' });
 
         } catch (error) {
             logger.error('OTP Verify Error', { error: error.message, email, requestId: req.requestId });
-            res.status(500).json({ error: 'Verification failed' });
+            return res.status(500).json({ error: 'Verification failed' });
         }
     }
 );

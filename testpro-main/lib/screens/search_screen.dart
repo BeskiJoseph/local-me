@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import '../services/firestore_service.dart';
+import 'dart:async';
+import '../services/backend_service.dart';
+import '../services/auth_service.dart';
+import '../services/search_service.dart';
 import '../widgets/user_search_card.dart';
-import '../widgets/post_card.dart';
+import '../widgets/nextdoor_post_card.dart';
 import '../models/post.dart';
 import '../utils/proxy_helper.dart';
+import '../models/api_response.dart';
 import 'post_detail_screen.dart';
 
 /// Simple search screen with user and content search
@@ -17,9 +20,13 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
-  final FirestoreService _firestoreService = FirestoreService();
   String _searchQuery = '';
   late TabController _tabController;
+  
+  Timer? _debounce;
+  List<dynamic> _userResults = [];
+  List<dynamic> _postResults = [];
+  bool _isSearching = false;
 
   @override
   void initState() {
@@ -31,7 +38,48 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   void dispose() {
     _searchController.dispose();
     _tabController.dispose();
+    _debounce?.cancel();
     super.dispose();
+  }
+
+  void _onSearchChanged(String query) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+
+    if (query.trim().isEmpty) {
+      setState(() {
+        _searchQuery = '';
+        _userResults = [];
+        _postResults = [];
+        _isSearching = false;
+      });
+      return;
+    }
+
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
+      if (!mounted) return;
+      
+      setState(() {
+        _searchQuery = query.trim();
+        _isSearching = true;
+      });
+
+      try {
+        final users = await SearchService.searchUsers(_searchQuery);
+        final posts = await SearchService.searchPosts(_searchQuery);
+        
+        if (mounted) {
+          setState(() {
+            _userResults = users;
+            _postResults = posts;
+            _isSearching = false;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isSearching = false);
+        }
+      }
+    });
   }
 
   @override
@@ -60,11 +108,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: TextField(
               controller: _searchController,
-              onChanged: (value) {
-                setState(() {
-                  _searchQuery = value.trim();
-                });
-              },
+              onChanged: _onSearchChanged,
               style: const TextStyle(fontFamily: 'Inter', fontSize: 16),
               decoration: InputDecoration(
                 hintText: 'Search users or posts...',
@@ -169,81 +213,64 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   }
 
   Widget _buildUserSearch() {
-    return StreamBuilder(
-      stream: _firestoreService.searchUsers(_searchQuery),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    if (_isSearching) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        if (snapshot.hasError) {
-          return _buildErrorState();
-        }
+    if (_userResults.isEmpty) {
+      return _buildNoResultsState('users');
+    }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return _buildNoResultsState('users');
-        }
-
-        final users = snapshot.data!.docs;
-
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          itemCount: users.length,
-          itemBuilder: (context, index) {
-            final user = users[index];
-            return UserSearchCard(
-              userId: user.id,
-              userData: user.data() as Map<String, dynamic>,
-            );
-          },
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      itemCount: _userResults.length,
+      itemBuilder: (context, index) {
+        final user = _userResults[index] as Map<String, dynamic>;
+        return UserSearchCard(
+          userId: user['id'] ?? user['uid'] ?? '',
+          userData: user,
         );
       },
     );
   }
 
   Widget _buildContentSearch() {
-    return StreamBuilder(
-      stream: _firestoreService.searchPosts(_searchQuery),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
+    if (_isSearching) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-        if (snapshot.hasError) {
-          return _buildErrorState();
-        }
+    if (_postResults.isEmpty) {
+      return _buildNoResultsState('posts');
+    }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return _buildNoResultsState('posts');
-        }
-
-        final posts = snapshot.data!.docs;
-
-        return ListView.builder(
-          padding: const EdgeInsets.only(left: 16, right: 16, bottom: 80),
-          itemCount: posts.length,
-          itemBuilder: (context, index) {
-            final doc = posts[index];
-            final post = Post.fromFirestore(doc);
-            return PostCard(post: post);
-          },
-        );
+    return ListView.builder(
+      padding: const EdgeInsets.only(left: 16, right: 16, bottom: 80),
+      itemCount: _postResults.length,
+      itemBuilder: (context, index) {
+        final json = _postResults[index] as Map<String, dynamic>;
+        final post = Post.fromJson(json);
+        return NextdoorStylePostCard(post: post);
       },
     );
   }
 
   Widget _buildExploreGrid() {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = AuthService.currentUser;
     if (user == null) return const SizedBox.shrink();
 
-    return FutureBuilder<List<Post>>(
-      future: FirestoreService.getRecommendedFeed(userId: user.uid, limit: 30),
+    return FutureBuilder<ApiResponse<List<dynamic>>>(
+      future: BackendService.getFeed(type: 'discovery', limit: 30),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final posts = snapshot.data ?? [];
+        final response = snapshot.data;
+        if (response == null || !response.success || response.data == null) return _buildEmptyState();
+
+        final data = response.data!;
+        final List<Post> posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+        
         if (posts.isEmpty) return _buildEmptyState();
 
         return GridView.builder(

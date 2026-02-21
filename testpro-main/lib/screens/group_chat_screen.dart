@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/post.dart';
 import '../models/chat_message.dart';
 import '../services/auth_service.dart';
-import '../services/firestore_service.dart';
+import '../services/chat_service.dart';
 import 'package:intl/intl.dart';
 import '../shared/widgets/user_avatar.dart';
 
@@ -36,7 +36,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       timestamp: DateTime.now(),
     );
 
-    await FirestoreService.sendChatMessage(widget.event.id, message);
+    await ChatService.sendChatMessage(widget.event.id, message);
     _scrollController.animateTo(
       0.0,
       duration: const Duration(milliseconds: 300),
@@ -84,7 +84,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         children: [
           Expanded(
             child: StreamBuilder<List<ChatMessage>>(
-              stream: FirestoreService.messagesStream(widget.event.id),
+              stream: ChatService.messagesStream(widget.event.id),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());

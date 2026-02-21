@@ -1,24 +1,18 @@
-
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
-import '../services/firestore_service.dart';
-import '../models/post.dart';
-import 'new_post_screen.dart';
+import '../config/app_theme.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/geocoding_service.dart';
-import '../utils/proxy_helper.dart';
-import 'welcome_screen.dart';
-import 'reels_feed_screen.dart';
-import 'event_post_card.dart';
+import '../services/user_service.dart';
+import '../services/notification_data_service.dart';
+import '../services/auth_service.dart';
 import 'search_screen.dart';
-import 'post_detail_screen.dart';
 import 'activity_screen.dart';
-import 'package:flutter/rendering.dart';
 import 'personal_account.dart';
 import 'community_screen.dart';
 import 'post_type_selector_sheet.dart';
-import '../widgets/nextdoor_post_card.dart';
 import '../widgets/home/home_feed_list.dart';
+import '../widgets/bottom_nav_bar.dart';
+import 'new_post_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,82 +21,25 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> {
   String? _currentCity;
   String? _currentCountry;
   bool _isLoadingLocation = true;
   String? _locationError;
-  int _currentFeedIndex = 0;
+
+  // 0 = Nearby/Local, 1 = Global
+  int _feedToggleIndex = 0;
+
+  // Bottom nav: 0=Home, 1=Explore, 2=Create, 3=Groups, 4=Me
   int _bottomNavIndex = 0;
-  final TextEditingController _searchController = TextEditingController();
-  String _searchQuery = '';
-  late TabController _tabController;
-  late PageController _pageController;
-  late ScrollController _scrollController;
-  bool _showFAB = true;
 
-  // ADD THIS METHOD
-  void _openReelsFeed() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ReelsFeedScreen(
-          feedType: _getCurrentFeedType(),
-          userCity: _currentCity,
-          userCountry: _currentCountry,
-        ),
-      ),
-    );
-  }
-
-  // ADD THIS METHOD
-  String _getCurrentFeedType() {
-    switch (_currentFeedIndex) {
-      case 0:
-        return 'local';
-      case 1:
-        return 'national';
-      case 2:
-        return 'global';
-      default:
-        return 'local';
-    }
-  }
+  // Incrementing forces HomeFeedList recreation → fresh feed fetch
+  int _feedRevision = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _pageController = PageController(initialPage: 0);
-    _scrollController = ScrollController();
-    
-    _scrollController.addListener(() {
-      if (_scrollController.position.userScrollDirection == ScrollDirection.reverse) {
-        if (_showFAB) setState(() => _showFAB = false);
-      } else if (_scrollController.position.userScrollDirection == ScrollDirection.forward) {
-        if (!_showFAB) setState(() => _showFAB = true);
-      }
-    });
-
-    _tabController.addListener(() {
-      if (!_tabController.indexIsChanging) {
-        _pageController.animateToPage(
-          _tabController.index,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
-      }
-    });
     _detectLocation();
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _tabController.dispose();
-    _pageController.dispose();
-    _scrollController.dispose();
-    super.dispose();
   }
 
   Future<void> _detectLocation() async {
@@ -112,6 +49,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     });
 
     try {
+      // Priority 1: Instant load from cached profile to show feed faster
+      final userId = AuthService.currentUser?.uid;
+      if (userId != null) {
+        final profile = await UserService.getUserProfile(userId);
+        if (profile?.location != null && profile!.location!.isNotEmpty) {
+          final parts = profile.location!.split(',');
+          if (mounted) {
+            setState(() {
+              _currentCity = parts[0].trim();
+              if (parts.length > 1) _currentCountry = parts[1].trim();
+              _isLoadingLocation = false; // Allow feed to start loading with cached location
+            });
+          }
+        }
+      }
+
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (!mounted) return;
@@ -139,32 +92,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         if (!mounted) return;
         setState(() {
           _isLoadingLocation = false;
-          _locationError =
-              'Location permissions are permanently denied. Please enable them in your browser/device settings.';
+          _locationError = 'Location permissions are permanently denied.';
         });
         return;
       }
 
       final position = await Geolocator.getCurrentPosition();
-      
-      final place = await GeocodingService.getPlace(
-        position.latitude, 
-        position.longitude
-      );
+      final place = await GeocodingService.getPlace(position.latitude, position.longitude);
 
       if (!mounted) return;
+      setState(() {
+        _currentCity = place['city'] ?? 'Unknown City';
+        _currentCountry = place['country'] ?? 'Unknown Country';
+        _isLoadingLocation = false;
+      });
 
-      if (place['city'] != null || place['country'] != null) {
-        setState(() {
-          _currentCity = place['city'];
-          _currentCountry = place['country'];
-          _isLoadingLocation = false;
-        });
-      } else {
-        setState(() {
-          _currentCity = 'Unknown City';
-          _currentCountry = 'Unknown Country';
-          _isLoadingLocation = false;
+      // Sync to backend profile to avoid redundant requests in other screens (like "Me")
+      if (userId != null && _currentCity != null) {
+        final locationStr = _currentCountry != null 
+            ? '$_currentCity, $_currentCountry' 
+            : _currentCity!;
+            
+        // Optimization: Only update if different from current profile
+        UserService.getUserProfile(userId).then((profile) {
+          if (profile?.location != locationStr) {
+            UserService.updateUserProfile(
+              userId: userId,
+              location: locationStr,
+            ).catchError((e) => debugPrint('Silent error syncing location: $e'));
+          }
         });
       }
     } catch (e) {
@@ -178,184 +134,254 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
-  Future<void> _logout() async {
-    await AuthService.signOut();
-    if (mounted) {
-      Navigator.pushReplacement(
+  void _onNavTap(int index) {
+    // Index 2 is now the dedicated Create button
+    if (index == 2) {
+      Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => const WelcomeScreen()),
-      );
+        MaterialPageRoute(builder: (_) => const NewPostScreen()),
+      ).then((result) {
+        if (result == true) {
+          _refreshFeeds();
+        }
+      });
+      return;
     }
+    setState(() => _bottomNavIndex = index);
+  }
+
+  void _refreshFeeds() {
+    setState(() => _feedRevision++);
+  }
+
+
+
+  Widget _buildHomeTab() {
+    return Column(
+      children: [
+        // ── AppBar ─────────────────────────────────────────
+        _HomeAppBar(
+          feedToggleIndex: _feedToggleIndex,
+          onToggleChanged: (i) => setState(() => _feedToggleIndex = i),
+          onNotificationTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ActivityScreen()),
+          ),
+        ),
+        // ── Feed ───────────────────────────────────────────
+        Expanded(
+          child: IndexedStack(
+            index: _feedToggleIndex,
+            children: [
+              HomeFeedList(
+                key: ValueKey('nearby_$_feedRevision'),
+                feedType: 'national',
+                userCity: _currentCity,
+                userCountry: _currentCountry,
+                isLoadingLocation: _isLoadingLocation,
+                locationError: _locationError,
+                onRetryLocation: _detectLocation,
+                searchQuery: '',
+              ),
+              HomeFeedList(
+                key: ValueKey('global_$_feedRevision'),
+                feedType: 'global',
+                userCity: _currentCity,
+                userCountry: _currentCountry,
+                isLoadingLocation: _isLoadingLocation,
+                locationError: _locationError,
+                onRetryLocation: _detectLocation,
+                searchQuery: '',
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-
-    if (_bottomNavIndex != 0) {
-      return Scaffold(
-        body: _bottomNavIndex == 1
-            ? const SearchScreen()
-            : _bottomNavIndex == 2
-                ? CommunityScreen()
-                : _bottomNavIndex == 3
-                    ? PersonalAccount() // Renamed from ProfileScreen in some contexts?
-                    : const Center(
-                        child: Text('Other Screen'),
-                      ),
-        bottomNavigationBar: _buildBottomNav(),
-        floatingActionButton: AnimatedScale(
-          scale: _showFAB ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeIn,
-          child: _buildFAB(),
-        ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      );
-    }
-
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: TabBar(
-          controller: _tabController,
-          indicatorColor: const Color(0xFF00B87C),
-          indicatorWeight: 3,
-          labelColor: Colors.black,
-          unselectedLabelColor: Colors.grey.shade600,
-          labelStyle: const TextStyle(
+      backgroundColor: AppTheme.background,
+      body: SafeArea(
+        bottom: false,
+        child: IndexedStack(
+          index: _bottomNavIndex,
+          children: [
+            _buildHomeTab(),           // Index 0: Home
+            const SearchScreen(),      // Index 1: Explore
+            const SizedBox.shrink(),   // Index 2: Placeholder for Create (modal)
+            CommunityScreen(),         // Index 3: Groups
+            PersonalAccount(),         // Index 4: Me
+          ],
+        ),
+      ),
+      bottomNavigationBar: AppBottomNavBar(
+        currentIndex: _bottomNavIndex,
+        onTap: _onNavTap,
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Home AppBar: Nearby/Global toggle + notification bell
+// Pixel-matched to screenshot
+// ─────────────────────────────────────────────────────────────
+class _HomeAppBar extends StatelessWidget {
+  final int feedToggleIndex;
+  final ValueChanged<int> onToggleChanged;
+  final VoidCallback onNotificationTap;
+
+  const _HomeAppBar({
+    required this.feedToggleIndex,
+    required this.onToggleChanged,
+    required this.onNotificationTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      // White background matching screenshot
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+      child: Row(
+        children: [
+          // ── Nearby | Global pill toggle ──────────────────────
+          _FeedToggle(
+            selectedIndex: feedToggleIndex,
+            onChanged: onToggleChanged,
+          ),
+          const Spacer(),
+          // ── Notification bell + red badge ────────────────────
+          GestureDetector(
+            onTap: onNotificationTap,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.notifications_outlined,
+                    color: Color(0xFF1A1A1A),
+                    size: 26,
+                  ),
+                ),
+                // Dynamic notification badge from stream
+                Builder(
+                  builder: (context) {
+                    final userId = AuthService.currentUser?.uid ?? '';
+                    if (userId.isEmpty) return const SizedBox.shrink();
+                    return StreamBuilder(
+                      stream: NotificationDataService.notificationsStream(userId),
+                      builder: (context, snapshot) {
+                        final notifications = snapshot.data ?? [];
+                        final unreadCount = notifications.where((n) => !n.isRead).length;
+                        if (unreadCount == 0) return const SizedBox.shrink();
+                        return Positioned(
+                          top: 4,
+                          right: 4,
+                          child: Container(
+                            width: 17,
+                            height: 17,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFE53935),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Text(
+                                unreadCount > 9 ? '9+' : '$unreadCount',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  fontFamily: AppTheme.fontFamily,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Nearby | Global pill toggle — matches screenshot exactly:
+// Selected = green filled pill with white text
+// Unselected = plain text, no background
+// ─────────────────────────────────────────────────────────────
+class _FeedToggle extends StatelessWidget {
+  final int selectedIndex;
+  final ValueChanged<int> onChanged;
+
+  const _FeedToggle({
+    required this.selectedIndex,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _ToggleItem(
+          label: 'Nearby',
+          isSelected: selectedIndex == 0,
+          onTap: () => onChanged(0),
+        ),
+        const SizedBox(width: 4),
+        _ToggleItem(
+          label: 'Global',
+          isSelected: selectedIndex == 1,
+          onTap: () => onChanged(1),
+        ),
+      ],
+    );
+  }
+}
+
+class _ToggleItem extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _ToggleItem({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? AppTheme.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: AppTheme.fontFamily,
             fontSize: 16,
             fontWeight: FontWeight.w600,
-            fontFamily: 'Inter',
+            color: isSelected ? Colors.white : const Color(0xFF1A1A1A),
           ),
-          unselectedLabelStyle: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-            fontFamily: 'Inter',
-          ),
-          tabs: const [
-            Tab(text: 'Local'),
-            Tab(text: 'Global'),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined, color: Colors.black),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ActivityScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-      body: PageView(
-        controller: _pageController,
-        onPageChanged: (index) {
-          setState(() {
-            _currentFeedIndex = index;
-            _tabController.animateTo(index);
-          });
-        },
-        children: [
-            HomeFeedList(
-              feedType: 'national', // "Local" tab mapped to national for now
-              userCity: _currentCity,
-              userCountry: _currentCountry,
-              isLoadingLocation: _isLoadingLocation,
-              locationError: _locationError,
-              onRetryLocation: _detectLocation,
-              searchQuery: _searchQuery,
-              scrollController: _scrollController,
-            ),
-            HomeFeedList(
-              feedType: 'global',
-              userCity: _currentCity,
-              userCountry: _currentCountry,
-              isLoadingLocation: _isLoadingLocation,
-              locationError: _locationError,
-              onRetryLocation: _detectLocation,
-              searchQuery: _searchQuery,
-              scrollController: _scrollController,
-            ),
-        ],
-      ),
-      floatingActionButton: AnimatedScale(
-        scale: _showFAB ? 1.0 : 0.0,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeIn,
-        child: _buildFAB(),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: _buildBottomNav(),
-    );
-  }
-
-  Widget _buildFAB() {
-    return FloatingActionButton(
-      onPressed: () {
-        showModalBottomSheet(
-          context: context,
-          backgroundColor: Colors.transparent,
-          builder: (context) => const PostTypeSelectorSheet(),
-        );
-      },
-      backgroundColor: const Color(0xFF00B87C),
-      child: const Icon(Icons.add, size: 32),
-    );
-  }
-
-  Widget _buildBottomNav() {
-    return BottomAppBar(
-      shape: const CircularNotchedRectangle(),
-      notchMargin: 8,
-      elevation: 8,
-      child: SizedBox(
-        height: 60,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _buildNavItem(Icons.home, 'Feed', 0),
-            _buildNavItem(Icons.explore_outlined, 'Explore', 1),
-            const SizedBox(width: 40),
-            _buildNavItem(Icons.groups_3_outlined, 'Community', 2),
-            _buildNavItem(Icons.person_outline, 'Profile', 3),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(IconData icon, String label, int index) {
-    final isSelected = _bottomNavIndex == index;
-    
-    return Expanded(
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            _bottomNavIndex = index;
-          });
-        },
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? const Color(0xFF00B87C) : Colors.grey.shade600,
-              size: 24,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? const Color(0xFF00B87C) : Colors.grey.shade600,
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-              ),
-            ),
-          ],
         ),
       ),
     );

@@ -109,19 +109,6 @@ class EventDetailsSection extends StatelessWidget {
               ],
             ),
 
-          const SizedBox(height: 12),
-
-          // Description
-          Text(
-            post.body,
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey.shade700,
-              height: 1.4,
-            ),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
         ],
       ),
     );

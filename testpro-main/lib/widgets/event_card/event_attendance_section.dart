@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
-import '../../services/firestore_service.dart';
+import '../../services/post_service.dart';
 import '../../services/backend_service.dart';
 
 class EventAttendanceSection extends StatefulWidget {
@@ -38,7 +38,7 @@ class _EventAttendanceSectionState extends State<EventAttendanceSection> {
         children: [
           // Attendees Count
           StreamBuilder<int>(
-            stream: widget.attendeesCountStream ?? FirestoreService.eventAttendeesCountStream(widget.post.id),
+            stream: widget.attendeesCountStream ?? PostService.eventAttendeesCountStream(widget.post.id),
             builder: (context, snapshot) {
               final streamCount = snapshot.data ?? widget.post.attendeeCount;
               final displayCount = _optimisticAttendeeCount ?? streamCount;
@@ -69,7 +69,7 @@ class _EventAttendanceSectionState extends State<EventAttendanceSection> {
           // Join/Leave Button
           if (userId != null)
             StreamBuilder<bool>(
-              stream: widget.isAttendingStream ?? FirestoreService.isAttendingEventStream(
+              stream: widget.isAttendingStream ?? PostService.isAttendingEventStream(
                 widget.post.id,
                 userId,
               ),
@@ -116,7 +116,8 @@ class _EventAttendanceSectionState extends State<EventAttendanceSection> {
                         if (widget.onToggleJoin != null) {
                           await widget.onToggleJoin!(widget.post.id);
                         } else {
-                          await BackendService.toggleEventJoin(widget.post.id);
+                          final response = await BackendService.toggleEventJoin(widget.post.id);
+                          if (!response.success) throw response.error ?? "Toggle failed";
                         }
                       } catch (e) {
                         if (mounted) {

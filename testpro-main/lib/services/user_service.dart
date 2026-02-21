@@ -1,18 +1,14 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user_profile.dart';
 import '../models/signup_data.dart';
 import '../repositories/user_repository.dart';
+import 'auth_service.dart';
 
 /// Facade for [UserRepository].
-/// Provides static access to user-related operations while allowing
-/// the underlying repository to be swapped for testing.
 class UserService {
   static UserRepository _repository = UserRepository();
-  
+
   static UserRepository get repository => _repository;
-  
-  // setter for testing
+
   static set repository(UserRepository repo) => _repository = repo;
 
   static Stream<UserProfile?> userProfileStream(String userId) {
@@ -24,12 +20,16 @@ class UserService {
   }
 
   static Future<void> createUserProfile({
-    required User user,
+    required String uid,
+    required String? displayName,
+    required String? photoURL,
     required SignupData data,
     String? profileImageUrl,
   }) {
     return _repository.createUserProfile(
-      user: user,
+      uid: uid,
+      displayName: displayName,
+      photoURL: photoURL,
       data: data,
       profileImageUrl: profileImageUrl,
     );
@@ -40,24 +40,27 @@ class UserService {
     String? displayName,
     String? about,
     String? profileImageUrl,
-  }) {
-    return _repository.updateUserProfile(
+    String? location,
+  }) async {
+    // 1. Update Profile via Repository
+    await _repository.updateUserProfile(
       userId: userId,
       displayName: displayName,
       about: about,
       profileImageUrl: profileImageUrl,
+      location: location,
     );
+
+    // 2. Sync with Firebase Auth
+    if (displayName != null || profileImageUrl != null) {
+      await AuthService.updateProfile(
+        displayName: displayName,
+        photoURL: profileImageUrl,
+      );
+    }
   }
 
-  static Future<void> syncGoogleUser(User user) {
-    return _repository.syncGoogleUser(user);
-  }
-
-  static Future<void> incrementContentCount(String userId) {
-    return _repository.incrementContentCount(userId);
-  }
-
-  static Future<void> recalculateUserStats(String userId) {
-    return _repository.recalculateUserStats(userId);
+  static Future<void> syncGoogleUser(String uid) {
+    return _repository.syncGoogleUser(uid);
   }
 }
