@@ -206,6 +206,8 @@ class BackendClient {
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
         _customAccessToken = body['data']['accessToken'];
+        _customRefreshToken = body['data']['refreshToken'];
+        debugPrint('🛡️ Custom session rotated successfully');
         return true;
       }
       return false;
