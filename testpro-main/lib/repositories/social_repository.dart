@@ -38,7 +38,8 @@ class SocialRepository {
   Stream<List<Post>> likedPostsStream(String userId) async* {
     final response = await BackendService.getPosts(authorId: userId);
     if (response.success) {
-      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      final data = response.data ?? [];
+      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
       yield posts;
     }
   }
@@ -46,7 +47,8 @@ class SocialRepository {
   Stream<List<Post>> joinedEventsStream(String userId) async* {
     final response = await BackendService.getPosts(limit: 50);
     if (response.success) {
-      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      final data = response.data ?? [];
+      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
       yield posts;
     }
   }

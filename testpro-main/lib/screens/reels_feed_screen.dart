@@ -11,7 +11,7 @@ import 'dart:math' as math;
 import '../shared/widgets/user_avatar.dart';
 
 class ReelsFeedScreen extends StatefulWidget {
-  final String feedType; // 'local', 'national', 'global'
+  final String feedType; // 'local', 'global'
   final String? userCity;
   final String? userCountry;
 
@@ -41,13 +41,15 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
 
   Future<void> _loadPosts() async {
     setState(() => _isLoading = true);
-    final result = await BackendService.getFeed(
-      type: widget.feedType == 'global' ? 'global' : 'discovery',
+    final result = await BackendService.getPosts(
+      lat: widget.feedType == 'global' ? null : null, // Reels expansion placeholder
+      country: widget.userCountry,
       limit: 20,
     );
     
     if (result.success && mounted) {
-      final loadedPosts = result.data!.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      final data = result.data ?? [];
+      final loadedPosts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
       loadedPosts.shuffle();
       setState(() {
         _posts = loadedPosts;

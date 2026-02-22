@@ -4,6 +4,7 @@ import '../../services/post_service.dart';
 import '../../models/post.dart';
 import '../../models/paginated_response.dart';
 import '../../services/backend_service.dart';
+import '../../services/location_service.dart';
 import '../post_card.dart';
 import '../nextdoor_post_card.dart';
 
@@ -137,24 +138,16 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
           _posts.addAll(uniqueNew);
           
           _cursor = nextCursor;
-          _hasMore = nextCursor != null;
+          _hasMore = response.hasMore;
           
           if (_posts.isEmpty && !refresh) {
             _hasMore = false;
           }
+          
+          for (var p in data) {
+            _likedPostIds[p.id] = p.isLiked;
+          }
         });
-
-        // ── Batch Lookups (Prevent N+1) ──
-        final List<String> newPostIds = data.map((p) => p.id).toList();
-        if (newPostIds.isNotEmpty) {
-           BackendService.instance.getLikesBatch(newPostIds).then((likeResp) {
-             if (mounted && likeResp.success && likeResp.data != null) {
-                setState(() {
-                  _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
-                });
-             }
-           });
-        }
       }
     } catch (e) {
       debugPrint('Error loading posts: $e');
@@ -368,11 +361,6 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         title = 'No local posts yet';
         subtitle = 'Be the first to share in your area!';
         icon = Icons.location_on;
-        break;
-      case 'national':
-        title = 'No national posts yet';
-        subtitle = 'Share something with your country!';
-        icon = Icons.flag;
         break;
       case 'global':
         title = 'No global posts yet';

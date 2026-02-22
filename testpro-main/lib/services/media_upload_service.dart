@@ -29,11 +29,7 @@ class MediaUploadService {
     }
 
     // 2. Resolve default local URL based on platform (Development only)
-    String defaultUrl = 'http://localhost:4000';
-    if (!kIsWeb && kDebugMode && defaultTargetPlatform == TargetPlatform.android) {
-      // Android emulators use 10.0.2.2 to access the host's localhost
-      defaultUrl = 'http://10.0.2.2:4000';
-    }
+    String defaultUrl = 'https://og-backend-1-iq5a.onrender.com';
     
     if (kDebugMode) {
        debugPrint('ℹ️ Using default API URL: $defaultUrl');

@@ -31,8 +31,25 @@ class BackendService {
   static Future<ApiResponse<bool>> deletePost(String postId) => _instance.deletePost(postId);
   static Future<ApiResponse<List<dynamic>>> getMessages(String eventId) => _instance.getMessages(eventId);
   static Future<ApiResponse<bool>> sendChatMessage(String eventId, String text) => _instance.sendChatMessage(eventId, text);
-  static Future<ApiResponse<List<dynamic>>> getPosts({String? authorId, String? category, String? city, int limit = 20, String? afterId}) => 
-      _instance.getPosts(authorId: authorId, category: category, city: city, limit: limit, afterId: afterId);
+  static Future<ApiResponse<List<dynamic>>> getPosts({
+    String? authorId,
+    String? category,
+    String? city,
+    String? country,
+    double? lat,
+    double? lng,
+    int limit = 20,
+    String? afterId,
+  }) => _instance.getPosts(
+    authorId: authorId,
+    category: category,
+    city: city,
+    country: country,
+    lat: lat,
+    lng: lng,
+    limit: limit,
+    afterId: afterId,
+  );
   static Future<ApiResponse<List<dynamic>>> getComments(String postId) => _instance.getComments(postId);
   static Future<ApiResponse<List<dynamic>>> search({required String query, String type = 'posts', int limit = 20}) => 
       _instance.search(query: query, type: type, limit: limit);
@@ -42,6 +59,10 @@ class BackendService {
   static Future<ApiResponse<bool>> checkFollowState(String targetUserId) => _instance.checkFollowState(targetUserId);
   static Future<ApiResponse<bool>> checkUsername(String username) => _instance.checkUsername(username);
   static Future<ApiResponse<bool>> checkEventAttendance(String eventId) => _instance.checkEventAttendance(eventId);
+
+  // --- Session Management ---
+  static Future<void> syncCustomTokens() => BackendClient.syncCustomTokens();
+  static void clearSession() => BackendClient.clearSession();
 }
 
 
@@ -72,14 +93,91 @@ class BackendClient {
     };
   }
 
+  static String? _customAccessToken;
+  static String? _customRefreshToken;
+  static Future<void>? _syncFuture;
+
+  /// Exchanges a Firebase ID Token for a custom Access/Refresh Token pair.
+  /// Deduplicated to prevent concurrent sync calls.
+  static Future<void> syncCustomTokens() async {
+    // If a sync is already in progress, return the existing future
+    if (_syncFuture != null) return _syncFuture;
+
+    _syncFuture = _performSync();
+    try {
+      await _syncFuture;
+    } finally {
+      // Clear the future once done (success or fail) to allow future syncs if needed
+      _syncFuture = null;
+    }
+  }
+
+  static Future<void> _performSync() async {
+    try {
+      final idToken = await AuthService.getIdToken();
+      if (idToken == null) {
+        debugPrint('⚠️ Sync skipped: User not authenticated in Firebase');
+        return;
+      }
+
+      final response = await BackendService.instance._sendRequest((token) async {
+         return await http.post(
+           Uri.parse('${MediaUploadService.baseUrl}/api/auth/token'),
+           headers: {'Content-Type': 'application/json'},
+           body: jsonEncode({'idToken': token}),
+         );
+      }, skipCustomCheck: true);
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        _customAccessToken = body['data']['accessToken'];
+        _customRefreshToken = body['data']['refreshToken'];
+        debugPrint('🛡️ Custom session tokens established');
+      } else {
+        debugPrint('❌ Custom session sync failed: ${response.statusCode} - ${response.body}');
+        // If the server explicitly rejects the token with 401/403, 
+        // we clear local state to prevent further loops
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          _customAccessToken = null;
+          _customRefreshToken = null;
+        }
+      }
+    } catch (e) {
+      debugPrint('🚨 Error during token synchronization: $e');
+    }
+  }
+
   Future<http.Response> _sendRequest(
     Future<http.Response> Function(String token) requestFn, {
     bool retried = false,
+    bool skipCustomCheck = false,
   }) async {
-    final token = await getIdToken();
-    if (token == null) throw StateError('User not authenticated');
+    // 1. Use Custom Token if available
+    if (!skipCustomCheck && _customAccessToken != null) {
+      final response = await requestFn(_customAccessToken!);
+      if (response.statusCode == 401 && !retried) {
+        // Attempt Custom Refresh
+        if (_customRefreshToken != null) {
+           final refreshed = await _refreshCustomToken();
+           if (refreshed) return await _sendRequest(requestFn, retried: true);
+        }
+        // If refresh failed or was null, clear tokens and let fallback happen
+        _customAccessToken = null;
+        _customRefreshToken = null;
+      } else {
+        return response;
+      }
+    }
 
-    final response = await requestFn(token);
+    // 2. Fallback to Firebase Token Flow (Clean Architecture)
+    final firebaseToken = await getIdToken();
+    if (firebaseToken == null) throw StateError('User not authenticated');
+
+    final response = await requestFn(firebaseToken);
+    
+    // We NO LONGER call syncCustomTokens() here to prevent side-effect loops.
+    // Sync should be orchestrated by the AuthState listener or an explicit login call.
+
     if (response.statusCode == 401 && !retried) {
       final newToken = await AuthService.getIdToken(forceRefresh: true);
       if (newToken != null) {
@@ -87,6 +185,33 @@ class BackendClient {
       }
     }
     return response;
+  }
+
+  static void clearSession() {
+    _customAccessToken = null;
+    _customRefreshToken = null;
+    _syncFuture = null;
+    debugPrint('🛡️ Custom session tokens cleared');
+  }
+
+  Future<bool> _refreshCustomToken() async {
+    if (_customRefreshToken == null) return false;
+    try {
+      final response = await http.post(
+        Uri.parse('${MediaUploadService.baseUrl}/api/auth/refresh'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'refreshToken': _customRefreshToken}),
+      );
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        _customAccessToken = body['data']['accessToken'];
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   ApiResponse<T> _processResponse<T>(http.Response response, T Function(dynamic data) mapper) {
@@ -127,15 +252,8 @@ class BackendClient {
   }
 
   Future<ApiResponse<List<dynamic>>> getFeed({String? cursor, int limit = 10, String type = 'discovery'}) async {
-    try {
-      final uri = Uri.parse('$_baseUrl/api/posts/feed').replace(queryParameters: {
-        if (cursor != null) 'cursor': cursor,
-        'limit': limit.toString(),
-        'type': type,
-      });
-      final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));
-      return _processResponse(resp, (d) => d as List<dynamic>);
-    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+    // Redirect legacy /feed calls to /posts for backward compatibility
+    return getPosts(afterId: cursor, limit: limit);
   }
 
   Future<ApiResponse<Map<String, dynamic>>> getProfile(String uid) async {
@@ -234,12 +352,24 @@ class BackendClient {
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
-  Future<ApiResponse<List<dynamic>>> getPosts({String? authorId, String? category, String? city, int limit = 20, String? afterId}) async {
+  Future<ApiResponse<List<dynamic>>> getPosts({
+    String? authorId,
+    String? category, 
+    String? city, 
+    String? country,
+    double? lat, 
+    double? lng,
+    int limit = 20, 
+    String? afterId
+  }) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/posts').replace(queryParameters: {
         if (authorId != null) 'authorId': authorId,
         if (category != null) 'category': category,
         if (city != null) 'city': city,
+        if (country != null) 'country': country,
+        if (lat != null) 'lat': lat.toString(),
+        if (lng != null) 'lng': lng.toString(),
         if (afterId != null) 'afterId': afterId,
         'limit': limit.toString(),
       });
@@ -298,16 +428,6 @@ class BackendClient {
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
-  Future<ApiResponse<Map<String, dynamic>>> getLikesBatch(List<String> postIds) async {
-    try {
-      final resp = await _sendRequest((token) async => await _client.post(
-        Uri.parse('$_baseUrl/api/interactions/likes/batch'),
-        headers: await _getHeaders(token),
-        body: jsonEncode({'postIds': postIds}),
-      ));
-      return _processResponse(resp, (d) => d as Map<String, dynamic>);
-    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
-  }
 
   Future<ApiResponse<bool>> checkFollowState(String targetUserId) async {
     try {

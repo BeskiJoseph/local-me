@@ -123,8 +123,7 @@ class _HomeFeedListState extends State<HomeFeedList>
     if (widget.feedType == 'local' && widget.userCity == null) {
       return const Center(child: Text('Waiting for location...'));
     }
-    if ((widget.feedType == 'national' || widget.feedType == 'global') &&
-        widget.userCountry == null) {
+    if (widget.feedType == 'global' && widget.userCountry == null) {
       return const Center(child: Text('Waiting for location...'));
     }
 

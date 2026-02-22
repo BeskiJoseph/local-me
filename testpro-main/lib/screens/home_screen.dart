@@ -175,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               HomeFeedList(
                 key: ValueKey('nearby_$_feedRevision'),
-                feedType: 'national',
+                feedType: 'local',
                 userCity: _currentCity,
                 userCountry: _currentCountry,
                 isLoadingLocation: _isLoadingLocation,

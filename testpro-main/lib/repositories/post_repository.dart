@@ -1,6 +1,7 @@
 import '../models/post.dart';
 import '../models/paginated_response.dart';
 import '../services/backend_service.dart';
+import '../services/location_service.dart';
 
 /// Repository for handling Post and Event data operations.
 class PostRepository {
@@ -54,15 +55,19 @@ class PostRepository {
     String? afterId,
     int limit = 10,
   }) async {
-    final response = await BackendService.getFeed(
-      cursor: afterId,
+    final pos = LocationService.currentPosition;
+    final response = await BackendService.getPosts(
+      afterId: afterId,
       limit: limit,
-      type: feedType,
+      lat: pos?.latitude,
+      lng: pos?.longitude,
+      country: userCountry,
     );
     
     if (!response.success) throw response.error ?? "Failed to fetch feed";
     
-    final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+    final data = response.data ?? [];
+    final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
     
     return PaginatedResponse<Post>(
       data: posts,
@@ -74,7 +79,8 @@ class PostRepository {
   Stream<List<Post>> postsByAuthor(String authorId) async* {
     final response = await BackendService.getPosts(authorId: authorId);
     if (response.success) {
-      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      final data = response.data ?? [];
+      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
       yield posts;
     }
   }
@@ -131,7 +137,8 @@ class PostRepository {
   Stream<List<Post>> postsByScope(String scope) async* {
     final response = await BackendService.getPosts(category: scope);
     if (response.success) {
-      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      final data = response.data ?? [];
+      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
       yield posts;
     }
   }
@@ -141,12 +148,17 @@ class PostRepository {
     String? userCity,
     String? userCountry,
   }) async* {
-    final response = await BackendService.getFeed(
-      type: feedType,
+    final pos = LocationService.currentPosition;
+    final response = await BackendService.getPosts(
+      afterId: feedType == 'global' ? null : null, // cursor handling differs?
       limit: 20,
+      lat: pos?.latitude,
+      lng: pos?.longitude,
+      country: userCountry,
     );
     if (response.success) {
-      final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+      final data = response.data ?? [];
+      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
       yield posts;
     }
   }

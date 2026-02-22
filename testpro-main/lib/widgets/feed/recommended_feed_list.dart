@@ -110,20 +110,12 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
           final uniqueNew = newPosts.where((p) => !existingIds.contains(p.id));
           _posts.addAll(uniqueNew);
 
+          for (var p in newPosts) {
+            _likedPostIds[p.id] = p.isLiked;
+          }
+
           if (newPosts.length < 10) _hasMore = false;
         });
-
-        // ── Batch Lookups (Prevent N+1) ──
-        final List<String> newPostIds = newPosts.map((p) => p.id).toList();
-        if (newPostIds.isNotEmpty) {
-           BackendService.instance.getLikesBatch(newPostIds).then((likeResp) {
-             if (mounted && likeResp.success && likeResp.data != null) {
-                setState(() {
-                  _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
-                });
-             }
-           });
-        }
       }
     } catch (e) {
       debugPrint('Error loading recommended posts: $e');

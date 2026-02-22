@@ -22,7 +22,7 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
         setState(() => _currentTabIndex = _tabController.index);
@@ -57,7 +57,6 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
           indicatorColor: AppTheme.eventGreen,
           tabs: const [
             Tab(text: 'Local'),
-            Tab(text: 'National'),
             Tab(text: 'Global'),
           ],
         ),
@@ -77,7 +76,6 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
         index: _currentTabIndex,
         children: [
           PaginatedFeedList(feedType: 'local', userCity: _userCity, userCountry: _userCountry),
-          PaginatedFeedList(feedType: 'national', userCity: _userCity, userCountry: _userCountry),
           const RecommendedFeedList(),
         ],
       ),

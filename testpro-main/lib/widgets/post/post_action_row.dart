@@ -84,14 +84,15 @@ class _PostActionRowState extends State<PostActionRow> {
     final stream = widget.isLikedStream ??
         (userId != null
             ? SocialService.isPostLikedStream(widget.post.id, userId)
-            : Stream.value(false));
+            : Stream.value(widget.post.isLiked));
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: StreamBuilder<bool>(
         stream: stream,
+        initialData: widget.post.isLiked,
         builder: (context, snapshot) {
-          final streamLiked = snapshot.data ?? false;
+          final streamLiked = snapshot.data ?? widget.post.isLiked;
           final streamCount = widget.post.likeCount;
 
           if (_optimisticLiked == streamLiked) {

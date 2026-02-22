@@ -42,24 +42,11 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
   void initState() {
     super.initState();
     _likeCount = widget.post.likeCount;
-    if (widget.initialIsLiked != null) {
-      _isLiked = widget.initialIsLiked!;
-      _isLoadingLikeState = false;
-    } else {
-      _loadLikeState();
-    }
+    _isLiked = widget.initialIsLiked ?? widget.post.isLiked;
+    _isLoadingLikeState = false;
   }
 
-  Future<void> _loadLikeState() async {
-    final response = await BackendService.checkLikeState(widget.post.id);
-    if (!mounted || !response.success) return;
-    final data = response.data!;
-    setState(() {
-      _isLiked = data['liked'] ?? false;
-      _likeCount = (data['likeCount'] as num?)?.toInt() ?? widget.post.likeCount;
-      _isLoadingLikeState = false;
-    });
-  }
+
 
   Future<void> _handleLike() async {
     if (_isTogglingLike) return;

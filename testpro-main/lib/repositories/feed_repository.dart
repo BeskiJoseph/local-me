@@ -1,5 +1,6 @@
 import '../models/post.dart';
 import '../services/backend_service.dart';
+import '../services/location_service.dart';
 
 /// Repository for handling Feed Recommendation and User Activity Logging.
 class FeedRepository {
@@ -11,15 +12,15 @@ class FeedRepository {
     String? afterId,
     int limit = 10,
   }) async {
-    final response = await BackendService.getFeed(
-      cursor: afterId,
+    final response = await BackendService.getPosts(
+      afterId: afterId,
       limit: limit,
-      type: 'personalized',
     );
     
     if (!response.success) throw response.error ?? "Failed to fetch recommendations";
     
-    final posts = (response.data as List).map((json) => Post.fromJson(json)).toList();
+    final data = response.data ?? [];
+    final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
     return posts;
   }
 }

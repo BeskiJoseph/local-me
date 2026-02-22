@@ -103,18 +103,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         final String? nextCursor = response.pagination?.cursor;
         final List<Post> newPosts = data.map((e) => Post.fromJson(e)).toList();
 
-        // ── Batch Lookups (Prevent N+1) ──
-        final List<String> postIds = newPosts.map((p) => p.id).toList();
-        if (postIds.isNotEmpty) {
-           BackendService.instance.getLikesBatch(postIds).then((likeResp) {
-             if (mounted && likeResp.success && likeResp.data != null) {
-                setState(() {
-                  _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
-                });
-             }
-           });
-        }
+        // ── Optimized: Use Embedded isLiked ──
         setState(() {
+          for (var p in newPosts) {
+            _likedPostIds[p.id] = p.isLiked;
+          }
           if (refresh) {
             _posts.clear();
           }

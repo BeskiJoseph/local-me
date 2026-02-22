@@ -25,6 +25,7 @@ class Post {
   final String? eventLocation;
   final bool? isFree;
   final int attendeeCount;
+  final bool isLiked;
 
   Post({
     required this.id,
@@ -51,6 +52,7 @@ class Post {
     this.eventLocation,
     this.isFree,
     required this.attendeeCount,
+    this.isLiked = false,
   });
 
   factory Post.fromJson(Map<String, dynamic> json) {
@@ -87,6 +89,7 @@ class Post {
       eventLocation: json['eventLocation'] as String?,
       isFree: json['isFree'] as bool?,
       attendeeCount: json['attendeeCount'] as int? ?? 0,
+      isLiked: json['isLiked'] as bool? ?? false,
     );
   }
 
@@ -119,6 +122,7 @@ class Post {
       'eventLocation': eventLocation,
       'isFree': isFree,
       'attendeeCount': attendeeCount,
+      'isLiked': isLiked,
     };
   }
 }

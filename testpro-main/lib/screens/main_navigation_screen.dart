@@ -5,6 +5,7 @@ import 'search_screen.dart';
 import 'personal_account.dart';
 import 'community_screen.dart';
 import 'new_post_screen.dart';
+import '../services/backend_service.dart';
 import '../services/location_service.dart';
 
 /// Main navigation container with bottom nav bar
@@ -23,6 +24,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     super.initState();
     // Centrally detect location once on app start
     LocationService.detectLocation();
+    
+    // Explicitly sync custom backend tokens once on session entry
+    // This bridges Firebase Auth with our High-Control custom session layer
+    BackendService.syncCustomTokens();
   }
 
   void _onTabTapped(int index) {

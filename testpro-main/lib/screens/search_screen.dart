@@ -259,7 +259,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     if (user == null) return const SizedBox.shrink();
 
     return FutureBuilder<ApiResponse<List<dynamic>>>(
-      future: BackendService.getFeed(type: 'discovery', limit: 30),
+      future: BackendService.getPosts(limit: 30),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());

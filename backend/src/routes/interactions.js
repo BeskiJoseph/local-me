@@ -315,19 +315,23 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
 router.post('/likes/batch', authenticate, async (req, res, next) => {
     try {
         const { postIds } = req.body;
+
+        // 1. Safe handling for empty or malformed list
         if (!postIds || !Array.isArray(postIds) || postIds.length === 0) {
             return res.json({ success: true, data: {}, error: null });
         }
 
         const userId = req.user.uid;
 
-        // Firestore 'in' queries are limited to 30 items
+        // 2. Firestore 'in' queries are limited to 30 items
         const chunks = [];
         for (let i = 0; i < postIds.length; i += 30) {
             chunks.push(postIds.slice(i, i + 30));
         }
 
-        const results = {};
+        // Use Object.create(null) to avoid prototype pollution
+        const results = Object.create(null);
+
         await Promise.all(chunks.map(async (chunk) => {
             const snapshot = await db.collection('likes')
                 .where('userId', '==', userId)
@@ -339,9 +343,9 @@ router.post('/likes/batch', authenticate, async (req, res, next) => {
             });
         }));
 
-        // Fill in missing with false for clarity
+        // 3. Always return all requested IDs, defaulting to false for clarity
         postIds.forEach(id => {
-            if (!results[id]) results[id] = false;
+            if (results[id] === undefined) results[id] = false;
         });
 
         return res.json({

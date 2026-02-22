@@ -7,10 +7,12 @@ import 'auth_service.dart';
 class LocationService {
   static String? _cachedCity;
   static String? _cachedCountry;
+  static Position? _cachedPosition;
   static bool _isDetecting = false;
 
   static String? get currentCity => _cachedCity;
   static String? get currentCountry => _cachedCountry;
+  static Position? get currentPosition => _cachedPosition;
 
   /// Detect current location and sync with backend
   static Future<void> detectLocation({bool forceSync = false}) async {
@@ -59,6 +61,7 @@ class LocationService {
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 10),
       );
+      _cachedPosition = position;
 
       // 4. Geocode
       final place = await GeocodingService.getPlace(position.latitude, position.longitude);

@@ -5,6 +5,7 @@ import authenticate from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
 import logger from '../utils/logger.js';
 import admin from 'firebase-admin';
+import ngeohash from 'ngeohash';
 
 const router = express.Router();
 
@@ -70,6 +71,12 @@ router.post('/', authenticate, async (req, res, next) => {
         // bad actors can still post, but their posts aren't visible to others
         const isShadowBanned = req.user.status === 'shadow_banned';
 
+        // ∩┐╜∩┐╜∩┐╜ Geohash Calculation (Step 1) ∩┐╜∩┐╜∩┐╜
+        let geoHash = null;
+        if (value.location?.lat && value.location?.lng) {
+            geoHash = ngeohash.encode(value.location.lat, value.location.lng, 5); // precision 5 (~5km)
+        }
+
         const postData = {
             ...value,
             authorId: uid,
@@ -79,7 +86,8 @@ router.post('/', authenticate, async (req, res, next) => {
             likeCount: 0,
             commentCount: 0,
             visibility: isShadowBanned ? 'shadow' : 'public',
-            status: 'active'
+            status: 'active',
+            geoHash: geoHash
         };
 
         const postRef = await db.collection('posts').add(postData);
@@ -115,131 +123,272 @@ router.post('/', authenticate, async (req, res, next) => {
 
 // Simple In-Memory Cache for Feed (V1)
 const FEED_CACHE = new Map();
+const FETCH_LOCKS = new Map();
 const CACHE_TTL = 30 * 1000; // 30 seconds
 
 /**
- * @route   GET /api/posts/feed
+ * Helper to map Firestore doc to Post object
+ */
+const mapDocToPost = (doc) => {
+    const d = doc.data();
+    return {
+        id: doc.id,
+        title: d.title || '',
+        body: d.body || d.text || '',
+        mediaUrl: d.mediaUrl,
+        mediaType: d.mediaType,
+        thumbnailUrl: d.thumbnailUrl,
+        authorId: d.authorId,
+        authorName: d.authorName,
+        authorProfileImage: d.authorProfileImage,
+        likeCount: d.likeCount || 0,
+        commentCount: d.commentCount || 0,
+        isEvent: d.isEvent,
+        createdAt: d.createdAt?.toDate()?.toISOString(),
+        city: d.city,
+        country: d.country,
+        category: d.category || 'General',
+        latitude: d.latitude || d.location?.lat,
+        longitude: d.longitude || d.location?.lng,
+        attendeeCount: d.attendeeCount || 0,
+        geoHash: d.geoHash
+    };
+};
+
+/**
+ * Helper to embed like state into feed response
+ */
+async function embedLikeState(responseData, userId) {
+    if (!responseData.data || responseData.data.length === 0) return responseData;
+
+    const postIds = responseData.data.map(p => p.id);
+    const likedIds = new Set();
+
+    // Firestore 'in' limit is 30
+    const chunks = [];
+    for (let i = 0; i < postIds.length; i += 30) {
+        chunks.push(postIds.slice(i, i + 30));
+    }
+
+    await Promise.all(chunks.map(async (chunk) => {
+        const snapshot = await db.collection('likes')
+            .where('userId', '==', userId)
+            .where('postId', 'in', chunk)
+            .get();
+        snapshot.docs.forEach(doc => likedIds.add(doc.data().postId));
+    }));
+
+    const enrichedPosts = responseData.data.map(post => ({
+        ...post,
+        isLiked: likedIds.has(post.id)
+    }));
+
+    return {
+        ...responseData,
+        data: enrichedPosts
+    };
+}
+
+/**
+ * @route   GET /api/posts
  * @desc    Get paginated feed with cursor validation
  */
-router.get('/feed', authenticate, async (req, res, next) => {
+router.get('/', authenticate, async (req, res, next) => {
     try {
-        const { cursor, limit = 10, type = 'discovery' } = req.query;
+        const { authorId, category, city, lat, lng, country, limit = 20, afterId } = req.query;
         const pageSize = Math.min(parseInt(limit), 50);
         const { uid } = req.user;
 
-        // 0. Cache Check
-        // For first page (no cursor): key = type only → shared across all users, instant tab switch
-        // For paginated pages: key includes cursor for correctness
-        const cacheKey = cursor
-            ? `${uid}:${type}:${cursor}:${pageSize}`
-            : `feed:${type}:${pageSize}`;
+        // ∩┐╜∩┐╜∩┐╜ 1. GeoHash & Cache Check (Step 2 & 3) ∩┐╜∩┐╜∩┐╜
+        let geoHash = null;
+        if (lat && lng) {
+            geoHash = ngeohash.encode(parseFloat(lat), parseFloat(lng), 5);
+        }
+
+        const cacheKey = geoHash
+            ? `feed:${geoHash}:${pageSize}:${afterId || 'page1'}`
+            : `feed:global:${pageSize}:${afterId || 'page1'}`;
+
         const cached = FEED_CACHE.get(cacheKey);
-        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-            logger.debug({ uid, cacheKey }, 'Serving feed from in-memory cache');
-            return res.json(cached.data);
-        }
+        let responseData;
 
-        // 1. Fetch User Interests (Top 5)
-        // Wrapped in try/catch: if the userId+score composite index isn't built yet,
-        // fall back to empty interests → discovery feed instead of 500.
-        let topInterests = [];
-        try {
-            const interestsSnapshot = await db.collection('user_interests')
-                .where('userId', '==', uid)
-                .orderBy('score', 'desc')
-                .limit(5)
-                .get();
-            topInterests = interestsSnapshot.docs.map(doc => doc.data().tag);
-        } catch (interestErr) {
-            logger.warn({ uid, err: interestErr.message }, 'user_interests query failed, falling back to discovery');
-            // topInterests stays [] → discovery feed path below
-        }
-
-        // 2. Query Blending Logic (Simplified for Backend)
-        let query;
-        if (topInterests.length > 0 && type === 'personalized') {
-            // Priority 1: Interests
-            query = db.collection('posts')
-                .where('category', 'in', topInterests)
-                .where('visibility', '==', 'public')
-                .where('status', '==', 'active')
-                .orderBy('createdAt', 'desc');
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL) && !authorId && !category && !city) {
+            logger.debug({ geoHash, cacheKey }, 'Serving regional feed from in-memory cache');
+            responseData = cached.data;
         } else {
-            // Global Discovery (Trending/Recent Mix)
-            query = db.collection('posts')
-                .where('visibility', '==', 'public')
-                .where('status', '==', 'active')
-                .orderBy('createdAt', 'desc');
-        }
-
-        // 3. Cursor Validation
-        if (cursor) {
-            const startAfterDoc = await db.collection('posts').doc(cursor).get();
-            if (startAfterDoc.exists) {
-                query = query.startAfter(startAfterDoc);
-            }
-        }
-
-        let snapshot;
-        try {
-            snapshot = await query.limit(pageSize).get();
-        } catch (indexErr) {
-            // FAILED_PRECONDITION = composite index not yet built in Firebase Console
-            // Gracefully fall back to simple discovery query
-            if (indexErr.code === 9 || indexErr.message?.includes('index')) {
-                logger.warn({ type, topInterests }, 'Composite index missing, falling back to discovery query');
-                const fallbackQuery = db.collection('posts')
-                    .where('visibility', '==', 'public')
-                    .where('status', '==', 'active')
-                    .orderBy('createdAt', 'desc')
-                    .limit(pageSize);
-                snapshot = await fallbackQuery.get();
+            // ∩┐╜∩┐╜∩┐╜ 2. Promise Lock (Prevention of Dog-Piling) ∩┐╜∩┐╜∩┐╜
+            if (FETCH_LOCKS.has(cacheKey) && !authorId && !category && !city) {
+                logger.debug({ cacheKey }, 'Awaiting existing fetch lock for region');
+                responseData = await FETCH_LOCKS.get(cacheKey);
             } else {
-                throw indexErr;
+                // ∩┐╜∩┐╜∩┐╜ 3. Query Construction & Execution ∩┐╜∩┐╜∩┐╜
+                const fetchPromise = (async () => {
+                    // ∩┐╜∩┐╜∩┐╜ Progressive Multi-Ring Fetch (Local Feed Upgrade) ∩┐╜∩┐╜∩┐╜
+                    if (lat && lng && !authorId && !category && !city && !afterId) {
+                        logger.debug({ lat, lng }, 'Executing Multi-Ring expansion');
+                        const results = [];
+                        const seenIds = new Set();
+
+                        const p6 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 6);
+                        const p5 = geoHash;
+                        const p4 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 4);
+
+                        const rings = [
+                            { prefix: p6, label: 'hyper-local (~1km)' },
+                            { prefix: p5, label: 'local (~5km)' },
+                            { prefix: p4, label: 'regional (~40km)' }
+                        ];
+
+                        for (const ring of rings) {
+                            const remaining = pageSize - results.length;
+                            if (remaining <= 0) break;
+
+                            logger.debug({ ring: ring.label, remaining }, 'Fetching ring');
+
+                            const snapshot = await db.collection('posts')
+                                .where('visibility', '==', 'public')
+                                .where('status', '==', 'active')
+                                .where('geoHash', '>=', ring.prefix)
+                                .where('geoHash', '<=', ring.prefix + '\uf8ff')
+                                .orderBy('geoHash')
+                                .orderBy('createdAt', 'desc')
+                                .limit(remaining)
+                                .get();
+
+                            snapshot.docs.forEach(doc => {
+                                if (!seenIds.has(doc.id)) {
+                                    seenIds.add(doc.id);
+                                    results.push(mapDocToPost(doc));
+                                }
+                            });
+                        }
+
+                        // Fallback 1: Country level (Fill gaps)
+                        const targetCountry = country || req.user.country;
+                        const countryRemaining = pageSize - results.length;
+                        if (countryRemaining > 0 && targetCountry) {
+                            const countrySnapshot = await db.collection('posts')
+                                .where('visibility', '==', 'public')
+                                .where('status', '==', 'active')
+                                .where('country', '==', targetCountry)
+                                .orderBy('createdAt', 'desc')
+                                .limit(countryRemaining)
+                                .get();
+
+                            countrySnapshot.docs.forEach(doc => {
+                                if (!seenIds.has(doc.id)) {
+                                    seenIds.add(doc.id);
+                                    results.push(mapDocToPost(doc));
+                                }
+                            });
+                        }
+
+                        // Fallback 2: Global Trending (Fill remaining gaps)
+                        const globalRemaining = pageSize - results.length;
+                        if (globalRemaining > 0) {
+                            const globalSnapshot = await db.collection('posts')
+                                .where('visibility', '==', 'public')
+                                .where('status', '==', 'active')
+                                .orderBy('createdAt', 'desc')
+                                .limit(globalRemaining)
+                                .get();
+
+                            globalSnapshot.docs.forEach(doc => {
+                                if (!seenIds.has(doc.id)) {
+                                    seenIds.add(doc.id);
+                                    results.push(mapDocToPost(doc));
+                                }
+                            });
+                        }
+
+                        return {
+                            success: true,
+                            data: results,
+                            pagination: {
+                                cursor: results.length > 0 ? results[results.length - 1].id : null,
+                                hasMore: results.length === pageSize
+                            }
+                        };
+                    }
+
+                    // ∩┐╜∩┐╜∩┐╜ Default Single-Query Logic (Filtered or Paginated) ∩┐╜∩┐╜∩┐╜
+                    let query = db.collection('posts')
+                        .where('visibility', '==', 'public')
+                        .where('status', '==', 'active');
+
+                    if (authorId) query = query.where('authorId', '==', authorId);
+                    if (category) query = query.where('category', '==', category);
+                    if (city) query = query.where('city', '==', city);
+                    if (geoHash && !authorId && !category && !city) {
+                        query = query.where('geoHash', '==', geoHash);
+                    }
+
+                    query = query.orderBy('createdAt', 'desc');
+
+                    if (afterId) {
+                        const lastDoc = await db.collection('posts').doc(afterId).get();
+                        if (lastDoc.exists) {
+                            query = query.startAfter(lastDoc);
+                        }
+                    }
+
+                    query = query.limit(pageSize);
+
+                    let snapshot;
+                    try {
+                        snapshot = await query.get();
+                    } catch (indexErr) {
+                        if (indexErr.code === 9 || indexErr.message?.includes('index')) {
+                            logger.warn('Index error, falling back to basic query');
+                            const fallbackQuery = db.collection('posts')
+                                .where('visibility', '==', 'public')
+                                .where('status', '==', 'active')
+                                .orderBy('createdAt', 'desc')
+                                .limit(pageSize);
+                            snapshot = await fallbackQuery.get();
+                        } else {
+                            throw indexErr;
+                        }
+                    }
+
+                    const posts = snapshot.docs.map(mapDocToPost);
+
+                    return {
+                        success: true,
+                        data: posts,
+                        pagination: {
+                            cursor: snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1].id : null,
+                            hasMore: posts.length === pageSize
+                        }
+                    };
+                })();
+
+                // Only lock shared regional feeds
+                if (!authorId && !category && !city) {
+                    FETCH_LOCKS.set(cacheKey, fetchPromise);
+                }
+
+                try {
+                    responseData = await fetchPromise;
+
+                    // ∩┐╜∩┐╜∩┐╜ 4. Cache Management ∩┐╜∩┐╜∩┐╜
+                    if (!authorId && !category && !city) {
+                        FEED_CACHE.set(cacheKey, {
+                            timestamp: Date.now(),
+                            data: responseData
+                        });
+                    }
+                } finally {
+                    FETCH_LOCKS.delete(cacheKey);
+                }
             }
         }
 
-        // 4. Mapping
-        const posts = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            createdAt: doc.data().createdAt?.toDate()?.toISOString()
-        }));
-
-        // 5. Discovery Fallback: If current pool is empty, provide global discovery
-        if (posts.length === 0 && topInterests.length > 0) {
-            // ... would repeat with global query ...
-            // (Simplified for now: frontend will handle Empty State or request Discovery)
-        }
-
-        const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-
-        const responseData = {
-            success: true,
-            data: posts,
-            pagination: {
-                cursor: lastDoc ? lastDoc.id : null,
-                hasMore: posts.length === pageSize
-            },
-            error: null
-        };
-
-        // 6. Save to Cache
-        FEED_CACHE.set(cacheKey, {
-            timestamp: Date.now(),
-            data: responseData
-        });
-
-        // 7. Cleanup Cache (Prevent memory leaks)
-        if (FEED_CACHE.size > 1000) {
-            const oldestKey = FEED_CACHE.keys().next().value;
-            FEED_CACHE.delete(oldestKey);
-        }
-
-        return res.json(responseData);
+        // ∩┐╜∩┐╜∩┐╜ 5. Embed Like State (Step 4) ∩┐╜∩┐╜∩┐╜
+        return res.json(await embedLikeState(responseData, uid));
 
     } catch (err) {
-        next(err);
+        return next(err);
     }
 });
 
@@ -265,11 +414,19 @@ router.get('/:id', authenticate, async (req, res, next) => {
             return next(err);
         }
 
+        // Check if liked by current user
+        const likeDoc = await db.collection('likes')
+            .where('userId', '==', req.user.uid)
+            .where('postId', '==', req.params.id)
+            .limit(1)
+            .get();
+
         return res.json({
             success: true,
             data: {
                 id: doc.id,
                 ...data,
+                isLiked: !likeDoc.empty,
                 createdAt: data.createdAt?.toDate()?.toISOString()
             },
             error: null
@@ -314,76 +471,7 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     }
 });
 
-/**
- * @route   GET /api/posts
- * @desc    Get posts with filters (authorId, category, city)
- */
-router.get('/', authenticate, async (req, res, next) => {
-    try {
-        const { authorId, category, city, limit = 20, afterId } = req.query;
-        let query = db.collection('posts')
-            .where('visibility', '==', 'public')
-            .where('status', '==', 'active');
 
-        if (authorId) query = query.where('authorId', '==', authorId);
-        if (category) query = query.where('category', '==', category);
-        if (city) query = query.where('city', '==', city);
-
-        query = query.orderBy('createdAt', 'desc');
-
-        if (afterId) {
-            const lastDoc = await db.collection('posts').doc(afterId).get();
-            if (lastDoc.exists) {
-                query = query.startAfter(lastDoc);
-            }
-        }
-
-        query = query.limit(Math.min(parseInt(limit), 100));
-
-        let snapshot;
-        try {
-            snapshot = await query.get();
-        } catch (indexErr) {
-            if (indexErr.code === 9 || indexErr.message?.includes('index')) {
-                // If specific filters are used (Profile, Category, City), we MUST NOT fallback to global feed
-                // This prevents "Data Leakage" where a user's profile shows everyone's posts.
-                if (authorId || category || city) {
-                    logger.warn({ authorId, category, city }, 'Composite index missing for filtered query. Filtered results will be unavailable until indexing completes.');
-                    return res.json({
-                        success: true,
-                        data: [],
-                        pagination: { cursor: null, hasMore: false },
-                        message: 'Filtered results are currently being indexed by Firestore. Your profile posts will appear here once the index is ready.'
-                    });
-                }
-
-                logger.warn('Composite index missing for general feed, using basic fallback');
-                const fallbackQuery = db.collection('posts')
-                    .where('visibility', '==', 'public')
-                    .where('status', '==', 'active')
-                    .orderBy('createdAt', 'desc')
-                    .limit(Math.min(parseInt(limit), 100));
-                snapshot = await fallbackQuery.get();
-            } else {
-                throw indexErr;
-            }
-        }
-
-        const posts = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            createdAt: doc.data().createdAt?.toDate()?.toISOString()
-        }));
-
-        return res.json({
-            success: true,
-            data: posts,
-            error: null
-        });
-    } catch (err) {
-        return next(err);
-    }
-});
 
 /**
  * @route   POST /api/posts/:id/messages

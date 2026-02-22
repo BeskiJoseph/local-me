@@ -41,7 +41,7 @@ export const corsOptions = cors({
 // Combined Key: IP + UserID (if available)
 export const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // Increased for development to 1000 requests per window
+    max: 1000,
     keyGenerator: (req) => {
         return req.user?.uid || req.ip; // CTO suggested IP+UserID combined key
     },

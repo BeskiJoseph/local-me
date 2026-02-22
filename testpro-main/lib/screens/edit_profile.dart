@@ -284,6 +284,57 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 ],
               ),
             ),
+            
+            // --- SIGN OUT SECTION ---
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              color: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: OutlinedButton(
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Sign Out'),
+                      content: const Text('Are you sure you want to sign out?'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true), 
+                          child: const Text('Sign Out', style: TextStyle(color: Colors.red))
+                        ),
+                      ],
+                    ),
+                  );
+
+                  if (confirm == true) {
+                    // SECURE LOGOUT: Clear custom session first, then Firebase
+                    BackendService.clearSession();
+                    await AuthService.signOut();
+                    
+                    if (mounted) {
+                      // Navigate back to the initial auth state listener in main.dart
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    }
+                  }
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.logout, size: 20),
+                    SizedBox(width: 8),
+                    Text('Sign Out', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 48),
           ],
         ),
