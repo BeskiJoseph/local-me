@@ -1,15 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../config/app_theme.dart';
 import '../services/backend_service.dart';
 import '../utils/proxy_helper.dart';
-import '../widgets/post_card.dart';
-import '../widgets/nextdoor_post_card.dart';
 import '../models/post.dart';
 import '../models/user_profile.dart';
 import '../models/paginated_response.dart';
 import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
+import '../widgets/post_card.dart';
+import '../widgets/nextdoor_post_card.dart';
 
 class PersonalAccount extends StatefulWidget {
   final String? userId;
@@ -105,14 +106,14 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         // ── Batch Lookups (Prevent N+1) ──
         final List<String> postIds = newPosts.map((p) => p.id).toList();
         if (postIds.isNotEmpty) {
-           final likeResp = await BackendService.getLikesBatch(postIds);
-           if (likeResp.success && likeResp.data != null) {
-              setState(() {
-                _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
-              });
-           }
+           BackendService.instance.getLikesBatch(postIds).then((likeResp) {
+             if (mounted && likeResp.success && likeResp.data != null) {
+                setState(() {
+                  _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
+                });
+             }
+           });
         }
-
         setState(() {
           if (refresh) {
             _posts.clear();
@@ -248,7 +249,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                     ),
                     
                     const SizedBox(height: 54 + 16), // Padding for the overlapping avatar
-
                     // Username & Verification
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -562,8 +562,6 @@ class _ActionBtn extends StatelessWidget {
     );
   }
 }
-
-
 
 class _SliverTabHeaderDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;

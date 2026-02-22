@@ -4,6 +4,8 @@ import '../../services/feed_service.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../post_card.dart';
+import '../nextdoor_post_card.dart';
+import '../../services/backend_service.dart';
 import '../../screens/interest_picker_screen.dart';
 
 /// A specialized widget to handle the personalized recommendation feed
@@ -112,9 +114,9 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
         });
 
         // ── Batch Lookups (Prevent N+1) ──
-        final List<String> postIds = newPosts.map((p) => p.id).toList();
-        if (postIds.isNotEmpty) {
-           BackendService.getLikesBatch(postIds).then((likeResp) {
+        final List<String> newPostIds = newPosts.map((p) => p.id).toList();
+        if (newPostIds.isNotEmpty) {
+           BackendService.instance.getLikesBatch(newPostIds).then((likeResp) {
              if (mounted && likeResp.success && likeResp.data != null) {
                 setState(() {
                   _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));

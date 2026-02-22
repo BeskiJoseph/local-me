@@ -147,7 +147,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         // ── Batch Lookups (Prevent N+1) ──
         final List<String> newPostIds = data.map((p) => p.id).toList();
         if (newPostIds.isNotEmpty) {
-           BackendService.getLikesBatch(newPostIds).then((likeResp) {
+           BackendService.instance.getLikesBatch(newPostIds).then((likeResp) {
              if (mounted && likeResp.success && likeResp.data != null) {
                 setState(() {
                   _likedPostIds.addAll(Map<String, bool>.from(likeResp.data!));
