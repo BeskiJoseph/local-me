@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import authenticate from '../middleware/auth.js';
-import { uploadLimiter } from '../middleware/rateLimiter.js';
+import { progressiveLimiter } from '../middleware/progressiveLimiter.js';
 import {
     validateFileUpload,
     validateFileMagicBytes,
@@ -81,7 +81,7 @@ async function uploadToR2(file, key, bufferOverride = null) {
 // Upload profile image
 router.post(
     '/profile',
-    uploadLimiter,
+    progressiveLimiter('upload', true),
     authenticate,
     validateTokenExpiration,
     upload.single('file'),
@@ -124,7 +124,7 @@ router.post(
 // Upload post media
 router.post(
     '/post',
-    uploadLimiter,
+    progressiveLimiter('upload', true),
     authenticate,
     (req, res, next) => {
         if (process.env.NODE_ENV !== 'production') {

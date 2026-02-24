@@ -4,6 +4,8 @@ import logger from '../utils/logger.js';
 import authenticate from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
 import { body, validationResult } from 'express-validator';
+import { cleanPayload } from '../utils/sanitizer.js';
+import { enforceLikeVelocity, enforceFollowVelocity } from '../middleware/interactionVelocity.js';
 
 const router = express.Router();
 
@@ -19,11 +21,13 @@ router.post(
     [
         body('postId').notEmpty().withMessage('Post ID is required'),
     ],
+    enforceLikeVelocity,
     async (req, res) => {
         const errors = validationResult(req);
         if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-        const { postId } = req.body;
+        const cleanBody = cleanPayload(req.body, ['postId']);
+        const { postId } = cleanBody;
         const userId = req.user.uid;
         const likeId = `${postId}_${userId}`;
         const likeRef = db.collection('likes').doc(likeId);
@@ -31,8 +35,10 @@ router.post(
 
         try {
             await db.runTransaction(async (transaction) => {
-                const likeDoc = await transaction.get(likeRef);
-                const postDoc = await transaction.get(postRef);
+                const [likeDoc, postDoc] = await Promise.all([
+                    transaction.get(likeRef),
+                    transaction.get(postRef)
+                ]);
 
                 if (!postDoc.exists) throw new Error('Post not found');
 
@@ -66,12 +72,13 @@ router.post(
             });
 
             // Log Audit Action after successful transaction
-            await AuditService.logAction({
+            // Log Audit Action in background (Async)
+            AuditService.logAction({
                 userId,
                 action: 'POST_LIKE_TOGGLE',
                 metadata: { postId },
                 req
-            });
+            }).catch(e => logger.error('Audit Log Error', e));
 
             return res.json({
                 success: true,
@@ -96,7 +103,8 @@ router.post(
         body('text').notEmpty(),
     ],
     async (req, res) => {
-        const { postId, text } = req.body;
+        const cleanBody = cleanPayload(req.body, ['postId', 'text']);
+        const { postId, text } = cleanBody;
         const userId = req.user.uid;
         const postRef = db.collection('posts').doc(postId);
         const commentRef = db.collection('comments').doc();
@@ -107,9 +115,9 @@ router.post(
                 if (!postDoc.exists) throw new Error('Post not found');
 
                 transaction.set(commentRef, {
-                    postId, // Important: Top-level collection needs reference back to post
+                    postId,
                     userId,
-                    authorId: userId, // Align with frontend model field names
+                    authorId: userId, // Immutable: Enforced to be the request user
                     authorName: req.user.displayName || 'User',
                     authorProfileImage: req.user.photoURL,
                     text,
@@ -132,12 +140,13 @@ router.post(
             });
 
             // Log Audit Action after successful transaction
-            await AuditService.logAction({
+            // Log Audit Action in background
+            AuditService.logAction({
                 userId,
                 action: 'POST_COMMENT_CREATED',
                 metadata: { postId, commentId: commentRef.id },
                 req
-            });
+            }).catch(e => logger.error('Audit Log Error', e));
 
             return res.json({
                 success: true,
@@ -159,9 +168,15 @@ router.post(
     [
         body('targetUserId').notEmpty(),
     ],
+    enforceFollowVelocity,
     async (req, res) => {
-        const { targetUserId } = req.body;
+        const cleanBody = cleanPayload(req.body, ['targetUserId']);
+        const { targetUserId } = cleanBody;
         const userId = req.user.uid;
+        if (userId === targetUserId) {
+            return res.status(400).json({ error: 'You cannot follow yourself' });
+        }
+
         const followId = `${userId}_${targetUserId}`;
         const followRef = db.collection('follows').doc(followId);
         const currentUserRef = db.collection('users').doc(userId);
@@ -169,7 +184,14 @@ router.post(
 
         try {
             await db.runTransaction(async (transaction) => {
-                const followDoc = await transaction.get(followRef);
+                const [followDoc, targetUserDoc] = await Promise.all([
+                    transaction.get(followRef),
+                    transaction.get(targetUserRef)
+                ]);
+
+                if (!targetUserDoc.exists) {
+                    throw new Error('Target user does not exist');
+                }
 
                 if (followDoc.exists) {
                     transaction.delete(followRef);
@@ -181,7 +203,7 @@ router.post(
                     });
                 } else {
                     transaction.set(followRef, {
-                        followerId: userId,
+                        followerId: userId, // Immutable: Enforced to be the request user
                         followingId: targetUserId,
                         createdAt: admin.firestore.FieldValue.serverTimestamp()
                     });
@@ -221,7 +243,8 @@ router.post(
         body('eventId').notEmpty(),
     ],
     async (req, res) => {
-        const { eventId } = req.body;
+        const cleanBody = cleanPayload(req.body, ['eventId']);
+        const { eventId } = cleanBody;
         const userId = req.user.uid;
         const eventRef = db.collection('posts').doc(eventId);
         const attendanceId = `${eventId}_${userId}`;
@@ -229,8 +252,10 @@ router.post(
 
         try {
             await db.runTransaction(async (transaction) => {
-                const eventDoc = await transaction.get(eventRef);
-                const attendanceDoc = await transaction.get(attendanceRef);
+                const [eventDoc, attendanceDoc] = await Promise.all([
+                    transaction.get(eventRef),
+                    transaction.get(attendanceRef)
+                ]);
 
                 if (!eventDoc.exists) throw new Error('Event not found');
 

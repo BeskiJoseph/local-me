@@ -12,6 +12,7 @@ import '../config/app_theme.dart';
 import '../core/utils/time_utils.dart';
 import '../core/utils/navigation_utils.dart';
 import '../shared/widgets/user_avatar.dart';
+import '../core/session/user_session.dart';
 
 class PostDetailScreen extends StatefulWidget {
   final Post? post;
@@ -236,87 +237,88 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                   Container(
                     color: Colors.white,
                     padding: const EdgeInsets.all(16),
-                    child: InkWell(
-                      onTap: () => _navigateToUserProfile(post.authorId),
-                      child: Row(
-                        children: [
-                          // Avatar with gradient border
-                          Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
-                              ),
-                            ),
-                            child: Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF667EEA),
-                                shape: BoxShape.circle,
-                                image: post.authorProfileImage != null
-                                    ? DecorationImage(
-                                        image: NetworkImage(ProxyHelper.getUrl(post.authorProfileImage!)),
-                                        fit: BoxFit.cover,
-                                      )
-                                    : null,
-                              ),
-                              child: post.authorProfileImage == null
-                                  ? Text(
-                                      (post.authorName.isEmpty || post.authorName == 'User')
-                                          ? ((AuthService.currentUser?.uid == post.authorId && AuthService.currentUser?.displayName != null && AuthService.currentUser!.displayName!.isNotEmpty)
-                                              ? AuthService.currentUser!.displayName![0].toUpperCase()
-                                              : (AuthService.currentUser?.uid == post.authorId && AuthService.currentUser?.email != null)
-                                                  ? AuthService.currentUser!.email![0].toUpperCase()
-                                                  : 'U')
-                                          : post.authorName[0].toUpperCase(),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 18,
-                                        fontFamily: 'Inter',
-                                      ),
-                                    )
-                                  : null,
-                              alignment: Alignment.center,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                  Text(
-                                    (post.authorName.isEmpty || post.authorName == 'User')
-                                        ? (AuthService.currentUser?.uid == post.authorId
-                                            ? (AuthService.currentUser?.displayName ?? AuthService.currentUser?.email?.split('@')[0] ?? 'User')
-                                            : 'User')
-                                        : post.authorName,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 16,
-                                      color: Color(0xFF1C1C1E),
-                                      fontFamily: 'Inter',
-                                    ),
-                                  ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  post.scope.toUpperCase(),
-                                  style: const TextStyle(
-                                    color: Color(0xFF8E8E93),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: 0.5,
-                                    fontFamily: 'Inter',
+                    child: ValueListenableBuilder(
+                      valueListenable: UserSession.current,
+                      builder: (context, sessionData, _) {
+                        final isMe = UserSession.isMe(post.authorId);
+                        final displayAvatar = isMe ? (sessionData?.avatarUrl ?? post.authorProfileImage) : post.authorProfileImage;
+                        final displayName = isMe 
+                            ? (sessionData?.displayName ?? post.authorName) 
+                            : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
+                            
+                        return InkWell(
+                          onTap: () => _navigateToUserProfile(post.authorId),
+                          child: Row(
+                            children: [
+                              // Avatar with gradient border
+                              Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: LinearGradient(
+                                    colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
                                   ),
                                 ),
-                              ],
-                            ),
+                                child: Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF667EEA),
+                                    shape: BoxShape.circle,
+                                    image: displayAvatar != null
+                                        ? DecorationImage(
+                                            image: NetworkImage(ProxyHelper.getUrl(displayAvatar)),
+                                            fit: BoxFit.cover,
+                                          )
+                                        : null,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: displayAvatar == null
+                                      ? Text(
+                                          displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 18,
+                                            fontFamily: 'Inter',
+                                          ),
+                                        )
+                                      : null,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                      Text(
+                                        displayName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 16,
+                                          color: Color(0xFF1C1C1E),
+                                          fontFamily: 'Inter',
+                                        ),
+                                      ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      post.scope.toUpperCase(),
+                                      style: const TextStyle(
+                                        color: Color(0xFF8E8E93),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 0.5,
+                                        fontFamily: 'Inter',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              _buildSubscribeButtonSmall(),
+                            ],
                           ),
-                          _buildSubscribeButtonSmall(),
-                        ],
-                      ),
+                        );
+                      }
                     ),
                   ),
 
@@ -555,71 +557,78 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       separatorBuilder: (_, __) => const Divider(),
       itemBuilder: (context, index) {
         final comment = _comments[index];
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GestureDetector(
-                onTap: () => _navigateToUserProfile(comment.authorId),
-                child: UserAvatar(
-                  imageUrl: comment.authorProfileImage,
-                  name: comment.authorName,
-                  radius: 18,
-                  backgroundColor: const Color(0xFFE5E7EB),
-                ),
+        return ValueListenableBuilder(
+          valueListenable: UserSession.current,
+          builder: (context, sessionData, _) {
+            final isMe = UserSession.isMe(comment.authorId);
+            final displayAvatar = isMe ? (sessionData?.avatarUrl ?? comment.authorProfileImage) : comment.authorProfileImage;
+            final displayName = isMe 
+                ? (sessionData?.displayName ?? comment.authorName) 
+                : ((comment.authorName.isEmpty || comment.authorName == 'User') ? 'User' : comment.authorName);
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GestureDetector(
+                    onTap: () => _navigateToUserProfile(comment.authorId),
+                    child: UserAvatar(
+                      imageUrl: displayAvatar,
+                      name: displayName,
+                      radius: 18,
+                      backgroundColor: const Color(0xFFE5E7EB),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          (comment.authorName.isEmpty || comment.authorName == 'User')
-                              ? (AuthService.currentUser?.uid == comment.authorId
-                                  ? (AuthService.currentUser?.displayName ?? AuthService.currentUser?.email?.split('@')[0] ?? 'User')
-                                  : 'User')
-                              : comment.authorName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                            color: Color(0xFF1C1C1E),
-                            fontFamily: 'Inter',
-                          ),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              displayName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                                color: Color(0xFF1C1C1E),
+                                fontFamily: 'Inter',
+                              ),
+                            ),
+                            Text(
+                              _formatDate(comment.createdAt),
+                              style: const TextStyle(
+                                color: Color(0xFF8E8E93),
+                                fontSize: 11,
+                                fontFamily: 'Inter',
+                              ),
+                            ),
+                          ],
                         ),
+                        const SizedBox(height: 4),
                         Text(
-                          _formatDate(comment.createdAt),
+                          comment.text,
                           style: const TextStyle(
-                            color: Color(0xFF8E8E93),
-                            fontSize: 11,
+                            color: Color(0xFF3A3A3C),
+                            fontSize: 14,
+                            height: 1.4,
                             fontFamily: 'Inter',
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      comment.text,
-                      style: const TextStyle(
-                        color: Color(0xFF3A3A3C),
-                        fontSize: 14,
-                        height: 1.4,
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          }
         );
       },
     );

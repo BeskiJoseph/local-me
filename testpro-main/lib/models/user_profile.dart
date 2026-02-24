@@ -2,6 +2,7 @@ class UserProfile {
   final String id;
   final String email;
   final String username;
+  final String? displayName;
   final String? firstName;
   final String? lastName;
   final String? location;
@@ -18,6 +19,7 @@ class UserProfile {
     required this.id,
     required this.email,
     required this.username,
+    this.displayName,
     required this.firstName,
     required this.lastName,
     required this.location,
@@ -36,6 +38,7 @@ class UserProfile {
       id: json['uid'] as String? ?? json['id'] as String? ?? '',
       email: json['email'] as String? ?? '',
       username: json['username'] as String? ?? '',
+      displayName: json['displayName'] as String?,
       firstName: json['firstName'] as String?,
       lastName: json['lastName'] as String?,
       location: json['location'] as String?,
@@ -58,6 +61,7 @@ class UserProfile {
       'id': id,
       'email': email,
       'username': username,
+      'displayName': displayName,
       'firstName': firstName,
       'lastName': lastName,
       'location': location,

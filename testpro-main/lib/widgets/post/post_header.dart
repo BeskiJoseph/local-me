@@ -4,6 +4,7 @@ import '../../services/auth_service.dart';
 import '../../core/utils/time_utils.dart';
 import '../../core/utils/navigation_utils.dart';
 import '../../shared/widgets/user_avatar.dart';
+import '../../core/session/user_session.dart';
 
 class PostHeader extends StatelessWidget {
   final Post post;
@@ -18,38 +19,43 @@ class PostHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => _navigateToUserProfile(context),
-      borderRadius: const BorderRadius.only(
-        topLeft: Radius.circular(16),
-        topRight: Radius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Avatar with gradient border
-            UserAvatar(
-              imageUrl: post.authorProfileImage,
-              name: post.authorName,
-              radius: 22,
-              showGradientBorder: true,
-              initialsColor: Colors.white,
-              backgroundColor: const Color(0xFF667EEA),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    (post.authorName.isEmpty || post.authorName == 'User') 
-                        ? (AuthService.currentUser?.uid == post.authorId 
-                            ? (AuthService.currentUser?.displayName ?? AuthService.currentUser?.email?.split('@')[0] ?? 'User')
-                            : 'User')
-                        : post.authorName,
-                    style: const TextStyle(
+    return ValueListenableBuilder(
+      valueListenable: UserSession.current,
+      builder: (context, sessionData, _) {
+        final isMe = UserSession.isMe(post.authorId);
+        final displayAvatar = isMe ? (sessionData?.avatarUrl ?? post.authorProfileImage) : post.authorProfileImage;
+        final displayName = isMe 
+            ? (sessionData?.displayName ?? post.authorName) 
+            : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
+
+        return InkWell(
+          onTap: () => _navigateToUserProfile(context),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(16),
+            topRight: Radius.circular(16),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Avatar with gradient border
+                UserAvatar(
+                  imageUrl: displayAvatar,
+                  name: displayName,
+                  radius: 22,
+                  showGradientBorder: true,
+                  initialsColor: Colors.white,
+                  backgroundColor: const Color(0xFF667EEA),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayName,
+                        style: const TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 15,
                       color: Color(0xFF1C1C1E),
@@ -77,9 +83,10 @@ class PostHeader extends StatelessWidget {
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
             ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
 }

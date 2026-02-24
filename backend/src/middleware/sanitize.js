@@ -104,10 +104,15 @@ export const validateTokenExpiration = (req, res, next) => {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Firebase tokens are valid for 1 hour
-    // This is already handled by Firebase Admin SDK, but we can add extra checks
+    // 1. Custom tokens have built-in JWT expiration (verified in auth middleware)
+    if (req.user.auth_type === 'custom') return next();
+
+    // 2. Firebase tokens are valid for 1 hour
     // req.user.auth_time is the original login time
-    const tokenAge = Date.now() / 1000 - (req.user.auth_time || 0);
+    const authTime = req.user.auth_time || 0;
+    if (authTime === 0) return next();
+
+    const tokenAge = Date.now() / 1000 - authTime;
     const maxAge = 24 * 3600; // 24 hours in seconds (Relaxed from 1h for better UX)
 
     if (tokenAge > maxAge) {

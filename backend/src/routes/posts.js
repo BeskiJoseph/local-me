@@ -6,8 +6,25 @@ import AuditService from '../services/auditService.js';
 import logger from '../utils/logger.js';
 import admin from 'firebase-admin';
 import ngeohash from 'ngeohash';
+import { cleanPayload } from '../utils/sanitizer.js';
 
 const router = express.Router();
+
+/**
+ * Haversine Distance Formula (km)
+ */
+function getDistance(lat1, lon1, lat2, lon2) {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return 999999;
+    const R = 6371; // Radius of the earth in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
 
 // Joi Schema for Post Creation
 const postSchema = Joi.object({
@@ -40,10 +57,19 @@ const postSchema = Joi.object({
  * @desc    Create a new post with enterprise safety checks
  */
 router.post('/', authenticate, async (req, res, next) => {
-    logger.debug({ body: req.body }, 'Incoming POST /api/posts request');
+    logger.debug({ body: Object.keys(req.body) }, 'Incoming POST /api/posts request');
     try {
-        // 1. Validate Input
-        const { error, value } = postSchema.validate(req.body);
+        // Enforce strict allow-list for Mass Assignment Defense + Deep XSS sanitization
+        const ALLOWED_POST_FIELDS = [
+            'title', 'body', 'text', 'category', 'city', 'country',
+            'mediaUrl', 'mediaType', 'thumbnailUrl', 'location',
+            'tags', 'isEvent', 'eventDate', 'eventLocation',
+            'isFree', 'eventType', 'subtitle', 'id', 'authorId'
+        ];
+        const cleanBody = cleanPayload(req.body, ALLOWED_POST_FIELDS);
+
+        // 1. Validate Safe Input
+        const { error, value } = postSchema.validate(cleanBody);
         if (error) {
             const err = new Error(error.details[0].message);
             err.status = 400;
@@ -56,8 +82,16 @@ router.post('/', authenticate, async (req, res, next) => {
         // 2. account Age Check (Min 1 minute after signup)
         const userDoc = await db.collection('users').doc(uid).get();
         const userData = userDoc.data();
+        const rawCreatedAt = userData?.createdAt;
+        let createdAt;
+        if (rawCreatedAt && typeof rawCreatedAt.toDate === 'function') {
+            createdAt = rawCreatedAt.toDate();
+        } else if (rawCreatedAt) {
+            createdAt = new Date(rawCreatedAt);
+        } else {
+            createdAt = new Date(0);
+        }
 
-        const createdAt = userData?.createdAt?.toDate() || new Date(0);
         const ageInMs = Date.now() - createdAt.getTime();
 
         if (ageInMs < 60 * 1000) { // 1 minute
@@ -144,7 +178,7 @@ const mapDocToPost = (doc) => {
         likeCount: d.likeCount || 0,
         commentCount: d.commentCount || 0,
         isEvent: d.isEvent,
-        createdAt: d.createdAt?.toDate()?.toISOString(),
+        createdAt: d.createdAt ? (typeof d.createdAt.toDate === 'function' ? d.createdAt.toDate().toISOString() : new Date(d.createdAt).toISOString()) : null,
         city: d.city,
         country: d.country,
         category: d.category || 'General',
@@ -245,68 +279,117 @@ router.get('/', authenticate, async (req, res, next) => {
 
                             logger.debug({ ring: ring.label, remaining }, 'Fetching ring');
 
-                            const snapshot = await db.collection('posts')
-                                .where('visibility', '==', 'public')
-                                .where('status', '==', 'active')
-                                .where('geoHash', '>=', ring.prefix)
-                                .where('geoHash', '<=', ring.prefix + '\uf8ff')
-                                .orderBy('geoHash')
-                                .orderBy('createdAt', 'desc')
-                                .limit(remaining)
-                                .get();
+                            try {
+                                const snapshot = await db.collection('posts')
+                                    .where('visibility', '==', 'public')
+                                    .where('status', '==', 'active')
+                                    .where('geoHash', '>=', ring.prefix)
+                                    .where('geoHash', '<=', ring.prefix + '\uf8ff')
+                                    .orderBy('geoHash')
+                                    .orderBy('createdAt', 'desc')
+                                    .limit(remaining)
+                                    .get();
 
-                            snapshot.docs.forEach(doc => {
-                                if (!seenIds.has(doc.id)) {
-                                    seenIds.add(doc.id);
-                                    results.push(mapDocToPost(doc));
+                                snapshot.docs.forEach(doc => {
+                                    if (!seenIds.has(doc.id)) {
+                                        seenIds.add(doc.id);
+                                        results.push(mapDocToPost(doc));
+                                    }
+                                });
+                            } catch (ringErr) {
+                                if (ringErr.code === 9 || ringErr.message?.includes('index')) {
+                                    logger.error({ ring: ring.label }, 'Missing Firestore composite index for geo-priority query');
+                                    const error = new Error('Geo feed misconfigured: missing composite index.');
+                                    error.status = 500;
+                                    error.code = 'infra/missing-index';
+                                    throw error;
                                 }
-                            });
+                                throw ringErr;
+                            }
                         }
 
                         // Fallback 1: Country level (Fill gaps)
                         const targetCountry = country || req.user.country;
                         const countryRemaining = pageSize - results.length;
                         if (countryRemaining > 0 && targetCountry) {
-                            const countrySnapshot = await db.collection('posts')
-                                .where('visibility', '==', 'public')
-                                .where('status', '==', 'active')
-                                .where('country', '==', targetCountry)
-                                .orderBy('createdAt', 'desc')
-                                .limit(countryRemaining)
-                                .get();
+                            try {
+                                const countrySnapshot = await db.collection('posts')
+                                    .where('visibility', '==', 'public')
+                                    .where('status', '==', 'active')
+                                    .where('country', '==', targetCountry)
+                                    .orderBy('createdAt', 'desc')
+                                    .limit(countryRemaining)
+                                    .get();
 
-                            countrySnapshot.docs.forEach(doc => {
-                                if (!seenIds.has(doc.id)) {
-                                    seenIds.add(doc.id);
-                                    results.push(mapDocToPost(doc));
+                                countrySnapshot.docs.forEach(doc => {
+                                    if (!seenIds.has(doc.id)) {
+                                        seenIds.add(doc.id);
+                                        results.push(mapDocToPost(doc));
+                                    }
+                                });
+                            } catch (countryErr) {
+                                if (countryErr.code === 9 || countryErr.message?.includes('index')) {
+                                    logger.error('Missing index for country fallback query');
+                                    const error = new Error('Regional fallback misconfigured: missing index.');
+                                    error.status = 500;
+                                    throw error;
                                 }
-                            });
+                                throw countryErr;
+                            }
                         }
 
                         // Fallback 2: Global Trending (Fill remaining gaps)
                         const globalRemaining = pageSize - results.length;
                         if (globalRemaining > 0) {
-                            const globalSnapshot = await db.collection('posts')
-                                .where('visibility', '==', 'public')
-                                .where('status', '==', 'active')
-                                .orderBy('createdAt', 'desc')
-                                .limit(globalRemaining)
-                                .get();
+                            try {
+                                const globalSnapshot = await db.collection('posts')
+                                    .where('visibility', '==', 'public')
+                                    .where('status', '==', 'active')
+                                    .orderBy('createdAt', 'desc')
+                                    .limit(globalRemaining)
+                                    .get();
 
-                            globalSnapshot.docs.forEach(doc => {
-                                if (!seenIds.has(doc.id)) {
-                                    seenIds.add(doc.id);
-                                    results.push(mapDocToPost(doc));
-                                }
-                            });
+                                globalSnapshot.docs.forEach(doc => {
+                                    if (!seenIds.has(doc.id)) {
+                                        seenIds.add(doc.id);
+                                        results.push(mapDocToPost(doc));
+                                    }
+                                });
+                            } catch (globalErr) {
+                                logger.error({ error: globalErr.message }, 'Final global fallback failed');
+                                throw globalErr;
+                            }
                         }
+
+                        // Final Optimization: Strict Ring Priority Sorting
+                        // This fixes edge cases where global fallbacks might contain closer posts than geo prefixes
+                        // or where time-sorting in fallbacks creates ring violations.
+                        const finalResults = results.map(post => {
+                            const d = getDistance(
+                                parseFloat(lat),
+                                parseFloat(lng),
+                                post.latitude,
+                                post.longitude
+                            );
+                            const r = d <= 10 ? 1 : (d <= 50 ? 2 : (d <= 200 ? 3 : 4));
+                            return { ...post, _distance: d, _ring: r };
+                        });
+
+                        // Sort by Ring (Primary) then Distance (Secondary)
+                        finalResults.sort((a, b) => {
+                            if (a._ring !== b._ring) return a._ring - b._ring;
+                            return a._distance - b._distance;
+                        });
+
+                        // PRODUCTION HARDENING: Remove internal helper fields before sending to client
+                        const sanitizedData = finalResults.map(({ _distance, _ring, ...rest }) => rest);
 
                         return {
                             success: true,
-                            data: results,
+                            data: sanitizedData,
                             pagination: {
-                                cursor: results.length > 0 ? results[results.length - 1].id : null,
-                                hasMore: results.length === pageSize
+                                cursor: sanitizedData.length > 0 ? sanitizedData[sanitizedData.length - 1].id : null,
+                                hasMore: sanitizedData.length === pageSize
                             }
                         };
                     }
@@ -339,16 +422,12 @@ router.get('/', authenticate, async (req, res, next) => {
                         snapshot = await query.get();
                     } catch (indexErr) {
                         if (indexErr.code === 9 || indexErr.message?.includes('index')) {
-                            logger.warn('Index error, falling back to basic query');
-                            const fallbackQuery = db.collection('posts')
-                                .where('visibility', '==', 'public')
-                                .where('status', '==', 'active')
-                                .orderBy('createdAt', 'desc')
-                                .limit(pageSize);
-                            snapshot = await fallbackQuery.get();
-                        } else {
-                            throw indexErr;
+                            logger.error({ query: req.query }, 'Missing Firestore composite index for filtered query');
+                            const error = new Error('Query misconfigured: missing composite index.');
+                            error.status = 500;
+                            throw error;
                         }
+                        throw indexErr;
                     }
 
                     const posts = snapshot.docs.map(mapDocToPost);
@@ -385,7 +464,16 @@ router.get('/', authenticate, async (req, res, next) => {
         }
 
         // ∩┐╜∩┐╜∩┐╜ 5. Embed Like State (Step 4) ∩┐╜∩┐╜∩┐╜
-        return res.json(await embedLikeState(responseData, uid));
+        const finalResponse = await embedLikeState(responseData, uid);
+
+        // ∩┐╜∩┐╜∩┐╜ 6. Anti-Scraping Throttler (Layer 4) ∩┐╜∩┐╜∩┐╜
+        // Adds 50-200ms of random jitter to feed requests to frustrate high-velocity scrapers
+        // without visibly degrading UX.
+        if (!afterId || afterId === 'page1') {
+            await new Promise(resolve => setTimeout(resolve, Math.random() * 150 + 50));
+        }
+
+        return res.json(finalResponse);
 
     } catch (err) {
         return next(err);
@@ -427,7 +515,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
                 id: doc.id,
                 ...data,
                 isLiked: !likeDoc.empty,
-                createdAt: data.createdAt?.toDate()?.toISOString()
+                createdAt: data.createdAt ? (typeof data.createdAt.toDate === 'function' ? data.createdAt.toDate().toISOString() : new Date(data.createdAt).toISOString()) : null
             },
             error: null
         });
@@ -479,7 +567,8 @@ router.delete('/:id', authenticate, async (req, res, next) => {
  */
 router.post('/:id/messages', authenticate, async (req, res, next) => {
     try {
-        const { text } = req.body;
+        const cleanBody = cleanPayload(req.body, ['text']);
+        const { text } = cleanBody;
         if (!text) return res.status(400).json({ error: 'Message text is required' });
 
         const messageData = {

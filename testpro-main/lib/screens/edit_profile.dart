@@ -9,6 +9,7 @@ import '../services/media_upload_service.dart';
 import '../config/app_theme.dart';
 import '../services/location_service.dart';
 import '../utils/proxy_helper.dart';
+import '../core/session/user_session.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final UserProfile? profile;
@@ -35,7 +36,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     String nameToSet = '';
     
     if (widget.profile != null) {
-      nameToSet = widget.profile!.username;
+      nameToSet = widget.profile!.displayName ?? widget.profile!.username;
       if (nameToSet.isEmpty || nameToSet == 'User' || nameToSet == 'Unknown') {
         nameToSet = user?.displayName ?? user?.email?.split('@')[0] ?? '';
       }
@@ -111,7 +112,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
       // 2. Update via backend
       final response = await BackendService.updateProfile({
-        'username': _nameController.text.trim(),
+        'displayName': _nameController.text.trim(),
         'about': _aboutController.text.trim(),
         'location': _locationController.text.trim(),
         if (profileImageUrl != null) 'profileImageUrl': profileImageUrl,
@@ -120,6 +121,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       if (!mounted) return;
 
       if (response.success) {
+        // Architecture Fix: Sync the native Firebase User object so global reads don't use stale data
+        await AuthService.updateProfile(
+          displayName: _nameController.text.trim(),
+          photoURL: profileImageUrl,
+        );
+
+        UserSession.update(
+          id: user.uid,
+          name: _nameController.text.trim(),
+          avatar: profileImageUrl,
+        );
         Navigator.pop(context, true); // Return true to trigger refresh
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Profile updated successfully')),

@@ -96,7 +96,7 @@ class _UserSearchCardState extends State<UserSearchCard> {
     final currentUser = AuthService.currentUser;
     final isOwnProfile = currentUser?.uid == widget.userId;
 
-    final username = widget.userData['username'] ?? 'Unknown';
+    final username = widget.userData['displayName'] ?? widget.userData['username'] ?? 'Unknown';
     final about = widget.userData['about'];
     final profileImage = widget.userData['profileImageUrl'];
     final subscribers = widget.userData['subscribers'] ?? 0;

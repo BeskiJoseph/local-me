@@ -8,6 +8,7 @@ import '../../shared/widgets/user_avatar.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
 import '../../screens/post_type_selector_sheet.dart';
+import '../../core/session/user_session.dart';
 
 /// Feed list — owns its ScrollController, caches the stream,
 /// and uses AutomaticKeepAliveClientMixin to preserve scroll position.
@@ -263,12 +264,19 @@ class _CreatePostBar extends StatelessWidget {
           ),
           child: Row(
             children: [
-              UserAvatar(
-                imageUrl: user?.photoURL,
-                name: user?.displayName ?? user?.email?.split('@')[0] ?? 'You',
-                radius: 18,
-                backgroundColor: AppTheme.primaryLight,
-                initialsColor: AppTheme.primary,
+              ValueListenableBuilder(
+                valueListenable: UserSession.current,
+                builder: (context, sessionData, _) {
+                  final displayAvatar = sessionData?.avatarUrl ?? user?.photoURL;
+                  final displayName = sessionData?.displayName ?? user?.displayName ?? user?.email?.split('@')[0] ?? 'You';
+                  return UserAvatar(
+                    imageUrl: displayAvatar,
+                    name: displayName,
+                    radius: 18,
+                    backgroundColor: AppTheme.primaryLight,
+                    initialsColor: AppTheme.primary,
+                  );
+                }
               ),
               const SizedBox(width: 12),
               const Text(

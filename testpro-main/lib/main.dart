@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'screens/welcome_screen.dart';
 import 'screens/main_navigation_screen.dart';
 import 'services/auth_service.dart';
 import 'firebase_options.dart';
 import 'services/notification_service.dart';
 import 'config/app_theme.dart';
+import 'core/session/user_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,12 +36,22 @@ class MyApp extends StatelessWidget {
         scaffoldBackgroundColor: AppTheme.background,
       ),
       themeMode: ThemeMode.light,
-      home: StreamBuilder(
+      home: StreamBuilder<User?>(
         stream: AuthService.authStateChanges,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.active) {
-            if (snapshot.data != null) {
+            final user = snapshot.data;
+            if (user != null) {
+              // Initialize session cache on completely fresh launches / stream re-connects
+              UserSession.update(
+                id: user.uid,
+                name: user.displayName,
+                avatar: user.photoURL,
+              );
               return const MainNavigationScreen();
+            } else {
+              // Ensure we dump cache on sign out
+              UserSession.clear();
             }
           }
           return const WelcomeScreen();

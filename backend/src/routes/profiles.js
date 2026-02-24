@@ -1,19 +1,21 @@
 import express from 'express';
 import Joi from 'joi';
 import { db } from '../config/firebase.js';
-import authenticate from '../middleware/auth.js';
+import authenticate, { clearUserCache } from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
 import logger from '../utils/logger.js';
+import { cleanPayload } from '../utils/sanitizer.js';
 
 const router = express.Router();
 
 const profileSchema = Joi.object({
-    username: Joi.string().min(3).max(30),
-    firstName: Joi.string().max(50),
-    lastName: Joi.string().max(50),
-    about: Joi.string().max(500),
-    profileImageUrl: Joi.string().uri(),
-    location: Joi.string().max(100),
+    displayName: Joi.string().max(100).allow('', null).optional(),
+    username: Joi.string().min(3).max(30).allow('', null),
+    firstName: Joi.string().max(50).allow('', null),
+    lastName: Joi.string().max(50).allow('', null),
+    about: Joi.string().max(500).allow('', null),
+    profileImageUrl: Joi.string().uri().allow('', null),
+    location: Joi.string().max(100).allow('', null),
     fcmToken: Joi.string().optional().allow(null, ''),
     // Sensitive fields - usually managed by Admin but included for demonstrating audit logging
     role: Joi.string().valid('user', 'creator', 'admin', 'moderator'),
@@ -25,8 +27,22 @@ const profileSchema = Joi.object({
  */
 router.patch('/me', authenticate, async (req, res, next) => {
     try {
-        const { error, value } = profileSchema.validate(req.body);
+        const ALLOWED_PROFILE_FIELDS = [
+            'displayName', 'username', 'firstName', 'lastName', 'about',
+            'profileImageUrl', 'location', 'fcmToken', 'role'
+        ];
+        const cleanBody = cleanPayload(req.body, ALLOWED_PROFILE_FIELDS);
+        logger.info({
+            uid: req.user?.uid,
+            incomingBody: req.body,
+            afterClean: cleanBody
+        }, '[PROFILE_DEBUG] Lifecycle Tracking Started');
+
+        const { error, value } = profileSchema.validate(cleanBody);
+
+        logger.info({ validatedValue: value }, '[PROFILE_DEBUG] After Validation');
         if (error) {
+            logger.warn({ validationError: error.details[0].message }, '[PROFILE_DEBUG] Joi Validation ERROR');
             const err = new Error(error.details[0].message);
             err.status = 400;
             err.code = 'profile/invalid-input';
@@ -57,6 +73,7 @@ router.patch('/me', authenticate, async (req, res, next) => {
 
         const updateData = {
             ...value,
+            ...(value.username ? { username: value.username.toLowerCase() } : {}),
             email: email,
             updatedAt: new Date(),
         };
@@ -68,6 +85,9 @@ router.patch('/me', authenticate, async (req, res, next) => {
         }
 
         await userRef.set(updateData, { merge: true });
+
+        // Architecturally required invalidate cache
+        clearUserCache(uid);
 
         logger.info({ userId: uid, isNew: !exists }, 'Profile upserted successfully');
         return res.json({

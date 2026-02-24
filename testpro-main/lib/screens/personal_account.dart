@@ -6,7 +6,8 @@ import '../services/backend_service.dart';
 import '../utils/proxy_helper.dart';
 import '../models/post.dart';
 import '../models/user_profile.dart';
-import '../models/paginated_response.dart';
+import '../core/utils/navigation_utils.dart';
+import '../core/session/user_session.dart';
 import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../widgets/post_card.dart';
@@ -38,6 +39,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     return uid ?? '';
   }
 
+  // This getter is no longer used directly in build, but kept for other methods if needed.
   bool get isOwnProfile => widget.userId == null || widget.userId == AuthService.currentUser?.uid;
 
   @override
@@ -147,33 +149,49 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
 
     final profile = _profile;
     final user = AuthService.currentUser;
-    
-    // Improved username logic with fallbacks
-    String username = 'User';
-    if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
-      username = profile.username;
-    } else if (user?.displayName != null && user!.displayName!.isNotEmpty) {
-      username = user.displayName!;
-    } else if (user?.email != null) {
-      username = user!.email!.split('@')[0];
-    }
+    final isOwnProfile = user != null && profileUserId == user.uid;
+    return ValueListenableBuilder(
+      valueListenable: UserSession.current,
+      builder: (context, sessionData, _) {
+        String displayTitle = 'User';
+        if (isOwnProfile) {
+          if (sessionData?.displayName != null && sessionData!.displayName!.isNotEmpty) {
+            displayTitle = sessionData.displayName!;
+          } else if (user?.displayName != null && user!.displayName!.isNotEmpty) {
+            displayTitle = user.displayName!;
+          } else if (profile != null && (profile.displayName ?? '').isNotEmpty) {
+            displayTitle = profile.displayName!;
+          } else if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
+            displayTitle = profile.username;
+          } else if (user?.email != null) {
+            displayTitle = user!.email!.split('@')[0];
+          }
+        } else {
+          // STRICT SEPARATION: Only rely on fetched backend data for other users
+          if (profile != null && (profile.displayName ?? '').isNotEmpty) {
+            displayTitle = profile.displayName!;
+          } else if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
+            displayTitle = profile.username;
+          }
+        }
 
-    final String? profileImage = profile?.profileImageUrl ?? (isOwnProfile ? user?.photoURL : null);
+        final String? profileImage = isOwnProfile 
+            ? (sessionData?.avatarUrl ?? user?.photoURL ?? profile?.profileImageUrl) 
+            : profile?.profileImageUrl;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FA),
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-              // ── Unified Profile Header (Banner + Avatar + Info) ──────────────────────────
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    Stack(
-                      clipBehavior: Clip.none,
-                      alignment: Alignment.center,
+        return Scaffold(
+          backgroundColor: const Color(0xFFF7F8FA),
+          body: RefreshIndicator(
+            onRefresh: _loadData,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Column(
+                    children: [
+                      Stack(
+                        clipBehavior: Clip.none,
+                        alignment: Alignment.center,
                       children: [
                         // Banner (Shortened)
                         Container(
@@ -232,7 +250,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                             decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
                             child: UserAvatar(
                               imageUrl: profileImage,
-                              name: username,
+                              name: displayTitle,
                               radius: 54,
                               initialsFontSize: 40,
                             ),
@@ -247,7 +265,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          username,
+                          displayTitle,
                           style: const TextStyle(
                             fontSize: 28, // Slightly larger
                             fontWeight: FontWeight.w900, // Extra bold for "Beski" look
@@ -383,10 +401,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                   ],
                 ),
               ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
 
   Widget _buildPostsTab() {
@@ -399,7 +418,9 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       itemCount: _posts.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index == _posts.length) {
-          _loadPosts();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _loadPosts();
+          });
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(16.0),
@@ -459,7 +480,9 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       itemCount: mediaPosts.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index == mediaPosts.length) {
-          _loadPosts();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _loadPosts();
+          });
           return const Center(child: Padding(
             padding: EdgeInsets.all(16.0),
             child: CircularProgressIndicator(strokeWidth: 2),
@@ -483,7 +506,9 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       itemCount: eventPosts.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index == eventPosts.length) {
-          _loadPosts();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _loadPosts();
+          });
           return const Center(child: Padding(
             padding: EdgeInsets.all(16.0),
             child: CircularProgressIndicator(strokeWidth: 2),

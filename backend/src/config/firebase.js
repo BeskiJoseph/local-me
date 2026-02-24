@@ -16,11 +16,19 @@ if (missingVars.length) {
     process.exit(1);
 }
 
+const cleanKey = (key) => {
+    if (!key) return key;
+    // Strip quotes if any (common when copy-pasting from .env files)
+    const stripped = key.trim().replace(/^["']|["']$/g, '');
+    // Replace literal \n with real newlines
+    return stripped.replace(/\\n/g, '\n');
+};
+
 try {
     admin.initializeApp({
         credential: admin.credential.cert({
             projectId: process.env.FIREBASE_PROJECT_ID,
-            privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            privateKey: cleanKey(process.env.FIREBASE_PRIVATE_KEY),
             clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
         }),
     });

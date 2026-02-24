@@ -57,6 +57,7 @@ class UserRepository {
     String? profileImageUrl,
   }) async {
     final response = await BackendService.updateProfile({
+      'displayName': data.username ?? displayName ?? '',
       'username': data.username ?? displayName ?? '',
       'firstName': data.firstName,
       'lastName': data.lastName,
@@ -73,7 +74,7 @@ class UserRepository {
     String? location,
   }) async {
     final response = await BackendService.updateProfile({
-      if (displayName != null) 'username': displayName,
+      if (displayName != null) 'displayName': displayName,
       if (about != null) 'about': about,
       if (profileImageUrl != null) 'profileImageUrl': profileImageUrl,
       if (location != null) 'location': location,

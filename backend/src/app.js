@@ -1,5 +1,5 @@
 import express from 'express';
-import { securityHeaders, corsOptions, globalLimiter, requestTimeout } from './middleware/security.js';
+import { securityHeaders, corsOptions, requestTimeout } from './middleware/security.js';
 import httpLogger from './middleware/httpLogger.js';
 import errorHandler from './middleware/errorHandler.js';
 
@@ -19,8 +19,8 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 app.use(requestTimeout);
 
 // 4. Health Check (Public - No Limiter or Health-specific Limiter)
-import { healthCheckLimiter } from './middleware/rateLimiter.js';
-app.get('/health', healthCheckLimiter, (_, res) => {
+import { progressiveLimiter } from './middleware/progressiveLimiter.js';
+app.get('/health', progressiveLimiter('health'), (_, res) => {
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -32,15 +32,17 @@ app.get('/health', healthCheckLimiter, (_, res) => {
 import otpRoutes from './routes/otp.js';
 import proxyRoutes from './routes/proxy.js';
 import profileRoutes from './routes/profiles.js';
+import authRoutes from './routes/auth.js';
 
-app.use('/api/otp', globalLimiter, otpRoutes);
-app.use('/api/proxy', globalLimiter, proxyRoutes);
+app.use('/api/otp', progressiveLimiter('otp'), otpRoutes);
+app.use('/api/proxy', progressiveLimiter('api'), proxyRoutes);
+app.use('/api/auth', progressiveLimiter('auth'), authRoutes);
 
 // Public sub-route of profiles (must be mounted before protected profiles)
-app.get('/api/profiles/check-username', globalLimiter, profileRoutes);
+app.use('/api/profiles', progressiveLimiter('api'), profileRoutes);
 
 // 6. Protected Routes (User-based limiting)
-// By mounting authenticate before globalLimiter, the limiter can use req.user.uid
+// By mounting authenticate before progressiveLimiter, the limiter can use req.user.uid
 import authenticate from './middleware/auth.js';
 import uploadRoutes from './routes/upload.js';
 import interactionRoutes from './routes/interactions.js';
@@ -48,7 +50,7 @@ import postRoutes from './routes/posts.js';
 import searchRoutes from './routes/search.js';
 import notificationRoutes from './routes/notifications.js';
 
-const protectedMiddleware = [authenticate, globalLimiter];
+const protectedMiddleware = [authenticate, progressiveLimiter('api', true)];
 
 app.use('/api/upload', protectedMiddleware, uploadRoutes);
 app.use('/api/interactions', protectedMiddleware, interactionRoutes);

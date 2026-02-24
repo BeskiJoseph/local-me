@@ -3,11 +3,13 @@ import '../models/post.dart';
 import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
+import '../services/post_service.dart';
 import '../utils/proxy_helper.dart';
 import '../screens/personal_account.dart';
 import '../screens/post_detail_screen.dart';
 import '../core/utils/time_utils.dart';
 import '../shared/widgets/user_avatar.dart';
+import '../core/session/user_session.dart';
 
 /// ============================================================
 /// POST CARD — pixel-matched to screenshot
@@ -111,11 +113,19 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     );
 
     if (confirmed == true) {
-      final response = await BackendService.deletePost(widget.post.id);
-      if (response.success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Post deleted')),
-        );
+      try {
+        await PostService.deletePost(widget.post.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Post deleted')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to delete post: $e')),
+          );
+        }
       }
     }
   }
@@ -224,55 +234,60 @@ class _PostHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        // Avatar
-        GestureDetector(
-          onTap: () {
-            if (user != null && post.authorId != user.uid) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => PersonalAccount(userId: post.authorId)),
-              );
-            }
-          },
-          child: UserAvatar(
-            imageUrl: post.authorProfileImage,
-            name: post.authorName,
-            radius: 22,
-            backgroundColor: AppTheme.primaryLight,
-            initialsColor: AppTheme.primary,
-          ),
-        ),
-        const SizedBox(width: 10),
+    return ValueListenableBuilder(
+      valueListenable: UserSession.current,
+      builder: (context, sessionData, _) {
+        final isMe = UserSession.isMe(post.authorId);
+        final displayAvatar = isMe ? (sessionData?.avatarUrl ?? post.authorProfileImage) : post.authorProfileImage;
+        final displayName = isMe 
+            ? (sessionData?.displayName ?? post.authorName) 
+            : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
 
-        // Name + location
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                (post.authorName.isEmpty || post.authorName == 'User') 
-                    ? (user?.uid == post.authorId 
-                        ? (user?.displayName ?? user?.email?.split('@')[0] ?? 'User')
-                        : 'User')
-                    : post.authorName,
-                style: const TextStyle(
-                  fontFamily: AppTheme.fontFamily,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
-                  color: Color(0xFF1A1A1A),
-                ),
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Avatar
+            GestureDetector(
+              onTap: () {
+                if (user != null && post.authorId != user.uid) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => PersonalAccount(userId: post.authorId)),
+                  );
+                }
+              },
+              child: UserAvatar(
+                imageUrl: displayAvatar,
+                name: displayName,
+                radius: 22,
+                backgroundColor: AppTheme.primaryLight,
+                initialsColor: AppTheme.primary,
               ),
-              if (post.city != null && post.city!.isNotEmpty) ...[
-                const SizedBox(height: 1),
-                Row(
-                  children: [
-                    const Icon(Icons.location_on_rounded,
-                        size: 13, color: Color(0xFF8A8A8A)),
+            ),
+            const SizedBox(width: 10),
+
+            // Name + location
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    displayName,
+                    style: const TextStyle(
+                      fontFamily: AppTheme.fontFamily,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                      color: Color(0xFF1A1A1A),
+                    ),
+                  ),
+                  if (post.city != null && post.city!.isNotEmpty) ...[
+                    const SizedBox(height: 1),
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on_rounded,
+                            size: 13, color: Color(0xFF8A8A8A)),
                     const SizedBox(width: 2),
                     Text(
                       post.city!,
@@ -289,24 +304,27 @@ class _PostHeader extends StatelessWidget {
           ),
         ),
 
-        // Time
-        Text(
-          TimeUtils.formatTimeAgoCompact(post.createdAt),
-          style: const TextStyle(
-            fontFamily: AppTheme.fontFamily,
-            fontSize: 13,
-            color: Color(0xFF8A8A8A),
+          // Time
+          Text(
+            TimeUtils.formatTimeAgoCompact(post.createdAt),
+            style: const TextStyle(
+              fontFamily: AppTheme.fontFamily,
+              fontSize: 13,
+              color: Color(0xFF8A8A8A),
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
+          const SizedBox(width: 8),
 
-        // 3-dot menu
-        GestureDetector(
-          onTap: () => _showOptions(context),
-          child: const Icon(Icons.more_horiz,
-              color: Color(0xFF8A8A8A), size: 22),
-        ),
-      ],
+          // 3-dot menu
+          GestureDetector(
+            onTap: () => _showOptions(context),
+            child: const Icon(Icons.more_horiz,
+                color: Color(0xFF8A8A8A), size: 22),
+          ),
+
+          ],
+        );
+      }
     );
   }
 

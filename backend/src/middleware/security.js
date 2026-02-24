@@ -1,6 +1,6 @@
 import helmet from 'helmet';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
+import logger from '../utils/logger.js';
 
 /**
  * Enterprise Security Configuration
@@ -8,51 +8,41 @@ import rateLimit from 'express-rate-limit';
 
 // 1. Helmet: Secure Headers (API-only mode)
 export const securityHeaders = helmet({
-    contentSecurityPolicy: false, // API only, no frontend to protect
+    contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false, // Essential for Flutter Web image fetching
 });
 
 // 2. CORS: Strict Origin Whitelisting
 const getAllowedOrigins = () => {
     const origins = process.env.CORS_ALLOWED_ORIGINS;
-    if (process.env.NODE_ENV === 'production' && !origins) {
-        throw new Error('FATAL: CORS_ALLOWED_ORIGINS must be defined in production environment');
+    if (!origins) {
+        return process.env.NODE_ENV === 'production' ? [] : '*';
     }
-    return origins?.split(',') || '*';
+    return origins.split(',').map(o => o.trim());
 };
 
 export const corsOptions = cors({
     origin: (origin, callback) => {
+        // In non-production, allow all to simplify local development
+        if (process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+
         const allowed = getAllowedOrigins();
-        // Allow requests with no origin (like mobile apps or curl)
-        if (!origin || allowed === '*' || allowed.includes(origin)) {
+        const isLocal = origin && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'));
+
+        if (!origin || allowed === '*' || allowed.includes(origin) || isLocal) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'));
+            logger.warn({ origin }, 'CORS Blocked');
+            callback(null, false); // Don't throw to avoid crashing preflight
         }
     },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Cache-Control'],
     credentials: true,
-    maxAge: 86400, // 24 hours
-});
-
-// 3. Rate Limiting: Global Base Throttling
-// Combined Key: IP + UserID (if available)
-export const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000,
-    keyGenerator: (req) => {
-        return req.user?.uid || req.ip; // CTO suggested IP+UserID combined key
-    },
-    message: {
-        error: {
-            message: 'Too many requests, please try again later.',
-            code: 'auth/too-many-requests'
-        }
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
+    maxAge: 86400,
 });
 
 // 4. Request Timeout Middleware

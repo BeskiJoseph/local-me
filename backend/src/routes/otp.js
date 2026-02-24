@@ -4,12 +4,8 @@ import crypto from 'crypto';
 import admin, { db } from '../config/firebase.js';
 import logger from '../utils/logger.js';
 import { body, validationResult } from 'express-validator';
-import { authLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
-
-// Apply strict rate limiting to all OTP routes
-router.use(authLimiter);
 
 // Initialize SendGrid
 if (process.env.SENDGRID_API_KEY) {

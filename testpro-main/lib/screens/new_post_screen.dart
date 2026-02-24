@@ -18,6 +18,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:io';
 import '../shared/widgets/user_avatar.dart';
+import '../core/session/user_session.dart';
 
 class NewPostScreen extends StatefulWidget {
   const NewPostScreen({super.key});
@@ -287,7 +288,14 @@ class _NewPostScreenState extends State<NewPostScreen> {
               padding: const EdgeInsets.all(20),
               child: Row(
                 children: [
-                  UserAvatar(imageUrl: profileImg, name: username, radius: 24),
+                  ValueListenableBuilder(
+                    valueListenable: UserSession.current,
+                    builder: (context, sessionData, _) {
+                      final displayAvatar = sessionData?.avatarUrl ?? profileImg;
+                      final displayName = sessionData?.displayName ?? username;
+                      return UserAvatar(imageUrl: displayAvatar, name: displayName, radius: 24);
+                    }
+                  ),
                   const SizedBox(width: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

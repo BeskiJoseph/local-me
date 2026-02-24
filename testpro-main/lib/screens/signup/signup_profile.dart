@@ -9,7 +9,9 @@ import '../../models/signup_data.dart';
 import '../../services/auth_service.dart';
 import '../../services/media_upload_service.dart';
 import '../../services/user_service.dart';
+import '../../core/session/user_session.dart';
 import '../home_screen.dart';
+import '../../services/backend_service.dart';
 
 class SignupProfileScreen extends StatefulWidget {
   final SignupData data;
@@ -89,6 +91,9 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
   }
 
   Future<void> _handleAuthSuccess(UserCredential result) async {
+    // 1. Force the custom backend token exchange to initialize the backend User Schema immediately
+    await BackendService.syncCustomTokens();
+
     if (widget.data.username != null) {
       await AuthService.updateProfile(displayName: widget.data.username);
     }
@@ -112,6 +117,11 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
         photoURL: result.user!.photoURL,
         data: widget.data,
         profileImageUrl: imageUrl,
+      );
+      UserSession.update(
+        id: result.user!.uid,
+        name: result.user!.displayName ?? widget.data.username,
+        avatar: imageUrl ?? result.user!.photoURL,
       );
     }
 

@@ -4,6 +4,7 @@ import '../services/auth_service.dart';
 import 'welcome_screen.dart';
 import 'verify_email_screen.dart';
 import '../services/user_service.dart';
+import '../core/session/user_session.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -54,6 +55,11 @@ class _LoginScreenState extends State<LoginScreen> {
         final user = FirebaseAuth.instance.currentUser;
         
         if (user != null && user.emailVerified) {
+          UserSession.update(
+            id: user.uid,
+            name: user.displayName,
+            avatar: user.photoURL,
+          );
           if (mounted) {
             Navigator.pushReplacement(
               context,
@@ -127,6 +133,11 @@ class _LoginScreenState extends State<LoginScreen> {
         final user = FirebaseAuth.instance.currentUser;
 
         if (user != null && user.emailVerified) {
+           UserSession.update(
+             id: user.uid,
+             name: user.displayName,
+             avatar: user.photoURL,
+           );
            if (mounted) {
             Navigator.pushReplacement(
               context,

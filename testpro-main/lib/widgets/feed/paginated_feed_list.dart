@@ -1,11 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/post_service.dart';
-import '../../models/post.dart';
-import '../../models/paginated_response.dart';
-import '../../services/backend_service.dart';
-import '../../services/location_service.dart';
-import '../post_card.dart';
+import '../../core/state/feed_controller.dart';
 import '../nextdoor_post_card.dart';
 
 class PaginatedFeedList extends StatefulWidget {
@@ -26,11 +22,7 @@ class PaginatedFeedList extends StatefulWidget {
 
 class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
-  final List<Post> _posts = [];
-  bool _isLoading = false;
-  bool _hasMore = true;
-  String? _cursor;
-  String? _error;
+  final FeedController _feedController = FeedController();
   final Map<String, bool> _likedPostIds = {};
   
   // Debounce scroll triggers to prevent rapid-fire requests
@@ -59,9 +51,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         _loadMorePosts(refresh: true);
         break;
       case FeedEventType.postDeleted:
-        setState(() {
-          _posts.removeWhere((p) => p.id == event.data);
-        });
+        _feedController.deletePost(event.data);
         break;
     }
   }
@@ -71,6 +61,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     _debounce?.cancel();
     _eventSubscription?.cancel();
     _scrollController.dispose();
+    _feedController.dispose();
     super.dispose();
   }
 
@@ -80,37 +71,27 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     _debounce = Timer(const Duration(milliseconds: 300), () {
       if (_scrollController.hasClients &&
           _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
-          !_isLoading &&
-          _hasMore &&
-          _error == null) {
+          !_feedController.isLoading &&
+          _feedController.hasMore &&
+          _feedController.error == null) {
         _loadMorePosts();
       }
     });
   }
 
   Future<void> _loadMorePosts({bool refresh = false}) async {
-    if (_isLoading) return;
-    if (!refresh && !_hasMore) return;
+    if (_feedController.isLoading) return;
+    if (!refresh && !_feedController.hasMore) return;
 
     debugPrint('🚀 FEED API CALLED: ${widget.feedType}');
 
     if (refresh) {
-      if (mounted) {
-        setState(() {
-          _posts.clear();
-          _cursor = null;
-          _hasMore = true;
-          _error = null;
-          _isLoading = true;
-        });
-      }
+      _feedController.clear(notify: false);
+      _likedPostIds.clear();
+      _feedController.setLoading(true);
     } else {
-      if (mounted) {
-        setState(() {
-          _isLoading = true;
-          _error = null;
-        });
-      }
+      _feedController.setLoading(true);
+      _feedController.setError(null);
     }
 
     try {
@@ -118,7 +99,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         feedType: widget.feedType,
         userCity: widget.userCity,
         userCountry: widget.userCountry,
-        afterId: _cursor,
+        afterId: _feedController.cursor,
         limit: 10,
       );
 
@@ -126,34 +107,16 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       final nextCursor = response.nextCursor;
 
       if (mounted) {
-        setState(() {
-          if (refresh) {
-            _posts.clear();
-            _likedPostIds.clear();
-          }
-          
-          final existingIds = _posts.map((p) => p.id).toSet();
-          final uniqueNew = data.where((p) => !existingIds.contains(p.id)).toList();
-          
-          _posts.addAll(uniqueNew);
-          
-          _cursor = nextCursor;
-          _hasMore = response.hasMore;
-          
-          if (_posts.isEmpty && !refresh) {
-            _hasMore = false;
-          }
-          
-          for (var p in data) {
-            _likedPostIds[p.id] = p.isLiked;
-          }
-        });
+        for (var p in data) {
+          _likedPostIds[p.id] = p.isLiked;
+        }
+        _feedController.appendPosts(data, refresh: refresh, nextCursor: nextCursor);
       }
     } catch (e) {
       debugPrint('Error loading posts: $e');
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) _feedController.setError(e.toString());
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) _feedController.setLoading(false);
     }
   }
 
@@ -164,44 +127,55 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required by AutomaticKeepAliveClientMixin
-    if (_posts.isEmpty && _isLoading) {
-      return _buildLoadingState();
-    }
     
-    if (_error != null && _posts.isEmpty) {
-      return _buildErrorState(_error!);
-    }
+    return ListenableBuilder(
+      listenable: _feedController,
+      builder: (context, _) {
+        final posts = _feedController.posts;
+        final isLoading = _feedController.isLoading;
+        final error = _feedController.error;
+        final hasMore = _feedController.hasMore;
 
-    if (_posts.isEmpty && !_isLoading) {
-      return _buildEmptyState(widget.feedType);
-    }
+        if (posts.isEmpty && isLoading) {
+          return _buildLoadingState();
+        }
+        
+        if (error != null && posts.isEmpty) {
+          return _buildErrorState(error);
+        }
 
-    return RefreshIndicator(
-      onRefresh: _onRefresh,
-      color: const Color(0xFF6C5CE7),
-      child: ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _posts.length + (_hasMore || _error != null ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index == _posts.length) {
-            if (_error != null) {
-              return _buildRetryFooter();
-            }
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16.0),
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            );
-          }
-          final post = _posts[index];
-          return NextdoorStylePostCard(
-            post: post,
-            initialIsLiked: _likedPostIds[post.id],
-          );
-        },
-      ),
+        if (posts.isEmpty && !isLoading) {
+          return _buildEmptyState(widget.feedType);
+        }
+
+        return RefreshIndicator(
+          onRefresh: _onRefresh,
+          color: const Color(0xFF6C5CE7),
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.only(top: 8, bottom: 80),
+            itemCount: posts.length + (hasMore || error != null ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == posts.length) {
+                if (error != null) {
+                  return _buildRetryFooter();
+                }
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                );
+              }
+              final post = posts[index];
+              return NextdoorStylePostCard(
+                post: post,
+                initialIsLiked: _likedPostIds[post.id],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
