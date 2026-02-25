@@ -6,6 +6,9 @@ import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
 import '../services/post_service.dart';
+import '../services/backend_service.dart';
+import '../models/post.dart';
+import 'group_chat_screen.dart';
 import 'package:geolocator/geolocator.dart';
 
 class CreateEventScreen extends StatefulWidget {
@@ -160,7 +163,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         );
       }
 
-      await PostService.createEvent(
+      final createdEventId = await PostService.createEvent(
         title: _titleController.text.trim(),
         description: '', // Can be improved if we add a description field
         eventType: 'Classic',
@@ -175,11 +178,19 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         isFree: true,
       );
 
-      if (mounted) {
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Event created successfully!')),
+      if (!mounted) return;
+
+      final createdPostResp = await BackendService.getPost(createdEventId);
+      if (!mounted) return;
+
+      if (createdPostResp.success && createdPostResp.data != null) {
+        final createdPost = Post.fromJson(createdPostResp.data!);
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => GroupChatScreen(event: createdPost)),
         );
+      } else {
+        Navigator.pop(context, true);
       }
     } catch (e) {
       debugPrint('Error creating event: $e');

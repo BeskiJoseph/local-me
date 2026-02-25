@@ -97,7 +97,7 @@ class PostRepository {
     if (!response.success) throw response.error ?? "Action failed";
   }
 
-  Future<void> createEvent({
+  Future<String> createEvent({
     required String title,
     required String description,
     required String eventType,
@@ -134,6 +134,7 @@ class PostRepository {
     });
 
     if (!response.success) throw response.error ?? "Failed to create event";
+    return response.data!;
   }
 
   Stream<List<Post>> postsByScope(String scope) async* {

@@ -477,15 +477,23 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   }
 
   Widget _buildPostsTab() {
-    if (_posts.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No posts yet'));
+    final postOnlyItems = _posts.where((p) {
+      final category = p.category.toLowerCase();
+      final isArticle = category == 'article' || category == 'artizone';
+      final isEvent = p.isEvent || category == 'events';
+      final hasVisualMedia = p.mediaType == 'image' || p.mediaType == 'video';
+      return !isArticle && !isEvent && hasVisualMedia;
+    }).toList();
+
+    if (postOnlyItems.isEmpty && !_isLoadingPosts) {
+      return const Center(child: Text('No photo/video posts yet'));
     }
 
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: _posts.length + (_hasMore ? 1 : 0),
+      itemCount: postOnlyItems.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index == _posts.length) {
+        if (index == postOnlyItems.length) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _loadPosts();
           });
@@ -496,10 +504,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
             ),
           );
         }
-        final post = _posts[index];
-        if (post.isEvent || post.category.toLowerCase() == 'events') {
-          return EventPostCard(post: post);
-        }
+        final post = postOnlyItems[index];
         return NextdoorStylePostCard(
           post: post,
           initialIsLiked: _likedPostIds[post.id],
@@ -543,9 +548,12 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   }
 
   Widget _buildMediaGrid() {
-    final mediaPosts = _posts.where((p) => p.category == 'ArtiZone').toList();
+    final mediaPosts = _posts.where((p) {
+      final category = p.category.toLowerCase();
+      return category == 'article' || category == 'artizone';
+    }).toList();
     if (mediaPosts.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No ArtiZone posts yet'));
+      return const Center(child: Text('No article posts yet'));
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -570,10 +578,10 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
 
   Widget _buildEventsTab() {
     final eventPosts = _posts
-        .where((p) => (p.isEvent || p.category.toLowerCase() == 'events') && _myEventIds.contains(p.id))
+        .where((p) => p.isEvent || p.category.toLowerCase() == 'events')
         .toList();
     if (eventPosts.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No joined events yet'));
+      return const Center(child: Text('No events yet'));
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),

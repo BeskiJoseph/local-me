@@ -110,7 +110,7 @@ class PostService {
     });
   }
 
-  static Future<void> createEvent({
+  static Future<String> createEvent({
     required String title,
     required String description,
     required String eventType,
@@ -124,7 +124,7 @@ class PostService {
     String? mediaUrl,
     bool isFree = true,
   }) async {
-    await _repository.createEvent(
+    final createdEventId = await _repository.createEvent(
       title: title,
       description: description,
       eventType: eventType,
@@ -139,6 +139,7 @@ class PostService {
       isFree: isFree,
     );
     emit(FeedEvent(FeedEventType.postCreated, null));
+    return createdEventId;
   }
   static Stream<bool> isAttendingEventStream(String eventId, String userId) {
     return _repository.isAttendingEventStream(eventId, userId);

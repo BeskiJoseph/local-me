@@ -37,7 +37,6 @@ class NextdoorStylePostCard extends StatefulWidget {
 class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
   bool _isLiked = false;
   int _likeCount = 0;
-  bool _isLoadingLikeState = true;
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
   bool _isTogglingLike = false;
@@ -47,7 +46,6 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     super.initState();
     _likeCount = widget.post.likeCount;
     _isLiked = widget.initialIsLiked ?? widget.post.isLiked;
-    _isLoadingLikeState = false;
   }
 
 
@@ -64,19 +62,17 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
 
     setState(() {
       _optimisticLiked = newTarget;
-      _optimisticLikeCount = currentCount + (newTarget ? 1 : -1);
+      _optimisticLikeCount = (currentCount + (newTarget ? 1 : -1)).clamp(0, 1 << 30);
     });
 
     try {
       final response = await BackendService.toggleLike(widget.post.id);
       if (!response.success) throw response.error ?? "Toggle failed";
-      // Refresh real state from backend after small delay to let backend sync
-      final response2 = await BackendService.checkLikeState(widget.post.id);
-      if (mounted && response2.success) {
-        final data2 = response2.data!;
+      if (mounted) {
         setState(() {
-          _isLiked = data2['liked'] ?? false;
-          _likeCount = (data2['likeCount'] as num?)?.toInt() ?? widget.post.likeCount;
+          // Commit optimistic state instantly for smooth UX
+          _isLiked = newTarget;
+          _likeCount = _optimisticLikeCount ?? _likeCount;
           _optimisticLiked = null;
           _optimisticLikeCount = null;
         });
@@ -84,6 +80,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     } catch (e) {
       if (mounted) {
         setState(() {
+          // Roll back on failure
           _optimisticLiked = null;
           _optimisticLikeCount = null;
         });

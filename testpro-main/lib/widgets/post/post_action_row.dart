@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
@@ -25,11 +24,21 @@ class PostActionRow extends StatefulWidget {
 }
 
 class _PostActionRowState extends State<PostActionRow> {
+  bool _liked = false;
+  int _likeCount = 0;
+  bool _isLikeBusy = false;
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
-  Timer? _debounceTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _liked = widget.post.isLiked;
+    _likeCount = widget.post.likeCount;
+  }
 
   void _toggleLike(String userId, bool streamLiked, int streamCount) {
+    if (_isLikeBusy) return;
     final bool currentOptimistic = _optimisticLiked ?? streamLiked;
     final bool newTarget = !currentOptimistic;
 
@@ -43,39 +52,48 @@ class _PostActionRowState extends State<PostActionRow> {
     }
 
     setState(() {
+      _isLikeBusy = true;
       _optimisticLiked = newTarget;
       _optimisticLikeCount = newCount;
     });
 
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 200), () {
-      if (newTarget != streamLiked) {
-        final toggleFuture = widget.onLikeToggle != null
-            ? widget.onLikeToggle!(widget.post.id)
-            : BackendService.toggleLike(widget.post.id);
+    final toggleFuture = widget.onLikeToggle != null
+        ? widget.onLikeToggle!(widget.post.id)
+        : BackendService.toggleLike(widget.post.id);
 
-        toggleFuture.then((response) {
-          final bool success = response is bool ? response : (response as dynamic).success;
-          if (!success && mounted) {
-            setState(() {
-              _optimisticLiked = null;
-              _optimisticLikeCount = null;
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Action failed. Check connection.")),
-            );
-          }
+    toggleFuture.then((response) {
+      final bool success = response is bool ? response : (response as dynamic).success;
+      if (!mounted) return;
+      if (success) {
+        setState(() {
+          _liked = newTarget;
+          _likeCount = _optimisticLikeCount ?? _likeCount;
+          _optimisticLiked = null;
+          _optimisticLikeCount = null;
+          _isLikeBusy = false;
         });
+      } else {
+        setState(() {
+          _optimisticLiked = null;
+          _optimisticLikeCount = null;
+          _isLikeBusy = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Action failed. Check connection.")),
+        );
       }
-      _debounceTimer = null;
+    }).catchError((_) {
+      if (!mounted) return;
+      setState(() {
+        _optimisticLiked = null;
+        _optimisticLikeCount = null;
+        _isLikeBusy = false;
+      });
     });
   }
 
   @override
-  void dispose() {
-    _debounceTimer?.cancel();
-    super.dispose();
-  }
+  void dispose() => super.dispose();
 
   @override
   Widget build(BuildContext context) {
@@ -95,25 +113,12 @@ class _PostActionRowState extends State<PostActionRow> {
           final streamLiked = snapshot.data ?? widget.post.isLiked;
           final streamCount = widget.post.likeCount;
 
-          if (_optimisticLiked == streamLiked) {
-            // Reset optimistic state if it matches stream (eventually consistent)
-            // But be careful to avoid infinite loops if stream updates rapidly
-            // Actually, we usually want to keep optimistic state until user interaction settles.
-            // But if stream confirms our action, we can clear optimistic overrides.
-            // The original code tried to reset using addPostFrameCallback.
-             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _optimisticLiked != null && _debounceTimer == null) {
-                // Only reset if debounce timer is done (action submitted)
-                 setState(() {
-                  _optimisticLiked = null;
-                  _optimisticLikeCount = null;
-                });
-              }
-            });
+          if (!_isLikeBusy && snapshot.hasData) {
+            _liked = snapshot.data ?? _liked;
           }
 
-          final isLiked = _optimisticLiked ?? streamLiked;
-          final displayCount = _optimisticLikeCount ?? streamCount;
+          final isLiked = _optimisticLiked ?? _liked;
+          final displayCount = _optimisticLikeCount ?? _likeCount;
 
           return Row(
             children: [

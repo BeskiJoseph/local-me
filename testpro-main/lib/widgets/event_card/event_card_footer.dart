@@ -19,6 +19,8 @@ class EventCardFooter extends StatefulWidget {
 }
 
 class _EventCardFooterState extends State<EventCardFooter> {
+  bool _isLiked = false;
+  int _likeCount = 0;
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
   Stream<bool>? _isLikedStream;
@@ -27,6 +29,8 @@ class _EventCardFooterState extends State<EventCardFooter> {
   @override
   void initState() {
     super.initState();
+    _isLiked = widget.post.isLiked;
+    _likeCount = widget.post.likeCount;
     _initStreams();
   }
 
@@ -34,6 +38,10 @@ class _EventCardFooterState extends State<EventCardFooter> {
   void didUpdateWidget(covariant EventCardFooter oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.post.id != widget.post.id) {
+      _isLiked = widget.post.isLiked;
+      _likeCount = widget.post.likeCount;
+      _optimisticLiked = null;
+      _optimisticLikeCount = null;
       _initStreams();
     }
   }
@@ -156,33 +164,40 @@ class _EventCardFooterState extends State<EventCardFooter> {
           StreamBuilder<bool>(
             stream: _isLikedStream,
             builder: (context, snapshot) {
-              final streamLiked = snapshot.data ?? false;
-              final isLiked = _optimisticLiked ?? streamLiked;
-              final displayLikeCount = _optimisticLikeCount ?? widget.post.likeCount;
+              final effectiveLiked = _optimisticLiked ?? _isLiked;
+              final displayLikeCount = _optimisticLikeCount ?? _likeCount;
 
               return Row(
                 children: [
                   _buildActionButton(
-                    icon: isLiked ? Icons.favorite : Icons.favorite_border,
+                    icon: effectiveLiked ? Icons.favorite : Icons.favorite_border,
                     label: 'Useful',
                     count: displayLikeCount,
-                    isActive: isLiked,
+                    isActive: effectiveLiked,
                     onTap: () async {
                       if (user != null) {
-                        final bool currentLiked = _optimisticLiked ?? streamLiked;
+                        final bool currentLiked = _optimisticLiked ?? _isLiked;
                         final bool newTarget = !currentLiked;
                         
                         setState(() {
                           _optimisticLiked = newTarget;
                           _optimisticLikeCount = newTarget 
-                              ? (_optimisticLikeCount ?? widget.post.likeCount) + 1 
-                              : (_optimisticLikeCount ?? widget.post.likeCount) - 1;
+                              ? (_optimisticLikeCount ?? _likeCount) + 1 
+                              : (_optimisticLikeCount ?? _likeCount) - 1;
                           if (_optimisticLikeCount! < 0) _optimisticLikeCount = 0;
                         });
 
                         try {
                           final response = await BackendService.toggleLike(widget.post.id);
                           if (!response.success) throw response.error ?? "Toggle failed";
+                          if (mounted) {
+                            setState(() {
+                              _isLiked = newTarget;
+                              _likeCount = _optimisticLikeCount ?? _likeCount;
+                              _optimisticLiked = null;
+                              _optimisticLikeCount = null;
+                            });
+                          }
                         } catch (e) {
                           if (mounted) {
                             setState(() {

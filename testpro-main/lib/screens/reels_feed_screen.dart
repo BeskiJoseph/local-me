@@ -137,6 +137,11 @@ class _ReelPostItemState extends State<ReelPostItem> {
   bool _isInitialized = false;
   bool _showComments = false;
   final TextEditingController _commentController = TextEditingController();
+  bool _isLiked = false;
+  int _likeCount = 0;
+  bool _isLikeBusy = false;
+  bool _isFollowed = false;
+  bool _isFollowBusy = false;
   Stream<bool>? _isLikedStream;
   Stream<bool>? _isFollowedStream;
   late Stream _commentsStream;
@@ -144,6 +149,8 @@ class _ReelPostItemState extends State<ReelPostItem> {
   @override
   void initState() {
     super.initState();
+    _isLiked = widget.post.isLiked;
+    _likeCount = widget.post.likeCount;
     final user = AuthService.currentUser;
     _isLikedStream = user != null
         ? SocialService.isPostLikedStream(widget.post.id, user.uid)
@@ -161,6 +168,10 @@ class _ReelPostItemState extends State<ReelPostItem> {
   void didUpdateWidget(ReelPostItem oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.post.id != widget.post.id) {
+      _isLiked = widget.post.isLiked;
+      _likeCount = widget.post.likeCount;
+      _isLikeBusy = false;
+      _isFollowBusy = false;
       final user = AuthService.currentUser;
       _isLikedStream = user != null
           ? SocialService.isPostLikedStream(widget.post.id, user.uid)
@@ -556,24 +567,50 @@ class _ReelPostItemState extends State<ReelPostItem> {
     return StreamBuilder<bool>(
       stream: _isLikedStream,
       builder: (context, snapshot) {
-        final isLiked = snapshot.data ?? false;
+        if (!_isLikeBusy && snapshot.hasData) {
+          _isLiked = snapshot.data ?? _isLiked;
+        }
+        final isLiked = _isLiked;
         return _actionButton(
           isLiked ? Icons.favorite : Icons.favorite_border,
-          widget.post.likeCount.toString(),
+          _likeCount.toString(),
           () async {
+            if (_isLikeBusy) return;
+            final previousLiked = _isLiked;
+            final previousCount = _likeCount;
+            final nextLiked = !previousLiked;
+            setState(() {
+              _isLikeBusy = true;
+              _isLiked = nextLiked;
+              _likeCount = (previousCount + (nextLiked ? 1 : -1)).clamp(0, 1 << 30);
+            });
             try {
               final response = await BackendService.toggleLike(widget.post.id);
               if (!response.success) throw response.error ?? "Failed";
-              if (mounted) {
+
+              // Soft sync with server after success
+              final likeState = await BackendService.checkLikeState(widget.post.id);
+              if (mounted && likeState.success && likeState.data != null) {
                 setState(() {
-                  _isLikedStream = SocialService.isPostLikedStream(widget.post.id, user.uid);
+                  _isLiked = likeState.data!['liked'] == true;
+                  _likeCount = (likeState.data!['likeCount'] as num?)?.toInt() ?? _likeCount;
                 });
               }
             } catch (e) {
               if (!mounted) return;
+              setState(() {
+                _isLiked = previousLiked;
+                _likeCount = previousCount;
+              });
               ScaffoldMessenger.of(this.context).showSnackBar(
                 SnackBar(content: Text('Error: $e')),
               );
+            } finally {
+              if (mounted) {
+                setState(() {
+                  _isLikeBusy = false;
+                });
+              }
             }
           },
           color: isLiked ? Colors.red : Colors.white,
@@ -617,24 +654,37 @@ class _ReelPostItemState extends State<ReelPostItem> {
     return StreamBuilder<bool>(
       stream: _isFollowedStream,
       builder: (context, snapshot) {
-        final isFollowed = snapshot.data ?? false;
+        if (!_isFollowBusy && snapshot.hasData) {
+          _isFollowed = snapshot.data ?? _isFollowed;
+        }
+        final isFollowed = _isFollowed;
         return _actionButton(
           isFollowed ? Icons.person_remove_outlined : Icons.person_add_outlined,
           isFollowed ? 'Unfollow' : 'Follow',
           () async {
+            if (_isFollowBusy) return;
+            final previous = _isFollowed;
+            setState(() {
+              _isFollowBusy = true;
+              _isFollowed = !previous;
+            });
             try {
               final response = await BackendService.toggleFollow(widget.post.authorId);
               if (!response.success) throw response.error ?? "Failed";
-              if (mounted) {
-                setState(() {
-                  _isFollowedStream = SocialService.isUserFollowedStream(user.uid, widget.post.authorId);
-                });
-              }
             } catch (e) {
               if (!mounted) return;
+              setState(() {
+                _isFollowed = previous;
+              });
               ScaffoldMessenger.of(this.context).showSnackBar(
                 SnackBar(content: Text('Error: $e')),
               );
+            } finally {
+              if (mounted) {
+                setState(() {
+                  _isFollowBusy = false;
+                });
+              }
             }
           },
           color: isFollowed ? Colors.white : const Color(0xFF4C5EFF),
