@@ -62,6 +62,7 @@ class PostRepository {
       lat: pos?.latitude,
       lng: pos?.longitude,
       country: userCountry,
+      feedType: feedType, // Pass 'local' or 'global'
     );
     
     if (!response.success) throw response.error ?? "Failed to fetch feed";

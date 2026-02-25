@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
@@ -267,7 +268,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                     shape: BoxShape.circle,
                                     image: displayAvatar != null
                                         ? DecorationImage(
-                                            image: NetworkImage(ProxyHelper.getUrl(displayAvatar)),
+                                            image: CachedNetworkImageProvider(ProxyHelper.getUrl(displayAvatar)),
                                             fit: BoxFit.cover,
                                           )
                                         : null,
@@ -338,7 +339,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                     VideoPlayer(_videoController!),
                                     Container(
                                       decoration: BoxDecoration(
-                                        color: Colors.black.withOpacity(0.2),
+                                        color: Colors.black.withValues(alpha: 0.2),
                                       ),
                                     ),
                                     IconButton(

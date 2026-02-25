@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../models/post.dart';
 import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
 import '../services/post_service.dart';
 import '../utils/proxy_helper.dart';
-import '../screens/personal_account.dart';
+
 import '../screens/post_detail_screen.dart';
 import '../core/utils/time_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
+import '../core/utils/navigation_utils.dart';
 import 'package:intl/intl.dart';
 import 'dart:ui';
 
@@ -322,11 +324,7 @@ class _PostHeader extends StatelessWidget {
             GestureDetector(
               onTap: () {
                 if (user != null && post.authorId != user.uid) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => PersonalAccount(userId: post.authorId)),
-                  );
+                  NavigationUtils.navigateToProfile(context, post.authorId);
                 }
               },
               child: UserAvatar(
@@ -464,16 +462,15 @@ class _PostMedia extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Image.network(
-                  ProxyHelper.getUrl(
+                CachedNetworkImage(
+                  imageUrl: ProxyHelper.getUrl(
                       post.thumbnailUrl ?? post.mediaUrl!),
                   fit: BoxFit.cover,
-                  cacheWidth: 800,
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return Container(color: const Color(0xFFECECEC));
-                  },
-                  errorBuilder: (context, error, stack) => Container(
+                  memCacheWidth: 800,
+                  placeholder: (context, url) => Container(
+                    color: const Color(0xFFECECEC),
+                  ),
+                  errorWidget: (context, url, error) => Container(
                     color: const Color(0xFFECECEC),
                     child: const Icon(Icons.broken_image_outlined,
                         color: Color(0xFF8A8A8A)),

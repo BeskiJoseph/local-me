@@ -25,4 +25,13 @@ class CommentService {
     final response = await BackendService.addComment(postId, text);
     if (!response.success) throw response.error ?? "Failed to add comment via backend";
   }
+  
+  /// Future version for one-time comment fetching
+  static Future<List<Comment>> getComments(String postId) async {
+    final response = await BackendService.getComments(postId);
+    if (response.success && response.data != null) {
+      return response.data!.map<Comment>((json) => Comment.fromJson(json)).toList();
+    }
+    return [];
+  }
 }

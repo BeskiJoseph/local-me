@@ -22,9 +22,8 @@ class ProxyHelper {
     
     if (!forceProxy && !useProxyEnv) return originalUrl;
 
-    if (kDebugMode) {
-      debugPrint('Proxying media URL through backend: $originalUrl');
-    }
+    // Removed debug print to reduce console spam
+    // Images are now cached with CachedNetworkImage
 
     final encoded = Uri.encodeComponent(originalUrl);
     return '${MediaUploadService.baseUrl}/api/proxy?url=$encoded';

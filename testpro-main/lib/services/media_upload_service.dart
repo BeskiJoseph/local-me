@@ -21,11 +21,19 @@ class MediaUploadService {
   /// 
   /// Configure via --dart-define=API_URL=https://your-api.com
   /// Production deployments MUST set this environment variable.
+  static String? _cachedBaseUrl;
+  
   static String get baseUrl {
+    // Return cached value if available
+    if (_cachedBaseUrl != null) {
+      return _cachedBaseUrl!;
+    }
+    
     // 1. Prioritize build-time configuration (Production & CI/CD)
     const apiUrl = String.fromEnvironment('API_URL');
     if (apiUrl.isNotEmpty) {
-      return apiUrl;
+      _cachedBaseUrl = apiUrl;
+      return _cachedBaseUrl!;
     }
 
     // 2. Resolve default local URL based on platform (Development only)
@@ -37,10 +45,11 @@ class MediaUploadService {
     }
     
     if (kDebugMode) {
-       debugPrint('ℹ️ Using default API URL: $defaultUrl');
+       debugPrint('ℹ️ Using default API URL: $defaultUrl (cached)');
     }
     
-    return defaultUrl;
+    _cachedBaseUrl = defaultUrl;
+    return _cachedBaseUrl!;
   }
 
   static Future<String?> _upload({

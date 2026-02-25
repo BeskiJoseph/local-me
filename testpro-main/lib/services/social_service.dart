@@ -17,6 +17,10 @@ class SocialService {
   static Stream<bool> isPostLikedStream(String postId, String userId) {
     return _repository.isPostLikedStream(postId, userId);
   }
+  
+  static Future<bool> isPostLiked(String postId, String userId) {
+    return _repository.isPostLiked(postId, userId);
+  }
 
   static Future<void> toggleFollowUser(String targetUserId) {
     return _repository.toggleFollowUser(targetUserId);
@@ -28,6 +32,10 @@ class SocialService {
 
   static Stream<bool> isUserFollowedStream(String userId, String targetUserId) {
     return _repository.isUserFollowedStream(userId, targetUserId);
+  }
+  
+  static Future<bool> isUserFollowed(String userId, String targetUserId) {
+    return _repository.isUserFollowed(userId, targetUserId);
   }
 
   static Stream<List<Post>> likedPostsStream(String userId) {

@@ -97,7 +97,7 @@ class _InterestPickerScreenState extends State<InterestPickerScreen> {
                       color: isSelected ? null : Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
-                        color: isSelected ? Colors.transparent : Colors.grey.withOpacity(0.3),
+                        color: isSelected ? Colors.transparent : Colors.grey.withValues(alpha: 0.3),
                       ),
                     ),
                     alignment: Alignment.center,

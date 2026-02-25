@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../models/notification.dart';
 import '../services/auth_service.dart';
@@ -319,7 +320,7 @@ class _NotificationTile extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        color: notification.isRead ? Colors.transparent : AppTheme.primaryLight.withOpacity(0.4),
+        color: notification.isRead ? Colors.transparent : AppTheme.primaryLight.withValues(alpha: 0.4),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -372,7 +373,7 @@ class _NotificationTile extends StatelessWidget {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),
                   image: DecorationImage(
-                    image: NetworkImage(ProxyHelper.getUrl(notification.postThumbnail!)),
+                    image: CachedNetworkImageProvider(ProxyHelper.getUrl(notification.postThumbnail!)),
                     fit: BoxFit.cover,
                   ),
                 ),

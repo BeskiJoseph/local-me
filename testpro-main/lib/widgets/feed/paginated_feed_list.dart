@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/post_service.dart';
+import '../../services/backend_service.dart';
 import '../../core/state/feed_controller.dart';
+import '../../models/post.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
 
@@ -46,10 +48,8 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
 
     switch (event.type) {
       case FeedEventType.postCreated:
-        // For a true production app, we'd check if the new post matches 
-        // this feed's criteria (city, category, etc.)
-        // For now, we refresh to ensure correct sorting and data integrity
-        _loadMorePosts(refresh: true);
+        // Fetch only the new post instead of full refresh
+        _fetchAndPrependNewPost(event.data as String);
         break;
       case FeedEventType.postDeleted:
         _feedController.deletePost(event.data);
@@ -57,6 +57,35 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       case FeedEventType.eventMembershipChanged:
         // Membership changes affect community/event surfaces, not feed list items directly.
         break;
+    }
+  }
+  
+  Future<void> _fetchAndPrependNewPost(String postId) async {
+    try {
+      final response = await BackendService.getPost(postId);
+      if (response.success && response.data != null) {
+        final post = Post.fromJson(response.data!);
+        // Only add if it matches this feed's criteria
+        if (_shouldIncludePost(post)) {
+          _feedController.prependPost(post);
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching new post: $e');
+      // Fallback: refresh the feed
+      _loadMorePosts(refresh: true);
+    }
+  }
+  
+  bool _shouldIncludePost(Post post) {
+    // Check if post matches this feed's criteria
+    switch (widget.feedType) {
+      case 'local':
+        return post.city == widget.userCity;
+      case 'global':
+        return true;
+      default:
+        return true;
     }
   }
 

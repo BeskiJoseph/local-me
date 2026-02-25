@@ -197,12 +197,14 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       );
     }
 
-    final profile = _profile;
     final user = AuthService.currentUser;
     final isOwnProfile = user != null && profileUserId == user.uid;
     return ValueListenableBuilder(
       valueListenable: UserSession.current,
       builder: (context, sessionData, _) {
+        // Use fresh _profile data inside builder to ensure updates are reflected
+        final profile = _profile;
+        
         String fullNameFromProfile(UserProfile? p) {
           if (p == null) return '';
           final first = (p.firstName ?? '').trim();
@@ -212,6 +214,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
 
         String displayTitle = 'User';
         if (isOwnProfile) {
+          // Priority: Session (real-time) > Firebase Auth > Backend Profile
           if (sessionData?.displayName != null && sessionData!.displayName!.isNotEmpty) {
             displayTitle = sessionData.displayName!;
           } else if (user?.displayName != null && user!.displayName!.isNotEmpty) {
@@ -621,7 +624,7 @@ class _ActionBtn extends StatelessWidget {
           borderRadius: BorderRadius.circular(10), // Slightly tighter radius
           boxShadow: isOutlined ? null : [
             BoxShadow(
-              color: color.withOpacity(0.2),
+              color: color.withValues(alpha: 0.2),
               blurRadius: 8,
               offset: const Offset(0, 3),
             )

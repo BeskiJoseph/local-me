@@ -1,14 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
 import '../services/post_service.dart';
 import '../services/backend_service.dart';
-import '../models/post.dart';
-import 'group_chat_screen.dart';
 import 'package:geolocator/geolocator.dart';
 
 class CreateEventScreen extends StatefulWidget {
@@ -184,11 +181,8 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       if (!mounted) return;
 
       if (createdPostResp.success && createdPostResp.data != null) {
-        final createdPost = Post.fromJson(createdPostResp.data!);
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => GroupChatScreen(event: createdPost)),
-        );
+        // Return to Home with refresh signal instead of going to GroupChat
+        Navigator.pop(context, true);
       } else {
         Navigator.pop(context, true);
       }
@@ -510,7 +504,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           borderRadius: BorderRadius.circular(8),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: Colors.black.withValues(alpha: 0.04),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),

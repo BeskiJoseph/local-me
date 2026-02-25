@@ -5,6 +5,7 @@ import '../services/geocoding_service.dart';
 import '../services/user_service.dart';
 import '../services/notification_data_service.dart';
 import '../services/auth_service.dart';
+import '../models/notification.dart';
 import 'search_screen.dart';
 import 'activity_screen.dart';
 import 'personal_account.dart';
@@ -27,6 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _currentCountry;
   bool _isLoadingLocation = true;
   String? _locationError;
+  
+  // Cache profile to avoid duplicate API calls
+  dynamic _cachedProfile;
 
   // 0 = Nearby/Local, 1 = Global
   int _feedToggleIndex = 0;
@@ -64,9 +68,9 @@ class _HomeScreenState extends State<HomeScreen> {
             });
            }
         } else {
-          final profile = await UserService.getUserProfile(userId);
-          if (profile?.location != null && profile!.location!.isNotEmpty) {
-            final parts = profile.location!.split(',');
+          _cachedProfile = await UserService.getUserProfile(userId);
+          if (_cachedProfile?.location != null && _cachedProfile!.location!.isNotEmpty) {
+            final parts = _cachedProfile.location!.split(',');
             if (mounted) {
               setState(() {
                 _currentCity = parts[0].trim();
@@ -74,6 +78,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 _isLoadingLocation = false; // Allow feed to start loading with cached location
               });
             }
+            // Sync cached profile location to session for other screens
+            UserSession.update(id: userId, location: _cachedProfile.location);
           }
         }
       }
@@ -120,21 +126,23 @@ class _HomeScreenState extends State<HomeScreen> {
         _isLoadingLocation = false;
       });
 
-      // Sync to backend profile to avoid redundant requests in other screens (like "Me")
+      // Sync to backend profile AND session to avoid redundant requests in other screens (like "Me")
       if (userId != null && _currentCity != null) {
         final locationStr = _currentCountry != null 
             ? '$_currentCity, $_currentCountry' 
             : _currentCity!;
+        
+        // Update session immediately so other screens can access location without waiting
+        UserSession.update(id: userId, location: locationStr);
             
-        // Optimization: Only update if different from current profile
-        UserService.getUserProfile(userId).then((profile) {
-          if (profile?.location != locationStr) {
-            UserService.updateUserProfile(
-              userId: userId,
-              location: locationStr,
-            ).catchError((e) => debugPrint('Silent error syncing location: $e'));
-          }
-        });
+        // Optimization: Only update if different from cached profile location
+        final cachedLocation = _cachedProfile?.location;
+        if (cachedLocation != locationStr) {
+          UserService.updateUserProfile(
+            userId: userId,
+            location: locationStr,
+          ).catchError((e) => debugPrint('Silent error syncing location: $e'));
+        }
       }
     } catch (e) {
       debugPrint('Error detecting location: $e');
@@ -283,44 +291,8 @@ class _HomeAppBar extends StatelessWidget {
                     size: 26,
                   ),
                 ),
-                // Dynamic notification badge from stream
-                Builder(
-                  builder: (context) {
-                    final userId = AuthService.currentUser?.uid ?? '';
-                    if (userId.isEmpty) return const SizedBox.shrink();
-                    return StreamBuilder(
-                      stream: NotificationDataService.notificationsStream(userId),
-                      builder: (context, snapshot) {
-                        final notifications = snapshot.data ?? [];
-                        final unreadCount = notifications.where((n) => !n.isRead).length;
-                        if (unreadCount == 0) return const SizedBox.shrink();
-                        return Positioned(
-                          top: 4,
-                          right: 4,
-                          child: Container(
-                            width: 17,
-                            height: 17,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFE53935),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: Text(
-                                unreadCount > 9 ? '9+' : '$unreadCount',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  fontFamily: AppTheme.fontFamily,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
+                // Dynamic notification badge from stream - cached to avoid rebuilds
+                const _NotificationBadge(),
               ],
             ),
           ),
@@ -397,6 +369,60 @@ class _ToggleItem extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// Extracted widget to prevent stream recreation on parent rebuild
+class _NotificationBadge extends StatefulWidget {
+  const _NotificationBadge();
+
+  @override
+  State<_NotificationBadge> createState() => _NotificationBadgeState();
+}
+
+class _NotificationBadgeState extends State<_NotificationBadge> {
+  late final Stream<List<ActivityNotification>> _notificationsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    final userId = AuthService.currentUser?.uid ?? '';
+    _notificationsStream = NotificationDataService.notificationsStream(userId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<ActivityNotification>>(
+      stream: _notificationsStream,
+      builder: (context, snapshot) {
+        final notifications = snapshot.data ?? [];
+        final unreadCount = notifications.where((n) => !n.isRead).length;
+        if (unreadCount == 0) return const SizedBox.shrink();
+        return Positioned(
+          top: 4,
+          right: 4,
+          child: Container(
+            width: 17,
+            height: 17,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE53935),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                unreadCount > 9 ? '9+' : '$unreadCount',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: AppTheme.fontFamily,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../utils/proxy_helper.dart';
 
 /// A reusable user avatar widget with network image and initials fallback.
@@ -56,9 +57,9 @@ class UserAvatar extends StatelessWidget {
       radius: showGradientBorder ? radius - borderWidth : radius,
       backgroundColor: backgroundColor ?? Colors.grey[200],
       backgroundImage: imageUrl != null
-          ? ResizeImage(
-              NetworkImage(ProxyHelper.getUrl(imageUrl!)),
-              width: (radius * 4).toInt(),
+          ? CachedNetworkImageProvider(
+              ProxyHelper.getUrl(imageUrl!),
+              maxWidth: (radius * 4).toInt(),
             )
           : null,
       child: imageUrl == null ? _buildInitials() : null,

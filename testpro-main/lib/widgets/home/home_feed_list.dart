@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../services/post_service.dart';
-import '../../services/auth_service.dart';
 import '../../models/post.dart';
 import '../../models/paginated_response.dart';
 import '../../config/app_theme.dart';
-import '../../shared/widgets/user_avatar.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
-import '../../screens/post_type_selector_sheet.dart';
-import '../../core/session/user_session.dart';
 
 /// Feed list — owns its ScrollController, caches the stream,
 /// and uses AutomaticKeepAliveClientMixin to preserve scroll position.
@@ -44,14 +40,26 @@ class _HomeFeedListState extends State<HomeFeedList>
   String? _futureFeedType;
   String? _futureCity;
   String? _futureCountry;
+  
+  // Static cache to persist posts across navigation
+  static final Map<String, PaginatedResponse<Post>> _postsCache = {};
 
   @override
   bool get wantKeepAlive => true;
+  
+  String get _cacheKey => '${widget.feedType}_${widget.userCity}_${widget.userCountry}';
 
   @override
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    // Restore from cache if available
+    if (_postsCache.containsKey(_cacheKey)) {
+      _feedFuture = Future.value(_postsCache[_cacheKey]);
+      _futureFeedType = widget.feedType;
+      _futureCity = widget.userCity;
+      _futureCountry = widget.userCountry;
+    }
   }
 
   @override
@@ -81,6 +89,7 @@ class _HomeFeedListState extends State<HomeFeedList>
 
   /// Public method to force feed refresh (called after post creation)
   void refreshFeed() {
+    _postsCache.remove(_cacheKey); // Clear cache
     setState(() {
       _feedFuture = null;
     });
@@ -131,12 +140,12 @@ class _HomeFeedListState extends State<HomeFeedList>
     return FutureBuilder<PaginatedResponse<Post>>(
       future: _getFuture(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && _feedFuture != null) {
+        if (snapshot.connectionState == ConnectionState.waiting && _feedFuture != null && !_postsCache.containsKey(_cacheKey)) {
           return const Center(
               child: CircularProgressIndicator(color: AppTheme.primary));
         }
 
-        if (snapshot.hasError) {
+        if (snapshot.hasError && !_postsCache.containsKey(_cacheKey)) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -146,7 +155,12 @@ class _HomeFeedListState extends State<HomeFeedList>
           );
         }
 
-        final response = snapshot.data;
+        // Cache successful response
+        if (snapshot.hasData && snapshot.data != null) {
+          _postsCache[_cacheKey] = snapshot.data!;
+        }
+
+        final response = snapshot.data ?? _postsCache[_cacheKey];
         final posts = response?.data ?? [];
         
         final filteredPosts = widget.searchQuery.isEmpty
@@ -211,19 +225,15 @@ class _HomeFeedListState extends State<HomeFeedList>
           child: ListView.separated(
             controller: _scrollController,
             physics: const AlwaysScrollableScrollPhysics(),
-            // top = 0 so "Create Post" bar sits flush under the toggle
+            // Removed "Create Post" bar from top of feed
             padding: const EdgeInsets.only(top: 0, bottom: 100),
-            itemCount: filteredPosts.length + 1, // +1 for Create Post bar
+            itemCount: filteredPosts.length,
             separatorBuilder: (context, index) => Container(
               height: 10,
               color: const Color(0xFFF2F2F2), // slightly lighter thick gray
             ),
             itemBuilder: (context, index) {
-              // First item = "Create Post..." bar
-              if (index == 0) {
-                return const _CreatePostBar();
-              }
-              final post = filteredPosts[index - 1];
+              final post = filteredPosts[index];
               // Route to EventPostCard if isEvent OR category is Events
               if (post.isEvent || post.category.toLowerCase() == 'events') {
                 return EventPostCard(post: post);
@@ -241,64 +251,6 @@ class _HomeFeedListState extends State<HomeFeedList>
 }
 
 // ─────────────────────────────────────────────────────────────
-// "Create Post..." bar — matches screenshot exactly
-// White card, user avatar, placeholder text
+// "Create Post..." bar — REMOVED from feed as per request
+// Use bottom nav Create button instead
 // ─────────────────────────────────────────────────────────────
-class _CreatePostBar extends StatelessWidget {
-  const _CreatePostBar();
-
-  @override
-  Widget build(BuildContext context) {
-    final user = AuthService.currentUser;
-
-    return GestureDetector(
-      onTap: () {
-        showModalBottomSheet(
-          context: context,
-          backgroundColor: Colors.transparent,
-          isScrollControlled: true,
-          builder: (_) => const PostTypeSelectorSheet(),
-        );
-      },
-      child: Container(
-        color: Colors.white,
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF7F8FA), // subtle light gray background for the inner pill
-            borderRadius: BorderRadius.circular(30), // fully rounded pill
-          ),
-          child: Row(
-            children: [
-              ValueListenableBuilder(
-                valueListenable: UserSession.current,
-                builder: (context, sessionData, _) {
-                  final displayAvatar = sessionData?.avatarUrl ?? user?.photoURL;
-                  final displayName = sessionData?.displayName ?? user?.displayName ?? user?.email?.split('@')[0] ?? 'You';
-                  return UserAvatar(
-                    imageUrl: displayAvatar,
-                    name: displayName,
-                    radius: 18,
-                    backgroundColor: AppTheme.primaryLight,
-                    initialsColor: AppTheme.primary,
-                  );
-                }
-              ),
-              const SizedBox(width: 12),
-              const Text(
-                'Create Post...',
-                style: TextStyle(
-                  fontFamily: AppTheme.fontFamily,
-                  fontSize: 15,
-                  color: Color(0xFF8A8A8A),
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}

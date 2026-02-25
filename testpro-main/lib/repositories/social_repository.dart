@@ -11,11 +11,23 @@ class SocialRepository {
     if (!response.success) throw response.error ?? "Failed to toggle like";
   }
 
+  /// Returns a single-boolean stream for like state.
+  /// NOTE: This creates a new API call every time it's called.
+  /// Consider caching the result in the widget layer.
   Stream<bool> isPostLikedStream(String postId, String userId) async* {
     final response = await BackendService.checkLikeState(postId);
     if (response.success) {
       yield response.data!['liked'] == true;
     }
+  }
+  
+  /// Future version - use this when you only need the value once
+  Future<bool> isPostLiked(String postId, String userId) async {
+    final response = await BackendService.checkLikeState(postId);
+    if (response.success) {
+      return response.data!['liked'] == true;
+    }
+    return false;
   }
 
   Future<void> toggleFollowUser(String targetUserId) async {
@@ -23,11 +35,23 @@ class SocialRepository {
     if (!response.success) throw response.error ?? "Failed to toggle follow";
   }
 
+  /// Returns a single-boolean stream for follow state.
+  /// NOTE: This creates a new API call every time it's called.
+  /// Consider caching the result in the widget layer.
   Stream<bool> isUserFollowedStream(String userId, String targetUserId) async* {
     final response = await BackendService.checkFollowState(targetUserId);
     if (response.success) {
       yield response.data!;
     }
+  }
+  
+  /// Future version - use this when you only need the value once
+  Future<bool> isUserFollowed(String userId, String targetUserId) async {
+    final response = await BackendService.checkFollowState(targetUserId);
+    if (response.success) {
+      return response.data!;
+    }
+    return false;
   }
 
   Stream<List<UserProfile>> followersStream(String userId) async* {

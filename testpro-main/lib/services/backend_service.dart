@@ -38,6 +38,7 @@ class BackendService {
     String? country,
     double? lat,
     double? lng,
+    String? feedType, // 'local' or 'global'
     int limit = 20,
     String? afterId,
   }) => _instance.getPosts(
@@ -47,6 +48,7 @@ class BackendService {
     country: country,
     lat: lat,
     lng: lng,
+    feedType: feedType,
     limit: limit,
     afterId: afterId,
   );
@@ -386,6 +388,7 @@ class BackendClient {
     String? country,
     double? lat, 
     double? lng,
+    String? feedType, // 'local' or 'global'
     int limit = 20, 
     String? afterId
   }) async {
@@ -397,6 +400,7 @@ class BackendClient {
         if (country != null) 'country': country,
         if (lat != null) 'lat': lat.toString(),
         if (lng != null) 'lng': lng.toString(),
+        if (feedType != null) 'feedType': feedType,
         if (afterId != null) 'afterId': afterId,
         'limit': limit.toString(),
       });

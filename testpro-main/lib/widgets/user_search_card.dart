@@ -61,12 +61,11 @@ class _UserSearchCardState extends State<UserSearchCard> {
     });
 
     try {
-      await BackendService.toggleFollow(widget.userId);
-      // Optional: Refresh actual state from backend
-      final response = await BackendService.checkFollowState(widget.userId);
+      final response = await BackendService.toggleFollow(widget.userId);
+      // Trust the toggle response, no need for second API call
       if (mounted && response.success) {
         setState(() {
-          _isFollowing = response.data ?? false;
+          _isFollowing = response.data ?? !_isFollowing;
         });
       }
     } catch (e) {

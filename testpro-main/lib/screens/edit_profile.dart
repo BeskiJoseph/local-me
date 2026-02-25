@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import '../models/user_profile.dart';
 import '../services/backend_service.dart';
@@ -33,15 +34,34 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   void initState() {
     super.initState();
     final user = AuthService.currentUser;
+    final session = UserSession.current.value;
     String nameToSet = '';
+    String locationToSet = LocationService.getLocationString();
+    String aboutToSet = '';
     
-    if (widget.profile != null) {
+    // Priority 1: UserSession (fresh data after edit)
+    if (session?.displayName != null && session!.displayName!.isNotEmpty) {
+      nameToSet = session.displayName!;
+    }
+    if (session?.location != null && session!.location!.isNotEmpty) {
+      locationToSet = session.location!;
+    }
+    
+    // Priority 2: Passed profile (fallback)
+    if (nameToSet.isEmpty && widget.profile != null) {
       nameToSet = widget.profile!.displayName ?? widget.profile!.username;
-      if (nameToSet.isEmpty || nameToSet == 'User' || nameToSet == 'Unknown') {
-        nameToSet = user?.displayName ?? user?.email?.split('@')[0] ?? '';
+    }
+    if (widget.profile != null) {
+      aboutToSet = widget.profile!.about ?? '';
+      // Only use profile location if session doesn't have it
+      if (session?.location == null || session!.location!.isEmpty) {
+        locationToSet = widget.profile!.location ?? locationToSet;
       }
-      _locationController.text = widget.profile!.location ?? LocationService.getLocationString();
-      _aboutController.text = widget.profile!.about ?? '';
+    }
+    
+    // Priority 3: Firebase Auth (fallback)
+    if (nameToSet.isEmpty || nameToSet == 'User' || nameToSet == 'Unknown') {
+      nameToSet = user?.displayName ?? user?.email?.split('@')[0] ?? '';
     }
 
     // Final safety check: if still empty, use email prefix
@@ -50,6 +70,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
     
     _nameController.text = nameToSet;
+    _locationController.text = locationToSet;
+    _aboutController.text = aboutToSet;
     if (kDebugMode) debugPrint('👤 EditProfile initialized with name: "$nameToSet"');
   }
 
@@ -221,7 +243,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                               border: Border.all(color: Colors.white, width: 4),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
+                                  color: Colors.black.withValues(alpha: 0.05),
                                   blurRadius: 10,
                                   offset: const Offset(0, 4),
                                 ),
@@ -230,7 +252,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                 ? DecorationImage(image: FileImage(_imageFile!), fit: BoxFit.cover)
                                 : (widget.profile?.profileImageUrl != null 
                                     ? DecorationImage(
-                                        image: NetworkImage(ProxyHelper.getUrl(widget.profile!.profileImageUrl!)),
+                                        image: CachedNetworkImageProvider(ProxyHelper.getUrl(widget.profile!.profileImageUrl!)),
                                         fit: BoxFit.cover,
                                       )
                                     : null),

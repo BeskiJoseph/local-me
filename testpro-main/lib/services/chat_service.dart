@@ -4,13 +4,15 @@ import '../models/chat_message.dart';
 import 'backend_service.dart';
 
 class ChatService {
-  /// Stream that emits immediately with current messages, then polls every 2 seconds
+  /// Stream that emits immediately with current messages, then polls every 5 seconds
+  /// Increased from 2s to reduce API calls while maintaining near-real-time feel
   static Stream<List<ChatMessage>> messagesStream(String eventId) async* {
     // Emit immediately on open
     yield await _fetchMessages(eventId);
 
-    // Then poll every 2 seconds for near-real-time chat.
-    await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
+    // Then poll every 5 seconds for near-real-time chat.
+    // User's own messages appear instantly via optimistic UI.
+    await for (final _ in Stream.periodic(const Duration(seconds: 5))) {
       yield await _fetchMessages(eventId);
     }
   }

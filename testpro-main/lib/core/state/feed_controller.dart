@@ -60,6 +60,14 @@ class FeedController extends ChangeNotifier {
     }
   }
 
+  /// Prepend a new post to the feed (for optimistic post creation)
+  void prependPost(Post post) {
+    if (!_posts.any((p) => p.id == post.id)) {
+      _posts.insert(0, post);
+      notifyListeners();
+    }
+  }
+
   void setLoading(bool loading) {
     isLoading = loading;
     notifyListeners();

@@ -6,7 +6,7 @@ import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
 import '../../shared/widgets/user_avatar.dart';
 import '../../screens/post_detail_screen.dart';
-import '../../screens/personal_account.dart';
+import '../../core/utils/navigation_utils.dart';
 import '../../screens/group_chat_screen.dart';
 
 class EventCardFooter extends StatefulWidget {
@@ -57,12 +57,7 @@ class _EventCardFooterState extends State<EventCardFooter> {
   }
 
   void _navigateToUserProfile() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PersonalAccount(userId: widget.post.authorId),
-      ),
-    );
+    NavigationUtils.navigateToProfile(context, widget.post.authorId);
   }
 
   Widget _buildActionButton({

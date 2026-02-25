@@ -105,10 +105,10 @@ class AppTheme {
 
   // ── Shadows ───────────────────────────────────────────────
   static List<BoxShadow> get cardShadow => [
-    BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12, offset: const Offset(0, 4)),
+    BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 4)),
   ];
   static List<BoxShadow> get glowShadow => [
-    BoxShadow(color: primary.withOpacity(0.25), blurRadius: 20, offset: const Offset(0, 8)),
+    BoxShadow(color: primary.withValues(alpha: 0.25), blurRadius: 20, offset: const Offset(0, 8)),
   ];
 
   // ── Gradients (kept for legacy) ───────────────────────────
@@ -130,7 +130,6 @@ class AppTheme {
 
   // ── Light Theme ───────────────────────────────────────────
   static ThemeData lightTheme = ThemeData(
-    useMaterial3: true,
     brightness: Brightness.light,
     primaryColor: primary,
     scaffoldBackgroundColor: background,
@@ -139,12 +138,10 @@ class AppTheme {
       primary: primary,
       secondary: primaryLight,
       surface: cardWhite,
-      background: background,
       error: Color(0xFFE53935),
       onPrimary: Colors.white,
       onSecondary: textPrimary,
       onSurface: textPrimary,
-      onBackground: textPrimary,
     ),
 
     appBarTheme: const AppBarTheme(
@@ -270,7 +267,6 @@ class AppTheme {
 
   // ── Dark Theme (unchanged structure, updated colors) ──────
   static ThemeData darkTheme = ThemeData(
-    useMaterial3: true,
     brightness: Brightness.dark,
     primaryColor: primary,
     scaffoldBackgroundColor: darkBackground,
@@ -278,12 +274,10 @@ class AppTheme {
       primary: primary,
       secondary: primaryLight,
       surface: darkSurface,
-      background: darkBackground,
       error: Color(0xFFE53935),
       onPrimary: Colors.white,
       onSecondary: Colors.white,
       onSurface: darkText,
-      onBackground: darkText,
     ),
     appBarTheme: const AppBarTheme(
       backgroundColor: darkBackground,
@@ -304,10 +298,10 @@ class AppTheme {
 
   static BoxDecoration glassDecoration({Color? color, double borderRadius = radiusMedium, double blur = 10}) {
     return BoxDecoration(
-      color: (color ?? Colors.white).withOpacity(0.1),
+      color: (color ?? Colors.white).withValues(alpha: 0.1),
       borderRadius: BorderRadius.circular(borderRadius),
-      border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.5),
-      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: blur, offset: const Offset(0, 4))],
+      border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1.5),
+      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: blur, offset: const Offset(0, 4))],
     );
   }
 }

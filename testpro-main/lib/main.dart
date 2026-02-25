@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'screens/welcome_screen.dart';
-import 'screens/main_navigation_screen.dart';
+import 'screens/home_screen.dart';
 import 'services/auth_service.dart';
 import 'firebase_options.dart';
 import 'services/notification_service.dart';
@@ -30,7 +30,6 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'LocalMe',
       theme: AppTheme.lightTheme.copyWith(
-        useMaterial3: true,
         splashFactory: NoSplash.splashFactory,
         highlightColor: Colors.transparent,
         scaffoldBackgroundColor: AppTheme.background,
@@ -48,7 +47,7 @@ class MyApp extends StatelessWidget {
                 name: user.displayName,
                 avatar: user.photoURL,
               );
-              return const MainNavigationScreen();
+              return const HomeScreen();
             } else {
               // Ensure we dump cache on sign out
               UserSession.clear();

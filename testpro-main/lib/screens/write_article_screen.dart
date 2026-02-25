@@ -385,7 +385,7 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC).withOpacity(0.3),
+                      color: const Color(0xFFF8FAFC).withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: const Color(0xFFF1F5F9)),
                     ),
@@ -435,7 +435,7 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
                               border: Border.all(color: const Color(0xFFE2E8F0)),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.black.withOpacity(0.02),
+                                  color: Colors.black.withValues(alpha: 0.02),
                                   blurRadius: 4,
                                   offset: const Offset(0, 1),
                                 ),

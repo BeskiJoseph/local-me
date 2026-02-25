@@ -48,7 +48,7 @@ class PostTypeSelectorSheet extends StatelessWidget {
             _PostTypeOption(
               icon: Icons.chat_bubble_outline,
               iconColor: const Color(0xFF00B87C),
-              iconBackground: const Color(0xFF00B87C).withOpacity(0.1),
+              iconBackground: const Color(0xFF00B87C).withValues(alpha: 0.1),
               title: 'Share your thoughts',
               subtitle: 'Post text, images, or videos',
               onTap: () {
@@ -68,7 +68,7 @@ class PostTypeSelectorSheet extends StatelessWidget {
             _PostTypeOption(
               icon: Icons.celebration,
               iconColor: const Color(0xFFFF6B6B),
-              iconBackground: const Color(0xFFFF6B6B).withOpacity(0.1),
+              iconBackground: const Color(0xFFFF6B6B).withValues(alpha: 0.1),
               title: 'Event',
               subtitle: 'Create an event with date and location',
               onTap: () {

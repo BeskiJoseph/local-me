@@ -380,11 +380,14 @@ class _NewPostScreenState extends State<NewPostScreen> {
                     icon: Icons.article_outlined,
                     label: 'Article',
                     iconColor: const Color(0xFF4285F4),
-                    onTap: () {
-                      Navigator.push(
+                    onTap: () async {
+                      final result = await Navigator.push(
                         context,
                         MaterialPageRoute(builder: (_) => const WriteArticleScreen()),
                       );
+                      if (result == true && mounted) {
+                        Navigator.pop(context, true); // Return to Home with refresh signal
+                      }
                     },
                   ),
                   const SizedBox(width: 8),
@@ -392,11 +395,14 @@ class _NewPostScreenState extends State<NewPostScreen> {
                     icon: Icons.calendar_today,
                     label: 'Event',
                     iconColor: const Color(0xFFEA4335),
-                    onTap: () {
-                      Navigator.push(
+                    onTap: () async {
+                      final result = await Navigator.push(
                         context,
                         MaterialPageRoute(builder: (_) => const CreateEventScreen()),
                       );
+                      if (result == true && mounted) {
+                        Navigator.pop(context, true); // Return to Home with refresh signal
+                      }
                     },
                   ),
                 ],
@@ -515,7 +521,7 @@ class _PostBtn extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFF2E7D6A).withOpacity(isLoading ? 0.6 : 1.0),
+          color: const Color(0xFF2E7D6A).withValues(alpha: isLoading ? 0.6 : 1.0),
           borderRadius: BorderRadius.circular(20),
         ),
         child: isLoading

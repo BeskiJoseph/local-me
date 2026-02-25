@@ -332,7 +332,8 @@ async function embedLikeState(responseData, userId) {
  */
 router.get('/', authenticate, async (req, res, next) => {
     try {
-        const { authorId, category, city, lat, lng, country, limit = 20, afterId } = req.query;
+        const { authorId, category, city, lat, lng, country, feedType, limit = 20, afterId } = req.query;
+        const isLocalFeed = feedType === 'local';
         logger.info({
             query: { lat, lng, category, city, country, afterId },
             user: { uid: req.user.uid, country: req.user.country }
@@ -364,9 +365,9 @@ router.get('/', authenticate, async (req, res, next) => {
             } else {
                 // ∩┐╜∩┐╜∩┐╜ 3. Query Construction & Execution ∩┐╜∩┐╜∩┐╜
                 const fetchPromise = (async () => {
-                    // ∩┐╜∩┐╜∩┐╜ Progressive Multi-Ring Fetch (Local Feed Upgrade) ∩┐╜∩┐╜∩┐╜
-                    // ∩┐╜∩┐╜∩┐╜ Progressive Multi-Ring Fetch (Local Feed Upgrade) ∩┐╜∩┐╜∩┐╜
-                    if (lat && lng && !authorId && !category && !city && !afterId) {
+                    // ∩┐╜∩┐╜∩┐╜ Progressive Multi-Ring Fetch (Local Feed Only) ∩┐╜∩┐╜∩┐╜
+                    // Only use geo-rings for local feed with location available
+                    if (isLocalFeed && lat && lng && !authorId && !category && !city && !afterId) {
                         logger.debug({ lat, lng }, 'Executing Multi-Ring expansion');
                         const results = [];
                         const seenIds = new Set();
@@ -430,17 +431,28 @@ router.get('/', authenticate, async (req, res, next) => {
                             }
                         }
 
+                        // Sort results by distance from user (nearest first)
+                        const sortedResults = results.map(post => {
+                            const distance = getDistance(
+                                parseFloat(lat), 
+                                parseFloat(lng), 
+                                post.latitude || post.location?.lat, 
+                                post.longitude || post.location?.lng
+                            );
+                            return { ...post, distance };
+                        }).sort((a, b) => a.distance - b.distance);
+
                         return {
                             success: true,
-                            data: results,
+                            data: sortedResults,
                             pagination: {
-                                cursor: results.length > 0 ? results[results.length - 1].id : null,
-                                hasMore: results.length === pageSize
+                                cursor: sortedResults.length > 0 ? sortedResults[sortedResults.length - 1].id : null,
+                                hasMore: sortedResults.length === pageSize
                             }
                         };
                     }
 
-                    // ∩┐╜∩┐╜∩┐╜ Default Single-Query Logic (Filtered or Paginated) ∩┐╜∩┐╜∩┐╜
+                    // ∩┐╜∩┐╜∩┐╜ Default Single-Query Logic (Global Feed or Paginated) ∩┐╜∩┐╜∩┐╜
                     let query = db.collection('posts')
                         .where('visibility', '==', 'public')
                         .where('status', '==', 'active');
@@ -448,8 +460,12 @@ router.get('/', authenticate, async (req, res, next) => {
                     if (authorId) query = query.where('authorId', '==', authorId);
                     if (category) query = query.where('category', '==', category);
                     if (city) query = query.where('city', '==', city);
-                    if (geoHash && !authorId && !category && !city) {
-                        query = query.where('geoHash', '==', geoHash);
+                    
+                    // For local feed without multi-ring (pagination case), use geohash prefix
+                    if (isLocalFeed && geoHash && !authorId && !category && !city) {
+                        // Use prefix match for broader area (~5km)
+                        query = query.where('geoHash', '>=', geoHash)
+                                     .where('geoHash', '<=', geoHash + '\uf8ff');
                     }
 
                     query = query.orderBy('createdAt', 'desc');
@@ -476,13 +492,32 @@ router.get('/', authenticate, async (req, res, next) => {
                         throw indexErr;
                     }
 
-                    const posts = snapshot.docs.map(mapDocToPost);
+                    let posts = snapshot.docs.map(mapDocToPost);
+                    
+                    // Sort by distance for local feed if lat/lng provided
+                    if (isLocalFeed && lat && lng) {
+                        posts = posts.map(post => {
+                            const distance = getDistance(
+                                parseFloat(lat), 
+                                parseFloat(lng), 
+                                post.latitude || post.location?.lat, 
+                                post.longitude || post.location?.lng
+                            );
+                            return { ...post, distance };
+                        }).sort((a, b) => a.distance - b.distance);
+                    } else if (!isLocalFeed) {
+                        // Global feed: Sort by trending score (likes + comments)
+                        posts = posts.map(post => {
+                            const trendingScore = (post.likeCount || 0) + (post.commentCount || 0) * 2;
+                            return { ...post, trendingScore };
+                        }).sort((a, b) => b.trendingScore - a.trendingScore);
+                    }
 
                     return {
                         success: true,
                         data: posts,
                         pagination: {
-                            cursor: snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1].id : null,
+                            cursor: posts.length > 0 ? posts[posts.length - 1].id : null,
                             hasMore: posts.length === pageSize
                         }
                     };

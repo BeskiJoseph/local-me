@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../models/post.dart';
+import '../models/comment.dart';
 import '../services/social_service.dart';
 import '../services/comment_service.dart';
 import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
-import 'personal_account.dart';
+import '../core/utils/navigation_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 
 class ReelsFeedScreen extends StatefulWidget {
@@ -142,25 +143,41 @@ class _ReelPostItemState extends State<ReelPostItem> {
   bool _isLikeBusy = false;
   bool _isFollowed = false;
   bool _isFollowBusy = false;
-  Stream<bool>? _isLikedStream;
-  Stream<bool>? _isFollowedStream;
-  late Stream _commentsStream;
+  
+  // Use Future instead of Stream for one-shot data to prevent API calls on every rebuild
+  Future<bool>? _isLikedFuture;
+  Future<bool>? _isFollowedFuture;
+  Future<List<Comment>>? _commentsFuture;
+  
+  // Cache results to avoid redundant API calls
+  bool? _cachedIsLiked;
+  bool? _cachedIsFollowed;
+  List<Comment>? _cachedComments;
 
   @override
   void initState() {
     super.initState();
     _isLiked = widget.post.isLiked;
     _likeCount = widget.post.likeCount;
-    final user = AuthService.currentUser;
-    _isLikedStream = user != null
-        ? SocialService.isPostLikedStream(widget.post.id, user.uid)
-        : Stream.value(false);
-    _isFollowedStream = user != null && user.uid != widget.post.authorId
-        ? SocialService.isUserFollowedStream(user.uid, widget.post.authorId)
-        : Stream.value(false);
-    _commentsStream = CommentService.commentsStream(widget.post.id);
+    _initializeFutures();
     if (widget.isCurrentPage) {
       _initializeMedia();
+    }
+  }
+  
+  void _initializeFutures() {
+    final user = AuthService.currentUser;
+    if (user != null && _cachedIsLiked == null) {
+      _isLikedFuture = SocialService.isPostLiked(widget.post.id, user.uid)
+        ..then((value) => _cachedIsLiked = value);
+    }
+    if (user != null && user.uid != widget.post.authorId && _cachedIsFollowed == null) {
+      _isFollowedFuture = SocialService.isUserFollowed(user.uid, widget.post.authorId)
+        ..then((value) => _cachedIsFollowed = value);
+    }
+    if (_cachedComments == null) {
+      _commentsFuture = CommentService.getComments(widget.post.id)
+        ..then((value) => _cachedComments = value);
     }
   }
 
@@ -172,14 +189,11 @@ class _ReelPostItemState extends State<ReelPostItem> {
       _likeCount = widget.post.likeCount;
       _isLikeBusy = false;
       _isFollowBusy = false;
-      final user = AuthService.currentUser;
-      _isLikedStream = user != null
-          ? SocialService.isPostLikedStream(widget.post.id, user.uid)
-          : Stream.value(false);
-      _isFollowedStream = user != null && user.uid != widget.post.authorId
-          ? SocialService.isUserFollowedStream(user.uid, widget.post.authorId)
-          : Stream.value(false);
-      _commentsStream = CommentService.commentsStream(widget.post.id);
+      // Clear cache for new post
+      _cachedIsLiked = null;
+      _cachedIsFollowed = null;
+      _cachedComments = null;
+      _initializeFutures();
     }
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
       if (_videoController == null) {
@@ -283,14 +297,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                 final currentUser = AuthService.currentUser;
                                 if (currentUser != null && 
                                     widget.post.authorId != currentUser.uid) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => PersonalAccount(
-                                        userId: widget.post.authorId,
-                                      ),
-                                    ),
-                                  );
+                                  NavigationUtils.navigateToProfile(context, widget.post.authorId);
                                 }
                               },
                               child: Row(
@@ -564,13 +571,15 @@ class _ReelPostItemState extends State<ReelPostItem> {
       );
     }
 
-    return StreamBuilder<bool>(
-      stream: _isLikedStream,
+    return FutureBuilder<bool>(
+      future: _isLikedFuture,
       builder: (context, snapshot) {
-        if (!_isLikeBusy && snapshot.hasData) {
+        if (!_isLikeBusy && snapshot.hasData && _cachedIsLiked == null) {
+          _cachedIsLiked = snapshot.data;
           _isLiked = snapshot.data ?? _isLiked;
         }
-        final isLiked = _isLiked;
+        // Use cached value if available
+        final isLiked = _cachedIsLiked ?? _isLiked;
         return _actionButton(
           isLiked ? Icons.favorite : Icons.favorite_border,
           _likeCount.toString(),
@@ -587,15 +596,9 @@ class _ReelPostItemState extends State<ReelPostItem> {
             try {
               final response = await BackendService.toggleLike(widget.post.id);
               if (!response.success) throw response.error ?? "Failed";
-
-              // Soft sync with server after success
-              final likeState = await BackendService.checkLikeState(widget.post.id);
-              if (mounted && likeState.success && likeState.data != null) {
-                setState(() {
-                  _isLiked = likeState.data!['liked'] == true;
-                  _likeCount = (likeState.data!['likeCount'] as num?)?.toInt() ?? _likeCount;
-                });
-              }
+              
+              // Trust the toggle response - no extra API call needed
+              // The optimistic update already set the UI state
             } catch (e) {
               if (!mounted) return;
               setState(() {
@@ -651,13 +654,15 @@ class _ReelPostItemState extends State<ReelPostItem> {
       return const SizedBox.shrink();
     }
 
-    return StreamBuilder<bool>(
-      stream: _isFollowedStream,
+    return FutureBuilder<bool>(
+      future: _isFollowedFuture,
       builder: (context, snapshot) {
-        if (!_isFollowBusy && snapshot.hasData) {
+        if (!_isFollowBusy && snapshot.hasData && _cachedIsFollowed == null) {
+          _cachedIsFollowed = snapshot.data;
           _isFollowed = snapshot.data ?? _isFollowed;
         }
-        final isFollowed = _isFollowed;
+        // Use cached value if available
+        final isFollowed = _cachedIsFollowed ?? _isFollowed;
         return _actionButton(
           isFollowed ? Icons.person_remove_outlined : Icons.person_add_outlined,
           isFollowed ? 'Unfollow' : 'Follow',
@@ -725,14 +730,14 @@ class _ReelPostItemState extends State<ReelPostItem> {
   }
 
   Widget _buildCommentsList(ScrollController scrollController) {
-    return StreamBuilder(
-      stream: _commentsStream,
+    return FutureBuilder<List<Comment>>(
+      future: _commentsFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting && _cachedComments == null) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final comments = snapshot.data ?? [];
+        final comments = snapshot.data ?? _cachedComments ?? [];
         
         if (comments.isEmpty) {
           return const Center(
@@ -816,8 +821,11 @@ class _ReelPostItemState extends State<ReelPostItem> {
                         SnackBar(content: Text('Error: ${response.error}')),
                       );
                     } else if (mounted) {
+                      // Refresh comments after adding new one
                       setState(() {
-                        _commentsStream = CommentService.commentsStream(widget.post.id);
+                        _cachedComments = null;
+                        _commentsFuture = CommentService.getComments(widget.post.id)
+                          ..then((value) => _cachedComments = value);
                       });
                     }
                   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../services/search_service.dart';
@@ -297,8 +298,8 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
                 fit: StackFit.expand,
                 children: [
                   if (post.mediaUrl != null)
-                    Image.network(
-                      ProxyHelper.getUrl(post.thumbnailUrl ?? post.mediaUrl!),
+                    CachedNetworkImage(
+                      imageUrl: ProxyHelper.getUrl(post.thumbnailUrl ?? post.mediaUrl!),
                       fit: BoxFit.cover,
                     )
                   else
