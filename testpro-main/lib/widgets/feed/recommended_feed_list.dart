@@ -5,6 +5,7 @@ import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../post_card.dart';
 import '../nextdoor_post_card.dart';
+import '../../screens/event_post_card.dart';
 import '../../services/backend_service.dart';
 import '../../screens/interest_picker_screen.dart';
 
@@ -160,6 +161,15 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
             );
           }
           final post = _posts[index];
+          // Hide archived/expired events
+          if ((post.isEvent || post.category.toLowerCase() == 'events') 
+              && post.computedStatus == 'archived') {
+            return const SizedBox.shrink();
+          }
+          // Route events to EventPostCard
+          if (post.isEvent || post.category.toLowerCase() == 'events') {
+            return EventPostCard(post: post);
+          }
           return NextdoorStylePostCard(
             post: post,
             initialIsLiked: _likedPostIds[post.id],

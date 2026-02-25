@@ -20,8 +20,10 @@ class Post {
   
   // Event fields
   final bool isEvent;
+  final DateTime? eventStartDate;
+  final DateTime? eventEndDate;
   final String? eventType;
-  final DateTime? eventDate;
+  final String? computedStatus; // 'active' or 'archived'
   final String? eventLocation;
   final bool? isFree;
   final int attendeeCount;
@@ -34,7 +36,7 @@ class Post {
     required this.title,
     required this.body,
     required this.scope,
-    required this.mediaUrl,
+    this.mediaUrl, // Changed from required to optional based on toJson and fromJson
     required this.mediaType,
     required this.createdAt,
     required this.likeCount,
@@ -46,9 +48,11 @@ class Post {
     this.category = 'General',
     this.thumbnailUrl,
     this.authorProfileImage,
-    required this.isEvent,
+    this.isEvent = false,
+    this.eventStartDate,
+    this.eventEndDate,
     this.eventType,
-    this.eventDate,
+    this.computedStatus,
     this.eventLocation,
     this.isFree,
     required this.attendeeCount,
@@ -83,13 +87,22 @@ class Post {
       category: json['category'] as String? ?? 'General',
       authorProfileImage: json['authorProfileImage'] as String?,
       thumbnailUrl: json['thumbnailUrl'] as String?,
-      isEvent: json['isEvent'] as bool? ?? false,
+      isEvent: (json['isEvent'] == true) || 
+          (json['category'] as String? ?? '').toLowerCase() == 'events',
+      
+      // Lazy mapping fallback for event start date on the client as well
+      eventStartDate: json['eventStartDate'] != null 
+          ? DateTime.parse(json['eventStartDate'])
+          : (json['eventDate'] != null ? DateTime.parse(json['eventDate']) : null),
+          
+      eventEndDate: json['eventEndDate'] != null ? DateTime.parse(json['eventEndDate']) : null,
       eventType: json['eventType'] as String?,
-      eventDate: json['eventDate'] != null ? parseDate(json['eventDate']) : null,
+      computedStatus: json['computedStatus'] as String?,
+      
       eventLocation: json['eventLocation'] as String?,
       isFree: json['isFree'] as bool?,
       attendeeCount: json['attendeeCount'] as int? ?? 0,
-      isLiked: json['isLiked'] as bool? ?? false,
+      isLiked: json['isLiked'] ?? false,
     );
   }
 
@@ -117,8 +130,10 @@ class Post {
       'authorProfileImage': authorProfileImage,
       'thumbnailUrl': thumbnailUrl,
       'isEvent': isEvent,
+      'eventStartDate': eventStartDate?.toIso8601String(),
+      'eventEndDate': eventEndDate?.toIso8601String(),
       'eventType': eventType,
-      'eventDate': eventDate?.toIso8601String(),
+      'computedStatus': computedStatus,
       'eventLocation': eventLocation,
       'isFree': isFree,
       'attendeeCount': attendeeCount,

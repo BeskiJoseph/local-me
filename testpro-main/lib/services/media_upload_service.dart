@@ -29,7 +29,7 @@ class MediaUploadService {
     }
 
     // 2. Resolve default local URL based on platform (Development only)
-    String defaultUrl = 'https://og-backend-1-iq5a.onrender.com';
+    String defaultUrl = 'https://og-backend-2.onrender.com';
     
     if (kDebugMode) {
        debugPrint('ℹ️ Using default API URL: $defaultUrl');

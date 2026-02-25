@@ -10,6 +10,8 @@ import '../screens/post_detail_screen.dart';
 import '../core/utils/time_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
+import 'package:intl/intl.dart';
+import 'dart:ui';
 
 /// ============================================================
 /// POST CARD — pixel-matched to screenshot
@@ -157,7 +159,31 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
               children: [
                 // ── Category Chip ────────────────────────────────
                 if (post.category.isNotEmpty) ...[
-                  _CategoryChip(label: post.category.toUpperCase()),
+                  Row(
+                    children: [
+                      _CategoryChip(label: post.category.toUpperCase()),
+                      if (post.isEvent && post.computedStatus == 'archived') ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF1F5F9),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: const Text(
+                            'ARCHIVED',
+                            style: TextStyle(
+                              color: Color(0xFF64748B),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 12),
                 ],
 
@@ -165,13 +191,41 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
                 if (post.title.isNotEmpty) ...[
                   Text(
                     post.title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: AppTheme.fontFamily,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF1A1A1A),
+                      color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF1A1A1A),
                       height: 1.3,
+                      decoration: post.computedStatus == 'archived' ? TextDecoration.lineThrough : null,
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+
+                // ── Event Dates ──────────────────────────────────
+                if (post.isEvent && post.eventStartDate != null) ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.calendar_today_rounded,
+                        size: 16,
+                        color: post.computedStatus == 'archived' ? const Color(0xFFC0C0C0) : AppTheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _formatEventDateRange(post.eventStartDate!, post.eventEndDate),
+                          style: TextStyle(
+                            fontFamily: AppTheme.fontFamily,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF4A4A4A),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
                 ],
@@ -219,6 +273,27 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
         ],
       ),
     );
+  }
+
+  String _formatEventDateRange(DateTime start, DateTime? end) {
+    if (end == null) {
+      return DateFormat('MMM d, yyyy • h:mm a').format(start);
+    }
+    
+    final bool sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
+    
+    if (sameDay) {
+      // Oct 12, 5:00 PM - 8:00 PM
+      final dateStr = DateFormat('MMM d, yyyy').format(start);
+      final startStr = DateFormat('h:mm a').format(start);
+      final endStr = DateFormat('h:mm a').format(end);
+      return '$dateStr • $startStr - $endStr';
+    } else {
+      // Oct 12, 5 PM - Oct 14, 8 PM
+      final startStr = DateFormat('MMM d, h:mm a').format(start);
+      final endStr = DateFormat('MMM d, h:mm a').format(end);
+      return '$startStr - $endStr';
+    }
   }
 }
 

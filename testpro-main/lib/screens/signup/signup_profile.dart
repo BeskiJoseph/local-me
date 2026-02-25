@@ -122,6 +122,7 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
         id: result.user!.uid,
         name: result.user!.displayName ?? widget.data.username,
         avatar: imageUrl ?? result.user!.photoURL,
+        location: widget.data.location,
       );
     }
 

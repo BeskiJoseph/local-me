@@ -131,6 +131,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           id: user.uid,
           name: _nameController.text.trim(),
           avatar: profileImageUrl,
+          location: _locationController.text.trim(),
         );
         Navigator.pop(context, true); // Return true to trigger refresh
         ScaffoldMessenger.of(context).showSnackBar(

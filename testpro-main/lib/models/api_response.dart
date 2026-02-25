@@ -20,11 +20,23 @@ class ApiResponse<T> {
     final bool success = json['success'] ?? false;
     
     if (!success) {
-      final errorMap = json['error'] as Map<String, dynamic>?;
+      final dynamic rawError = json['error'];
+      String message = 'An unknown error occurred';
+      String code = 'INTERNAL_ERROR';
+
+      if (rawError is Map<String, dynamic>) {
+        message = rawError['message']?.toString() ?? message;
+        code = rawError['code']?.toString() ?? code;
+      } else if (rawError is String && rawError.trim().isNotEmpty) {
+        message = rawError;
+      } else if (json['message'] is String) {
+        message = json['message'] as String;
+      }
+
       return ApiResponse(
         success: false,
-        error: errorMap?['message'] ?? 'An unknown error occurred',
-        errorCode: errorMap?['code'] ?? 'INTERNAL_ERROR',
+        error: message,
+        errorCode: code,
       );
     }
 

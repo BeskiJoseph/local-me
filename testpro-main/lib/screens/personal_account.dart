@@ -12,6 +12,7 @@ import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../widgets/post_card.dart';
 import '../widgets/nextdoor_post_card.dart';
+import 'event_post_card.dart';
 
 class PersonalAccount extends StatefulWidget {
   final String? userId;
@@ -29,10 +30,12 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   UserProfile? _profile;
   List<Post> _posts = [];
   bool _isLoadingProfile = true;
+  String? _profileError;
   bool _isLoadingPosts = false;
   String? _cursor;
   bool _hasMore = true;
   final Map<String, bool> _likedPostIds = {};
+  List<String> _myEventIds = [];
 
   String get profileUserId {
     final uid = widget.userId ?? AuthService.currentUser?.uid;
@@ -62,12 +65,25 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     await Future.wait([
       _loadProfile(),
       _loadPosts(refresh: true),
+      _loadMyEvents(),
     ]);
+  }
+
+  Future<void> _loadMyEvents() async {
+    try {
+      final response = await BackendService.getMyEventIds();
+      if (response.success && response.data != null && mounted) {
+        setState(() => _myEventIds = response.data!);
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadProfile() async {
     if (!mounted) return;
-    setState(() => _isLoadingProfile = true);
+    setState(() {
+      _isLoadingProfile = true;
+      _profileError = null;
+    });
     try {
       final response = await BackendService.getProfile(profileUserId);
       if (!mounted) return;
@@ -75,13 +91,22 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         setState(() {
           _profile = UserProfile.fromJson(response.data!);
           _isLoadingProfile = false;
+          _profileError = null;
         });
       } else {
-        setState(() => _isLoadingProfile = false);
+        setState(() {
+          _isLoadingProfile = false;
+          _profileError = response.error ?? 'Failed to load profile';
+        });
       }
     } catch (e) {
       debugPrint('Error loading profile: $e');
-      if (mounted) setState(() => _isLoadingProfile = false);
+      if (mounted) {
+        setState(() {
+          _isLoadingProfile = false;
+          _profileError = 'Failed to load profile';
+        });
+      }
     }
   }
 
@@ -147,12 +172,44 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       );
     }
 
+    if (!_isLoadingProfile && _profile == null && _profileError != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _profileError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.black87),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: _loadProfile,
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     final profile = _profile;
     final user = AuthService.currentUser;
     final isOwnProfile = user != null && profileUserId == user.uid;
     return ValueListenableBuilder(
       valueListenable: UserSession.current,
       builder: (context, sessionData, _) {
+        String fullNameFromProfile(UserProfile? p) {
+          if (p == null) return '';
+          final first = (p.firstName ?? '').trim();
+          final last = (p.lastName ?? '').trim();
+          return [first, last].where((v) => v.isNotEmpty).join(' ').trim();
+        }
+
         String displayTitle = 'User';
         if (isOwnProfile) {
           if (sessionData?.displayName != null && sessionData!.displayName!.isNotEmpty) {
@@ -163,6 +220,8 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
             displayTitle = profile.displayName!;
           } else if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
             displayTitle = profile.username;
+          } else if (fullNameFromProfile(profile).isNotEmpty) {
+            displayTitle = fullNameFromProfile(profile);
           } else if (user?.email != null) {
             displayTitle = user!.email!.split('@')[0];
           }
@@ -172,12 +231,21 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
             displayTitle = profile.displayName!;
           } else if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
             displayTitle = profile.username;
+          } else if (fullNameFromProfile(profile).isNotEmpty) {
+            displayTitle = fullNameFromProfile(profile);
           }
         }
 
         final String? profileImage = isOwnProfile 
             ? (sessionData?.avatarUrl ?? user?.photoURL ?? profile?.profileImageUrl) 
             : profile?.profileImageUrl;
+
+        String displayLocation = 'Location not set';
+        if (isOwnProfile) {
+          displayLocation = sessionData?.location ?? profile?.location ?? 'Location not set';
+        } else {
+          displayLocation = profile?.location ?? 'Location not set';
+        }
 
         return Scaffold(
           backgroundColor: const Color(0xFFF7F8FA),
@@ -291,7 +359,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                         const Icon(Icons.location_on, size: 16, color: Color(0xFF8A8A8A)),
                         const SizedBox(width: 4),
                         Text(
-                          profile?.location ?? 'Location not set',
+                          displayLocation,
                           style: const TextStyle(
                             fontSize: 15,
                             color: Color(0xFF8A8A8A),
@@ -428,9 +496,13 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
             ),
           );
         }
+        final post = _posts[index];
+        if (post.isEvent || post.category.toLowerCase() == 'events') {
+          return EventPostCard(post: post);
+        }
         return NextdoorStylePostCard(
-          post: _posts[index],
-          initialIsLiked: _likedPostIds[_posts[index].id],
+          post: post,
+          initialIsLiked: _likedPostIds[post.id],
         );
       },
     );
@@ -497,27 +569,17 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   }
 
   Widget _buildEventsTab() {
-    final eventPosts = _posts.where((p) => p.isEvent).toList();
+    final eventPosts = _posts
+        .where((p) => (p.isEvent || p.category.toLowerCase() == 'events') && _myEventIds.contains(p.id))
+        .toList();
     if (eventPosts.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No events yet'));
+      return const Center(child: Text('No joined events yet'));
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: eventPosts.length + (_hasMore ? 1 : 0),
+      itemCount: eventPosts.length,
       itemBuilder: (context, index) {
-        if (index == eventPosts.length) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _loadPosts();
-          });
-          return const Center(child: Padding(
-            padding: EdgeInsets.all(16.0),
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ));
-        }
-        return NextdoorStylePostCard(
-          post: eventPosts[index],
-          initialIsLiked: _likedPostIds[eventPosts[index].id],
-        );
+        return EventPostCard(post: eventPosts[index]);
       },
     );
   }

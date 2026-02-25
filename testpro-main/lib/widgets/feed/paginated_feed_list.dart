@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/post_service.dart';
 import '../../core/state/feed_controller.dart';
 import '../nextdoor_post_card.dart';
+import '../../screens/event_post_card.dart';
 
 class PaginatedFeedList extends StatefulWidget {
   final String feedType;
@@ -53,8 +54,12 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       case FeedEventType.postDeleted:
         _feedController.deletePost(event.data);
         break;
+      case FeedEventType.eventMembershipChanged:
+        // Membership changes affect community/event surfaces, not feed list items directly.
+        break;
     }
   }
+
 
   @override
   void dispose() {
@@ -168,6 +173,15 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
                 );
               }
               final post = posts[index];
+              // Hide archived/expired events
+              if ((post.isEvent || post.category.toLowerCase() == 'events') 
+                  && post.computedStatus == 'archived') {
+                return const SizedBox.shrink();
+              }
+              // Route events to EventPostCard
+              if (post.isEvent || post.category.toLowerCase() == 'events') {
+                return EventPostCard(post: post);
+              }
               return NextdoorStylePostCard(
                 post: post,
                 initialIsLiked: _likedPostIds[post.id],
@@ -266,7 +280,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFFF6B9D).withOpacity(0.3),
+                  color: const Color(0xFFFF6B9D).withValues(alpha: 0.3),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -295,7 +309,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF6C5CE7).withOpacity(0.3),
+                  color: const Color(0xFF6C5CE7).withValues(alpha: 0.3),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -360,7 +374,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF6C5CE7).withOpacity(0.3),
+                  color: const Color(0xFF6C5CE7).withValues(alpha: 0.3),
                   blurRadius: 30,
                   offset: const Offset(0, 10),
                 ),
@@ -389,7 +403,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF00D2A0).withOpacity(0.3),
+                  color: const Color(0xFF00D2A0).withValues(alpha: 0.3),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),

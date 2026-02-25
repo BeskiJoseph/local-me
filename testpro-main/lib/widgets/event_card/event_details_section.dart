@@ -36,7 +36,7 @@ class EventDetailsSection extends StatelessWidget {
           const SizedBox(height: 12),
 
           // Event Date & Time
-          if (post.eventDate != null)
+          if (post.eventStartDate != null)
             Row(
               children: [
                 Container(
@@ -56,7 +56,7 @@ class EventDetailsSection extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _formatEventDate(post.eventDate!),
+                      _formatEventDate(post.eventStartDate!),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
@@ -65,7 +65,7 @@ class EventDetailsSection extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      _formatEventTime(post.eventDate!),
+                      _formatEventTime(post.eventStartDate!),
                       style: TextStyle(
                         fontSize: 13,
                         color: Colors.grey.shade600,

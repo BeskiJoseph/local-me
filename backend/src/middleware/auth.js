@@ -1,6 +1,7 @@
 import { auth, db } from '../config/firebase.js';
 import logger from '../utils/logger.js';
 import jwt from 'jsonwebtoken';
+import { buildDisplayName } from '../utils/userDisplayName.js';
 
 // In-memory cache for user profiles to reduce Firestore overhead (30s TTL)
 const USER_CACHE = new Map();
@@ -49,7 +50,14 @@ const authenticate = async (req, res, next) => {
                 req.user = {
                     uid: decoded.uid,
                     email: decoded.email,
-                    displayName: userData?.displayName || userData?.username || 'User',
+                    displayName: buildDisplayName({
+                        displayName: userData?.displayName,
+                        username: userData?.username,
+                        firstName: userData?.firstName,
+                        lastName: userData?.lastName,
+                        email: userData?.email || decoded.email,
+                        fallback: 'User'
+                    }),
                     photoURL: userData?.profileImageUrl || userData?.photoURL,
                     role: userData?.role || 'user',
                     status: userData?.status || 'active',
@@ -108,7 +116,14 @@ const authenticate = async (req, res, next) => {
                 email: decodedToken.email,
                 auth_time: decodedToken.auth_time,
                 profileExists: profileExists,
-                displayName: userData?.displayName || userData?.username || decodedToken.name || 'User',
+                displayName: buildDisplayName({
+                    displayName: userData?.displayName || decodedToken.name,
+                    username: userData?.username,
+                    firstName: userData?.firstName,
+                    lastName: userData?.lastName,
+                    email: userData?.email || decodedToken.email,
+                    fallback: 'User'
+                }),
                 photoURL: userData?.profileImageUrl || userData?.photoURL || decodedToken.picture,
                 role: userData?.role || 'user',
                 status: userData?.status || 'active',

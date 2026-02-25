@@ -4,8 +4,9 @@ class UserSessionData {
   final String uid;
   final String? displayName;
   final String? avatarUrl;
+  final String? location;
 
-  UserSessionData({required this.uid, this.displayName, this.avatarUrl});
+  UserSessionData({required this.uid, this.displayName, this.avatarUrl, this.location});
 }
 
 class UserSession {
@@ -22,6 +23,7 @@ class UserSession {
     required String? id,
     String? name,
     String? avatar,
+    String? location,
   }) {
     if (id == null && current.value == null) return;
     
@@ -31,6 +33,7 @@ class UserSession {
       uid: resolvedId,
       displayName: name ?? current.value?.displayName,
       avatarUrl: avatar ?? current.value?.avatarUrl,
+      location: location ?? current.value?.location,
     );
   }
 

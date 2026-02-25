@@ -3,7 +3,7 @@ import '../models/post.dart';
 import '../models/paginated_response.dart';
 import '../repositories/post_repository.dart';
 
-enum FeedEventType { postCreated, postDeleted }
+enum FeedEventType { postCreated, postDeleted, eventMembershipChanged }
 
 class FeedEvent {
   final FeedEventType type;
@@ -105,15 +105,17 @@ class PostService {
   }
 
   static Future<void> toggleEventAttendance(String eventId, String userId) {
-    return _repository.toggleEventAttendance(eventId, userId);
+    return _repository.toggleEventAttendance(eventId, userId).then((_) {
+      emit(FeedEvent(FeedEventType.eventMembershipChanged, eventId));
+    });
   }
 
-  /// Creates a new event post.
   static Future<void> createEvent({
     required String title,
     required String description,
     required String eventType,
-    required DateTime eventDate,
+    required DateTime eventStartDate,
+    required DateTime eventEndDate,
     required String location,
     double? latitude,
     double? longitude,
@@ -126,7 +128,8 @@ class PostService {
       title: title,
       description: description,
       eventType: eventType,
-      eventDate: eventDate,
+      eventStartDate: eventStartDate,
+      eventEndDate: eventEndDate,
       location: location,
       latitude: latitude,
       longitude: longitude,

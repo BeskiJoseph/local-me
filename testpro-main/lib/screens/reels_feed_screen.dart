@@ -7,7 +7,6 @@ import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
 import 'personal_account.dart';
-import 'dart:math' as math;
 import '../shared/widgets/user_avatar.dart';
 
 class ReelsFeedScreen extends StatefulWidget {
@@ -138,10 +137,21 @@ class _ReelPostItemState extends State<ReelPostItem> {
   bool _isInitialized = false;
   bool _showComments = false;
   final TextEditingController _commentController = TextEditingController();
+  Stream<bool>? _isLikedStream;
+  Stream<bool>? _isFollowedStream;
+  late Stream _commentsStream;
 
   @override
   void initState() {
     super.initState();
+    final user = AuthService.currentUser;
+    _isLikedStream = user != null
+        ? SocialService.isPostLikedStream(widget.post.id, user.uid)
+        : Stream.value(false);
+    _isFollowedStream = user != null && user.uid != widget.post.authorId
+        ? SocialService.isUserFollowedStream(user.uid, widget.post.authorId)
+        : Stream.value(false);
+    _commentsStream = CommentService.commentsStream(widget.post.id);
     if (widget.isCurrentPage) {
       _initializeMedia();
     }
@@ -150,6 +160,16 @@ class _ReelPostItemState extends State<ReelPostItem> {
   @override
   void didUpdateWidget(ReelPostItem oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.post.id != widget.post.id) {
+      final user = AuthService.currentUser;
+      _isLikedStream = user != null
+          ? SocialService.isPostLikedStream(widget.post.id, user.uid)
+          : Stream.value(false);
+      _isFollowedStream = user != null && user.uid != widget.post.authorId
+          ? SocialService.isUserFollowedStream(user.uid, widget.post.authorId)
+          : Stream.value(false);
+      _commentsStream = CommentService.commentsStream(widget.post.id);
+    }
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
       if (_videoController == null) {
         _initializeMedia();
@@ -164,8 +184,8 @@ class _ReelPostItemState extends State<ReelPostItem> {
 
   void _initializeMedia() {
     if (widget.post.mediaType == 'video' && widget.post.mediaUrl != null) {
-      _videoController = VideoPlayerController.network(
-        ProxyHelper.getUrl(widget.post.mediaUrl!),
+      _videoController = VideoPlayerController.networkUrl(
+        Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!)),
       )..initialize().then((_) {
         if (!mounted) return;
         setState(() {
@@ -219,9 +239,9 @@ class _ReelPostItemState extends State<ReelPostItem> {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withOpacity(0.3),
+                  Colors.black.withValues(alpha: 0.3),
                   Colors.transparent,
-                  Colors.black.withOpacity(0.7),
+                  Colors.black.withValues(alpha: 0.7),
                 ],
                 stops: const [0.0, 0.3, 1.0],
               ),
@@ -287,7 +307,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                           Text(
                                             widget.post.city!,
                                             style: TextStyle(
-                                              color: Colors.white.withOpacity(0.7),
+                                              color: Colors.white.withValues(alpha: 0.7),
                                               fontSize: 12,
                                             ),
                                           ),
@@ -316,7 +336,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                             Text(
                               widget.post.body,
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.9),
+                                color: Colors.white.withValues(alpha: 0.9),
                                 fontSize: 14,
                               ),
                               maxLines: 3,
@@ -331,7 +351,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
+                                color: Colors.white.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(
@@ -378,7 +398,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                 child: Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.5),
+                    color: Colors.black.withValues(alpha: 0.5),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -400,7 +420,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                   });
                 },
                 child: Container(
-                  color: Colors.black.withOpacity(0.5),
+                  color: Colors.black.withValues(alpha: 0.5),
                   child: GestureDetector(
                     onTap: () {}, // Prevent closing when tapping sheet
                     child: DraggableScrollableSheet(
@@ -534,7 +554,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
     }
 
     return StreamBuilder<bool>(
-      stream: SocialService.isPostLikedStream(widget.post.id, user.uid),
+      stream: _isLikedStream,
       builder: (context, snapshot) {
         final isLiked = snapshot.data ?? false;
         return _actionButton(
@@ -543,13 +563,17 @@ class _ReelPostItemState extends State<ReelPostItem> {
           () async {
             try {
               final response = await BackendService.toggleLike(widget.post.id);
-              if (!response.success && mounted) throw response.error ?? "Failed";
-            } catch (e) {
+              if (!response.success) throw response.error ?? "Failed";
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e')),
-                );
+                setState(() {
+                  _isLikedStream = SocialService.isPostLikedStream(widget.post.id, user.uid);
+                });
               }
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(content: Text('Error: $e')),
+              );
             }
           },
           color: isLiked ? Colors.red : Colors.white,
@@ -591,7 +615,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
     }
 
     return StreamBuilder<bool>(
-      stream: SocialService.isUserFollowedStream(user.uid, widget.post.authorId),
+      stream: _isFollowedStream,
       builder: (context, snapshot) {
         final isFollowed = snapshot.data ?? false;
         return _actionButton(
@@ -600,13 +624,17 @@ class _ReelPostItemState extends State<ReelPostItem> {
           () async {
             try {
               final response = await BackendService.toggleFollow(widget.post.authorId);
-              if (!response.success && mounted) throw response.error ?? "Failed";
-            } catch (e) {
+              if (!response.success) throw response.error ?? "Failed";
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error: $e')),
-                );
+                setState(() {
+                  _isFollowedStream = SocialService.isUserFollowedStream(user.uid, widget.post.authorId);
+                });
               }
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(content: Text('Error: $e')),
+              );
             }
           },
           color: isFollowed ? Colors.white : const Color(0xFF4C5EFF),
@@ -648,7 +676,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
 
   Widget _buildCommentsList(ScrollController scrollController) {
     return StreamBuilder(
-      stream: CommentService.commentsStream(widget.post.id),
+      stream: _commentsStream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -692,7 +720,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             offset: const Offset(0, -2),
             blurRadius: 5,
           ),
@@ -737,6 +765,10 @@ class _ReelPostItemState extends State<ReelPostItem> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Error: ${response.error}')),
                       );
+                    } else if (mounted) {
+                      setState(() {
+                        _commentsStream = CommentService.commentsStream(widget.post.id);
+                      });
                     }
                   }
                 },

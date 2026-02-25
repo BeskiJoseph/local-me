@@ -5,6 +5,7 @@ import logger from '../utils/logger.js';
 import crypto from 'crypto';
 import { deviceContext } from '../middleware/deviceContext.js';
 import { RiskEngine } from '../services/RiskEngine.js';
+import { buildDisplayName } from '../utils/userDisplayName.js';
 
 const router = express.Router();
 
@@ -67,9 +68,17 @@ router.post('/token', deviceContext, async (req, res) => {
             if (!data.username || !data.displayName) {
                 const baseName = decodedToken.name || (decodedToken.email ? decodedToken.email.split('@')[0] : 'user');
                 const cleanBase = baseName.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const healedDisplayName = buildDisplayName({
+                    displayName: data.displayName || decodedToken.name,
+                    username: data.username,
+                    firstName: data.firstName,
+                    lastName: data.lastName,
+                    email: data.email || decodedToken.email,
+                    fallback: ''
+                });
 
                 await db.collection('users').doc(uid).set({
-                    displayName: data.displayName || decodedToken.name || '',
+                    displayName: healedDisplayName,
                     profileImageUrl: data.profileImageUrl || decodedToken.picture || '',
                     username: data.username || `${cleanBase}${Math.floor(1000 + Math.random() * 9000)}`
                 }, { merge: true });
@@ -79,13 +88,19 @@ router.post('/token', deviceContext, async (req, res) => {
             const baseName = decodedToken.name || (decodedToken.email ? decodedToken.email.split('@')[0] : 'user');
             const cleanBase = baseName.toLowerCase().replace(/[^a-z0-9]/g, '');
             const generatedUsername = `${cleanBase}${Math.floor(1000 + Math.random() * 9000)}`;
+            const generatedDisplayName = buildDisplayName({
+                displayName: decodedToken.name,
+                username: generatedUsername,
+                email: decodedToken.email,
+                fallback: generatedUsername
+            });
 
             await db.collection('users').doc(uid).set({
                 tokenVersion: 1,
                 email: decodedToken.email || '',
                 role: 'user',
                 status: 'active',
-                displayName: decodedToken.name || '',
+                displayName: generatedDisplayName,
                 profileImageUrl: decodedToken.picture || '',
                 username: generatedUsername,
                 createdAt: new Date(),

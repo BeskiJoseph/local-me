@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
+import '../../services/post_service.dart';
 import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
 import '../../shared/widgets/user_avatar.dart';
 import '../../screens/post_detail_screen.dart';
 import '../../screens/personal_account.dart';
+import '../../screens/group_chat_screen.dart';
 
 class EventCardFooter extends StatefulWidget {
   final Post post;
@@ -19,6 +21,32 @@ class EventCardFooter extends StatefulWidget {
 class _EventCardFooterState extends State<EventCardFooter> {
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
+  Stream<bool>? _isLikedStream;
+  Stream<bool>? _isAttendingStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _initStreams();
+  }
+
+  @override
+  void didUpdateWidget(covariant EventCardFooter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.post.id != widget.post.id) {
+      _initStreams();
+    }
+  }
+
+  void _initStreams() {
+    final user = AuthService.currentUser;
+    _isLikedStream = user != null
+        ? SocialService.isPostLikedStream(widget.post.id, user.uid)
+        : Stream.value(false);
+    _isAttendingStream = user != null
+        ? PostService.isAttendingEventStream(widget.post.id, user.uid)
+        : Stream.value(false);
+  }
 
   void _navigateToUserProfile() {
     Navigator.push(
@@ -90,7 +118,7 @@ class _EventCardFooterState extends State<EventCardFooter> {
                   imageUrl: widget.post.authorProfileImage,
                   name: widget.post.authorName,
                   radius: 16,
-                  backgroundColor: const Color(0xFFFF6B6B).withOpacity(0.2),
+                  backgroundColor: const Color(0xFFFF6B6B).withValues(alpha: 0.2),
                   initialsColor: const Color(0xFFFF6B6B),
                 ),
                 const SizedBox(width: 8),
@@ -126,9 +154,7 @@ class _EventCardFooterState extends State<EventCardFooter> {
 
           // Interaction Row
           StreamBuilder<bool>(
-            stream: user != null
-                ? SocialService.isPostLikedStream(widget.post.id, user.uid)
-                : Stream.value(false),
+            stream: _isLikedStream,
             builder: (context, snapshot) {
               final streamLiked = snapshot.data ?? false;
               final isLiked = _optimisticLiked ?? streamLiked;
@@ -182,6 +208,28 @@ class _EventCardFooterState extends State<EventCardFooter> {
                       );
                     },
                   ),
+                  const Spacer(),
+                  if (user != null)
+                    StreamBuilder<bool>(
+                      stream: _isAttendingStream,
+                      builder: (context, snapshot) {
+                        final isAttending = snapshot.data ?? false;
+                        if (!isAttending) return const SizedBox.shrink();
+
+                        return _buildActionButton(
+                          icon: Icons.chat,
+                          label: 'Group Chat',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => GroupChatScreen(event: widget.post),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
                 ],
               );
             },

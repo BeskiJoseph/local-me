@@ -5,6 +5,7 @@ import authenticate, { clearUserCache } from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
 import logger from '../utils/logger.js';
 import { cleanPayload } from '../utils/sanitizer.js';
+import { buildDisplayName, normalizeText } from '../utils/userDisplayName.js';
 
 const router = express.Router();
 
@@ -55,8 +56,48 @@ router.patch('/me', authenticate, async (req, res, next) => {
         const exists = snapshot.exists;
         const currentData = exists ? snapshot.data() : null;
 
+        const normalizeOptional = (input) => {
+            if (input === null || input === undefined) return undefined;
+            const normalized = normalizeText(input);
+            return normalized || undefined;
+        };
+
+        const normalizedValue = { ...value };
+        const stringFields = ['displayName', 'username', 'firstName', 'lastName', 'about', 'profileImageUrl', 'location', 'fcmToken'];
+        for (const field of stringFields) {
+            if (Object.prototype.hasOwnProperty.call(normalizedValue, field)) {
+                normalizedValue[field] = normalizeOptional(normalizedValue[field]);
+            }
+        }
+
+        if (
+            Object.prototype.hasOwnProperty.call(value, 'username') &&
+            value.username !== null &&
+            !normalizedValue.username
+        ) {
+            const err = new Error('Username cannot be empty');
+            err.status = 400;
+            err.code = 'profile/invalid-username';
+            return next(err);
+        }
+
+        if (normalizedValue.username && normalizedValue.username !== currentData?.username) {
+            const usernameSnapshot = await db.collection('users')
+                .where('username', '==', normalizedValue.username.toLowerCase())
+                .limit(1)
+                .get();
+            const usernameTakenByOther = !usernameSnapshot.empty &&
+                usernameSnapshot.docs.some(doc => doc.id !== uid);
+            if (usernameTakenByOther) {
+                const err = new Error('Username is already taken');
+                err.status = 409;
+                err.code = 'profile/username-taken';
+                return next(err);
+            }
+        }
+
         // Security: Prevent unauthorized role changes
-        if (value.role && value.role !== currentData?.role) {
+        if (normalizedValue.role && normalizedValue.role !== currentData?.role) {
             if (req.user.role !== 'admin') {
                 const err = new Error('Unauthorized: Only admins can change user roles');
                 err.status = 403;
@@ -66,14 +107,25 @@ router.patch('/me', authenticate, async (req, res, next) => {
             await AuditService.logAction({
                 userId: uid,
                 action: 'ROLE_CHANGE',
-                metadata: { from: currentData?.role, to: value.role },
+                metadata: { from: currentData?.role, to: normalizedValue.role },
                 req
             });
         }
 
+        const effectiveUsername = normalizedValue.username || currentData?.username;
+        const effectiveDisplayName = normalizedValue.displayName || buildDisplayName({
+            displayName: currentData?.displayName,
+            username: effectiveUsername,
+            firstName: normalizedValue.firstName || currentData?.firstName,
+            lastName: normalizedValue.lastName || currentData?.lastName,
+            email: email || currentData?.email,
+            fallback: 'User'
+        });
+
         const updateData = {
-            ...value,
-            ...(value.username ? { username: value.username.toLowerCase() } : {}),
+            ...normalizedValue,
+            ...(effectiveUsername ? { username: effectiveUsername.toLowerCase() } : {}),
+            ...(effectiveDisplayName ? { displayName: effectiveDisplayName } : {}),
             email: email,
             updatedAt: new Date(),
         };
@@ -131,7 +183,38 @@ router.get('/check-username', async (req, res, next) => {
  */
 router.get('/:uid', authenticate, async (req, res, next) => {
     try {
-        const userDoc = await db.collection('users').doc(req.params.uid).get();
+        const userRef = db.collection('users').doc(req.params.uid);
+        let userDoc = await userRef.get();
+
+        // Self-heal for authenticated owner: create minimal profile on first read.
+        // Prevents "User not found" race right after login for legacy/incomplete accounts.
+        if (!userDoc.exists && req.user.uid === req.params.uid) {
+            const bootstrapData = {
+                email: req.user.email || '',
+                displayName: buildDisplayName({
+                    displayName: req.user.displayName,
+                    email: req.user.email,
+                    fallback: 'User'
+                }),
+                username: (() => {
+                    const base = (req.user.email || 'user')
+                        .split('@')[0]
+                        .toLowerCase()
+                        .replace(/[^a-z0-9_]/g, '')
+                        .slice(0, 20) || 'user';
+                    return `${base}_${req.user.uid.slice(-6)}`;
+                })(),
+                profileImageUrl: req.user.photoURL || null,
+                role: req.user.role || 'user',
+                status: req.user.status || 'active',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+            await userRef.set(bootstrapData, { merge: true });
+            clearUserCache(req.user.uid);
+            userDoc = await userRef.get();
+        }
+
         if (!userDoc.exists) {
             const err = new Error('User not found');
             err.status = 404;
@@ -142,12 +225,25 @@ router.get('/:uid', authenticate, async (req, res, next) => {
         const data = userDoc.data();
         // Remove sensitive fields for public view
         const { email, role, ...publicData } = data;
+        const resolvedDisplayName = buildDisplayName({
+            displayName: publicData.displayName,
+            username: publicData.username,
+            firstName: publicData.firstName,
+            lastName: publicData.lastName,
+            email,
+            fallback: 'User'
+        });
+        const resolvedProfileImageUrl = publicData.profileImageUrl ||
+            publicData.photoURL ||
+            ((req.user.uid === req.params.uid) ? (req.user.photoURL || null) : null);
 
         return res.json({
             success: true,
             data: {
                 uid: userDoc.id,
                 ...publicData,
+                displayName: resolvedDisplayName,
+                profileImageUrl: resolvedProfileImageUrl,
                 // Only show email to owner or admin
                 ...((req.user.uid === req.params.uid || req.user.role === 'admin') ? { email, role } : {})
             },

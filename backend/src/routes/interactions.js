@@ -6,8 +6,17 @@ import AuditService from '../services/auditService.js';
 import { body, validationResult } from 'express-validator';
 import { cleanPayload } from '../utils/sanitizer.js';
 import { enforceLikeVelocity, enforceFollowVelocity } from '../middleware/interactionVelocity.js';
+import { buildDisplayName } from '../utils/userDisplayName.js';
 
 const router = express.Router();
+
+function resolveActorDisplayName(req) {
+    return buildDisplayName({
+        displayName: req.user?.displayName,
+        email: req.user?.email,
+        fallback: 'User'
+    });
+}
 
 // Apply auth middleware to all interaction routes
 router.use(authenticate);
@@ -29,6 +38,7 @@ router.post(
         const cleanBody = cleanPayload(req.body, ['postId']);
         const { postId } = cleanBody;
         const userId = req.user.uid;
+        const actorDisplayName = resolveActorDisplayName(req);
         const likeId = `${postId}_${userId}`;
         const likeRef = db.collection('likes').doc(likeId);
         const postRef = db.collection('posts').doc(postId);
@@ -63,7 +73,7 @@ router.post(
                     _sendNotificationInternal({
                         toUserId: postDoc.data().authorId,
                         fromUserId: userId,
-                        fromUserName: req.user.displayName || 'Someone',
+                        fromUserName: actorDisplayName,
                         type: 'like',
                         postId,
                         postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
@@ -106,6 +116,7 @@ router.post(
         const cleanBody = cleanPayload(req.body, ['postId', 'text']);
         const { postId, text } = cleanBody;
         const userId = req.user.uid;
+        const actorDisplayName = resolveActorDisplayName(req);
         const postRef = db.collection('posts').doc(postId);
         const commentRef = db.collection('comments').doc();
 
@@ -118,7 +129,7 @@ router.post(
                     postId,
                     userId,
                     authorId: userId, // Immutable: Enforced to be the request user
-                    authorName: req.user.displayName || 'User',
+                    authorName: actorDisplayName,
                     authorProfileImage: req.user.photoURL,
                     text,
                     createdAt: admin.firestore.FieldValue.serverTimestamp()
@@ -131,7 +142,7 @@ router.post(
                 _sendNotificationInternal({
                     toUserId: postDoc.data().authorId,
                     fromUserId: userId,
-                    fromUserName: req.user.displayName || 'Someone',
+                    fromUserName: actorDisplayName,
                     type: 'comment',
                     postId,
                     commentText: text,
@@ -173,6 +184,7 @@ router.post(
         const cleanBody = cleanPayload(req.body, ['targetUserId']);
         const { targetUserId } = cleanBody;
         const userId = req.user.uid;
+        const actorDisplayName = resolveActorDisplayName(req);
         if (userId === targetUserId) {
             return res.status(400).json({ error: 'You cannot follow yourself' });
         }
@@ -217,7 +229,7 @@ router.post(
                     _sendNotificationInternal({
                         toUserId: targetUserId,
                         fromUserId: userId,
-                        fromUserName: req.user.displayName || 'Someone',
+                        fromUserName: actorDisplayName,
                         type: 'follow'
                     }).catch(err => logger.error('Notification Error', { err: err.message }));
                 }
@@ -235,7 +247,7 @@ router.post(
 
 /**
  * @route   POST /api/interactions/event/join
- * @desc    Join or leave an event
+ * @desc    Join or leave an event (Group Membership + RSVP combo)
  */
 router.post(
     '/event/join',
@@ -246,9 +258,14 @@ router.post(
         const cleanBody = cleanPayload(req.body, ['eventId']);
         const { eventId } = cleanBody;
         const userId = req.user.uid;
+
         const eventRef = db.collection('posts').doc(eventId);
+
+        // Deterministic IDs for duplicate prevention across both tracking systems
         const attendanceId = `${eventId}_${userId}`;
         const attendanceRef = db.collection('event_attendance').doc(attendanceId);
+
+        const groupMemberRef = db.collection('event_group_members').doc(attendanceId);
 
         try {
             await db.runTransaction(async (transaction) => {
@@ -259,17 +276,35 @@ router.post(
 
                 if (!eventDoc.exists) throw new Error('Event not found');
 
+                // Extra safeguard: Only join active events
+                const data = eventDoc.data();
+                if (data.eventEndDate && new Date(data.eventEndDate) < new Date()) {
+                    throw new Error('Cannot join an archived or expired event');
+                }
+
                 if (attendanceDoc.exists) {
+                    // Leave Event actions
                     transaction.delete(attendanceRef);
+                    transaction.delete(groupMemberRef); // Keeps systems mirrored identically
+
                     transaction.update(eventRef, {
                         attendeeCount: admin.firestore.FieldValue.increment(-1)
                     });
                 } else {
+                    // Join Event actions
                     transaction.set(attendanceRef, {
                         eventId,
                         userId,
                         createdAt: admin.firestore.FieldValue.serverTimestamp()
                     });
+
+                    transaction.set(groupMemberRef, {
+                        eventId,
+                        userId,
+                        role: 'member',
+                        joinedAt: admin.firestore.FieldValue.serverTimestamp()
+                    });
+
                     transaction.update(eventRef, {
                         attendeeCount: admin.firestore.FieldValue.increment(1)
                     });
@@ -451,6 +486,30 @@ router.get('/events/check', authenticate, async (req, res, next) => {
         return res.json({
             success: true,
             data: { attending: attendanceDoc.exists },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   GET /api/interactions/events/my-events
+ * @desc    Returns list of event IDs the current user has joined
+ */
+router.get('/events/my-events', authenticate, async (req, res, next) => {
+    try {
+        const userId = req.user.uid;
+
+        const memberSnap = await db.collection('event_group_members')
+            .where('userId', '==', userId)
+            .get();
+
+        const eventIds = memberSnap.docs.map(doc => doc.data().eventId);
+
+        return res.json({
+            success: true,
+            data: { eventIds },
             error: null
         });
     } catch (err) {

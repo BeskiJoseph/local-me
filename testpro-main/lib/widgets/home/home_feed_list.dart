@@ -148,10 +148,16 @@ class _HomeFeedListState extends State<HomeFeedList>
 
         final response = snapshot.data;
         final posts = response?.data ?? [];
-
+        
         final filteredPosts = widget.searchQuery.isEmpty
-            ? posts
+            ? posts.where((post) {
+                // Hide archived events from the feed entirely
+                if (post.isEvent && post.computedStatus == 'archived') return false;
+                return true;
+              }).toList()
             : posts.where((post) {
+                // Hide archived events from the feed entirely
+                if (post.isEvent && post.computedStatus == 'archived') return false;
                 final q = widget.searchQuery.toLowerCase();
                 return post.title.toLowerCase().contains(q) ||
                     post.body.toLowerCase().contains(q) ||
@@ -218,7 +224,8 @@ class _HomeFeedListState extends State<HomeFeedList>
                 return const _CreatePostBar();
               }
               final post = filteredPosts[index - 1];
-              if (post.isEvent) {
+              // Route to EventPostCard if isEvent OR category is Events
+              if (post.isEvent || post.category.toLowerCase() == 'events') {
                 return EventPostCard(post: post);
               }
               return NextdoorStylePostCard(

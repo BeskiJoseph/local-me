@@ -59,6 +59,7 @@ class BackendService {
   static Future<ApiResponse<bool>> checkFollowState(String targetUserId) => _instance.checkFollowState(targetUserId);
   static Future<ApiResponse<bool>> checkUsername(String username) => _instance.checkUsername(username);
   static Future<ApiResponse<bool>> checkEventAttendance(String eventId) => _instance.checkEventAttendance(eventId);
+  static Future<ApiResponse<List<String>>> getMyEventIds() => _instance.getMyEventIds();
 
   // --- Session Management ---
   static Future<void> syncCustomTokens() => BackendClient.syncCustomTokens();
@@ -96,10 +97,13 @@ class BackendClient {
   static String? _customAccessToken;
   static String? _customRefreshToken;
   static Future<void>? _syncFuture;
+  static bool _customSessionUnsupported = false;
 
   /// Exchanges a Firebase ID Token for a custom Access/Refresh Token pair.
   /// Deduplicated to prevent concurrent sync calls.
   static Future<void> syncCustomTokens() async {
+    if (_customSessionUnsupported) return;
+
     // If a sync is already in progress, return the existing future
     if (_syncFuture != null) return _syncFuture;
 
@@ -130,10 +134,30 @@ class BackendClient {
 
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
-        _customAccessToken = body['data']['accessToken'];
-        _customRefreshToken = body['data']['refreshToken'];
-        debugPrint('🛡️ Custom session tokens established');
+        final data = body['data'] as Map<String, dynamic>?;
+        _customAccessToken = data?['accessToken'] as String?;
+        _customRefreshToken = data?['refreshToken'] as String?;
+        if (_customAccessToken != null && _customRefreshToken != null) {
+          debugPrint('🛡️ Custom session tokens established');
+        }
       } else {
+        Map<String, dynamic>? body;
+        try {
+          body = jsonDecode(response.body) as Map<String, dynamic>;
+        } catch (_) {}
+        final rawError = body?['error'];
+        final errorMessage = rawError is String
+            ? rawError
+            : (rawError is Map<String, dynamic> ? (rawError['message']?.toString() ?? 'unknown') : 'unknown');
+
+        if (response.statusCode == 500 && errorMessage.toLowerCase().contains('configuration')) {
+          _customSessionUnsupported = true;
+          _customAccessToken = null;
+          _customRefreshToken = null;
+          debugPrint('⚠️ Custom JWT backend not configured; using Firebase auth only.');
+          return;
+        }
+
         debugPrint('❌ Custom session sync failed: ${response.statusCode} - ${response.body}');
         // If the server explicitly rejects the token with 401/403, 
         // we clear local state to prevent further loops
@@ -191,6 +215,7 @@ class BackendClient {
     _customAccessToken = null;
     _customRefreshToken = null;
     _syncFuture = null;
+    _customSessionUnsupported = false;
     debugPrint('🛡️ Custom session tokens cleared');
   }
 
@@ -452,6 +477,19 @@ class BackendClient {
       final uri = Uri.parse('$_baseUrl/api/interactions/events/check').replace(queryParameters: {'eventId': eventId});
       final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));
       return _processResponse(resp, (d) => d['attending'] == true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<List<String>>> getMyEventIds() async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.get(
+        Uri.parse('$_baseUrl/api/interactions/events/my-events'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (d) {
+        final ids = d['eventIds'] as List<dynamic>;
+        return ids.map((e) => e.toString()).toList();
+      });
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 }

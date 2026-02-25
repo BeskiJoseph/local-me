@@ -1,16 +1,31 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import '../models/chat_message.dart';
 import 'backend_service.dart';
 
 class ChatService {
-  // Note: Streams are difficult to replace with JSON REST.
-  // Converting to a periodic poll or simple retrieval for now.
-  static Stream<List<ChatMessage>> messagesStream(String eventId) {
-    return Stream.periodic(const Duration(seconds: 15))
-        .asyncMap((_) => BackendService.getMessages(eventId))
-        .map((response) {
-          if (!response.success || response.data == null) return <ChatMessage>[];
-          return response.data!.map<ChatMessage>((json) => ChatMessage.fromJson(json)).toList();
-        });
+  /// Stream that emits immediately with current messages, then polls every 2 seconds
+  static Stream<List<ChatMessage>> messagesStream(String eventId) async* {
+    // Emit immediately on open
+    yield await _fetchMessages(eventId);
+
+    // Then poll every 2 seconds for near-real-time chat.
+    await for (final _ in Stream.periodic(const Duration(seconds: 2))) {
+      yield await _fetchMessages(eventId);
+    }
+  }
+
+  static Future<List<ChatMessage>> _fetchMessages(String eventId) async {
+    try {
+      final response = await BackendService.getMessages(eventId);
+      if (!response.success || response.data == null) return <ChatMessage>[];
+      return response.data!
+          .map<ChatMessage>((json) => ChatMessage.fromJson(json))
+          .toList();
+    } catch (e) {
+      debugPrint('⚠️ Chat fetch error: $e');
+      return <ChatMessage>[];
+    }
   }
 
   static Future<void> sendChatMessage(String eventId, ChatMessage message) async {

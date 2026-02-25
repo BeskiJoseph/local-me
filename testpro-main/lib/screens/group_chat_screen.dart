@@ -19,6 +19,13 @@ class GroupChatScreen extends StatefulWidget {
 class _GroupChatScreenState extends State<GroupChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  late final Stream<List<ChatMessage>> _messagesStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _messagesStream = ChatService.messagesStream(widget.event.id);
+  }
 
   void _sendMessage() async {
     final user = AuthService.currentUser;
@@ -84,7 +91,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         children: [
           Expanded(
             child: StreamBuilder<List<ChatMessage>>(
-              stream: ChatService.messagesStream(widget.event.id),
+              stream: _messagesStream,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -156,7 +163,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         blurRadius: 4,
                         offset: const Offset(0, 2),
                       ),

@@ -13,6 +13,7 @@ import 'post_type_selector_sheet.dart';
 import '../widgets/home/home_feed_list.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
+import '../core/session/user_session.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -49,18 +50,30 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // Priority 1: Instant load from cached profile to show feed faster
+      // Priority 1: Instant load from session or cached profile
       final userId = AuthService.currentUser?.uid;
       if (userId != null) {
-        final profile = await UserService.getUserProfile(userId);
-        if (profile?.location != null && profile!.location!.isNotEmpty) {
-          final parts = profile.location!.split(',');
-          if (mounted) {
+        final session = UserSession.current.value;
+        if (session != null && session.location != null && session.location!.isNotEmpty) {
+           final parts = session.location!.split(',');
+           if (mounted) {
             setState(() {
               _currentCity = parts[0].trim();
               if (parts.length > 1) _currentCountry = parts[1].trim();
-              _isLoadingLocation = false; // Allow feed to start loading with cached location
+              _isLoadingLocation = false;
             });
+           }
+        } else {
+          final profile = await UserService.getUserProfile(userId);
+          if (profile?.location != null && profile!.location!.isNotEmpty) {
+            final parts = profile.location!.split(',');
+            if (mounted) {
+              setState(() {
+                _currentCity = parts[0].trim();
+                if (parts.length > 1) _currentCountry = parts[1].trim();
+                _isLoadingLocation = false; // Allow feed to start loading with cached location
+              });
+            }
           }
         }
       }

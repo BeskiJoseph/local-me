@@ -61,6 +61,7 @@ class UserRepository {
       'username': data.username ?? displayName ?? '',
       'firstName': data.firstName,
       'lastName': data.lastName,
+      'location': data.location,
       'profileImageUrl': profileImageUrl ?? photoURL,
     });
     if (!response.success) throw response.error ?? "Failed to create profile";

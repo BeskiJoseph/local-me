@@ -30,18 +30,19 @@ class LocationService {
         existingLocation = response.data!['location'] as String?;
       }
       
-      // UX Hardening: If location already exists and not forceSync, ask "Why overwrite?"
-      // In this logic, we skip auto-sync if location is already set, 
-      // unless it's the first time or explicitly asked.
+      // UX Hardening: If location already exists and not forceSync, we still need coordinates
+      // for the geo-feed, but we won't overwrite the city name in the profile unless forced.
       if (existingLocation != null && existingLocation.isNotEmpty && !forceSync) {
-        if (kDebugMode) debugPrint('📍 Location already set to "$existingLocation". Skipping auto-detection to protect user choice.');
-        
-        // Load existing into cache even if we don't detection
         final parts = existingLocation.split(',');
         _cachedCity = parts[0].trim();
         if (parts.length > 1) _cachedCountry = parts[1].trim();
-        
-        return;
+
+        // If we already have coordinates, we can truly skip
+        if (_cachedPosition != null) {
+           if (kDebugMode) debugPrint('📍 Location and coordinates already cached. Skipping.');
+           return;
+        }
+        if (kDebugMode) debugPrint('📍 Location set to "$existingLocation" but missing coordinates. Fetching GPS...');
       }
 
       // 2. Check permissions

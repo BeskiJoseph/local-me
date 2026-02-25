@@ -17,21 +17,29 @@ class CreateEventScreen extends StatefulWidget {
 
 class _CreateEventScreenState extends State<CreateEventScreen> {
   final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _dateController = TextEditingController();
-  final TextEditingController _timeController = TextEditingController();
+  final TextEditingController _startDateController = TextEditingController();
+  final TextEditingController _startTimeController = TextEditingController();
+  final TextEditingController _endDateController = TextEditingController();
+  final TextEditingController _endTimeController = TextEditingController();
+  
   final TextEditingController _locationController = TextEditingController();
   final TextEditingController _tagsController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
   File? _coverImage;
   bool _isSubmitting = false;
-  DateTime? _selectedDate;
-  TimeOfDay? _selectedTime;
+  
+  DateTime? _selectedStartDate;
+  TimeOfDay? _selectedStartTime;
+  DateTime? _selectedEndDate;
+  TimeOfDay? _selectedEndTime;
 
   @override
   void dispose() {
     _titleController.dispose();
-    _dateController.dispose();
-    _timeController.dispose();
+    _startDateController.dispose();
+    _startTimeController.dispose();
+    _endDateController.dispose();
+    _endTimeController.dispose();
     _locationController.dispose();
     _tagsController.dispose();
     super.dispose();
@@ -46,30 +54,45 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     }
   }
 
-  Future<void> _pickDate() async {
+  Future<void> _pickDate({required bool isStart}) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: DateTime.now(),
+      initialDate: isStart ? DateTime.now() : (_selectedStartDate ?? DateTime.now()),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
     if (picked != null) {
       setState(() {
-        _selectedDate = picked;
-        _dateController.text = "${picked.day}/${picked.month}/${picked.year}";
+        if (isStart) {
+          _selectedStartDate = picked;
+          _startDateController.text = "${picked.month}/${picked.day}/${picked.year}";
+          // Reset end date if it's now before the start date
+          if (_selectedEndDate != null && _selectedEndDate!.isBefore(picked)) {
+            _selectedEndDate = null;
+            _endDateController.clear();
+          }
+        } else {
+          _selectedEndDate = picked;
+          _endDateController.text = "${picked.month}/${picked.day}/${picked.year}";
+        }
       });
     }
   }
 
-  Future<void> _pickTime() async {
+  Future<void> _pickTime({required bool isStart}) async {
     final TimeOfDay? picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.now(),
     );
     if (picked != null) {
       setState(() {
-        _selectedTime = picked;
-        _timeController.text = picked.format(context);
+        if (isStart) {
+          _selectedStartTime = picked;
+          _startTimeController.text = picked.format(context);
+        } else {
+          _selectedEndTime = picked;
+          _endTimeController.text = picked.format(context);
+        }
       });
     }
   }
@@ -85,9 +108,34 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       return;
     }
 
-    if (_selectedDate == null) {
+    if (_selectedStartDate == null || _selectedStartTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a date')),
+        const SnackBar(content: Text('Please select a Start Date and Time')),
+      );
+      return;
+    }
+
+    if (_selectedEndDate == null || _selectedEndTime == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select an End Date and Time')),
+      );
+      return;
+    }
+
+    // Combine date and time for validation and payload
+    final DateTime startDateTime = DateTime(
+      _selectedStartDate!.year, _selectedStartDate!.month, _selectedStartDate!.day,
+      _selectedStartTime!.hour, _selectedStartTime!.minute,
+    );
+
+    final DateTime endDateTime = DateTime(
+      _selectedEndDate!.year, _selectedEndDate!.month, _selectedEndDate!.day,
+      _selectedEndTime!.hour, _selectedEndTime!.minute,
+    );
+
+    if (endDateTime.isBefore(startDateTime) || endDateTime.isAtSameMomentAs(startDateTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('End time must be after the start time')),
       );
       return;
     }
@@ -112,23 +160,12 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         );
       }
 
-      // Combine date and time
-      DateTime eventDateTime = _selectedDate!;
-      if (_selectedTime != null) {
-        eventDateTime = DateTime(
-          _selectedDate!.year,
-          _selectedDate!.month,
-          _selectedDate!.day,
-          _selectedTime!.hour,
-          _selectedTime!.minute,
-        );
-      }
-
       await PostService.createEvent(
         title: _titleController.text.trim(),
         description: '', // Can be improved if we add a description field
         eventType: 'Classic',
-        eventDate: eventDateTime,
+        eventStartDate: startDateTime,
+        eventEndDate: endDateTime,
         location: _locationController.text.trim(),
         latitude: position?.latitude,
         longitude: position?.longitude,
@@ -307,26 +344,58 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
                   
                   const SizedBox(height: 32),
 
-                  // --- Date Selection ---
-                  _buildSectionLabel(icon: Icons.calendar_today_rounded, title: 'Date', hasArrow: true),
-                  _buildSlimInput(
-                    controller: _dateController, 
-                    hintText: 'Select Date', 
-                    isReadOnly: true,
-                    prefixIcon: Icons.calendar_today_outlined,
-                    onTap: _pickDate,
+                  // --- Start Date & Time ---
+                  _buildSectionLabel(icon: Icons.play_circle_fill_rounded, title: 'Starts', hasArrow: false),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildSlimInput(
+                          controller: _startDateController, 
+                          hintText: 'Date', 
+                          isReadOnly: true,
+                          prefixIcon: Icons.calendar_today_outlined,
+                          onTap: () => _pickDate(isStart: true),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildSlimInput(
+                          controller: _startTimeController, 
+                          hintText: 'Time', 
+                          isReadOnly: true,
+                          prefixIcon: Icons.access_time_outlined,
+                          onTap: () => _pickTime(isStart: true),
+                        ),
+                      ),
+                    ],
                   ),
                   
                   const SizedBox(height: 24),
 
-                  // --- Time Selection ---
-                  _buildSectionLabel(icon: Icons.access_time_rounded, title: 'Time', hasArrow: true),
-                  _buildSlimInput(
-                    controller: _timeController, 
-                    hintText: 'Select Time', 
-                    isReadOnly: true,
-                    prefixIcon: Icons.access_time_outlined,
-                    onTap: _pickTime,
+                  // --- End Date & Time ---
+                  _buildSectionLabel(icon: Icons.stop_circle_rounded, title: 'Ends', hasArrow: false),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildSlimInput(
+                          controller: _endDateController, 
+                          hintText: 'Date', 
+                          isReadOnly: true,
+                          prefixIcon: Icons.calendar_today_outlined,
+                          onTap: () => _pickDate(isStart: false),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildSlimInput(
+                          controller: _endTimeController, 
+                          hintText: 'Time', 
+                          isReadOnly: true,
+                          prefixIcon: Icons.access_time_outlined,
+                          onTap: () => _pickTime(isStart: false),
+                        ),
+                      ),
+                    ],
                   ),
                   
                   const SizedBox(height: 24),
