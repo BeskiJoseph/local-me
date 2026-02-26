@@ -30,8 +30,8 @@ class _PostInsightsScreenState extends State<PostInsightsScreen> {
       final response = await BackendService.getPostInsights(widget.post.id);
       if (response.success && response.data != null) {
         setState(() {
-          _viewCount = response.data['viewCount'] ?? 0;
-          _viewers = List<Map<String, dynamic>>.from(response.data['viewers'] ?? []);
+          _viewCount = response.data!['viewCount'] ?? 0;
+          _viewers = List<Map<String, dynamic>>.from(response.data!['viewers'] ?? []);
           _isLoading = false;
         });
       } else {

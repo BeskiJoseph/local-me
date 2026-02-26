@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import '../models/post.dart';
 import '../models/paginated_response.dart';
 import '../repositories/post_repository.dart';
@@ -18,7 +19,11 @@ class PostService {
   static final _eventController = StreamController<FeedEvent>.broadcast();
   static Stream<FeedEvent> get events => _eventController.stream;
 
-  static void emit(FeedEvent event) => _eventController.add(event);
+  static void emit(FeedEvent event) {
+    debugPrint('📡 PostService emitting event: ${event.type}');
+    _eventController.add(event);
+    debugPrint('📡 Event added to stream controller');
+  }
 
   static PostRepository get repository => _repository;
 
@@ -53,7 +58,9 @@ class PostService {
       mediaType: mediaType,
       thumbnailUrl: thumbnailUrl,
     );
+    debugPrint('🔥 Post created with ID: $result');
     emit(FeedEvent(FeedEventType.postCreated, result));
+    debugPrint('📧 FeedEvent emitted for post creation');
     return result;
   }
 

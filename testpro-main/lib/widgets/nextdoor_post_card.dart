@@ -251,7 +251,8 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
           ),
 
           // ── Media ────────────────────────────────────────────
-          if (post.mediaUrl != null) ...[
+          // Show media section for posts with URLs or temporary posts
+          if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
             _PostMedia(post: post),
             const SizedBox(height: 6),
           ],
@@ -610,6 +611,43 @@ class _PostMedia extends StatelessWidget {
     final isVideo = post.mediaType == 'video';
     // Instagram-style: 4:5 for images (compact), 9:16 for videos (vertical)
     final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
+    
+    // For temporary posts without media URL, show loading state
+    if (post.mediaUrl == null && post.id.startsWith('temp_')) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: AspectRatio(
+          aspectRatio: aspectRatio,
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFECECEC),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Uploading media...',
+                    style: TextStyle(
+                      color: Color(0xFF8A8A8A),
+                      fontSize: 12,
+                      fontFamily: AppTheme.fontFamily,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     
     return GestureDetector(
       onTap: () => Navigator.push(

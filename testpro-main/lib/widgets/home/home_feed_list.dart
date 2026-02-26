@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../../services/post_service.dart';
 import '../../models/post.dart';
 import '../../models/paginated_response.dart';
@@ -35,6 +36,7 @@ class HomeFeedList extends StatefulWidget {
 class _HomeFeedListState extends State<HomeFeedList>
     with AutomaticKeepAliveClientMixin {
   late final ScrollController _scrollController;
+  StreamSubscription<FeedEvent>? _eventSubscription;
 
   Future<PaginatedResponse<Post>>? _feedFuture;
   String? _futureFeedType;
@@ -43,6 +45,9 @@ class _HomeFeedListState extends State<HomeFeedList>
   
   // Static cache to persist posts across navigation
   static final Map<String, PaginatedResponse<Post>> _postsCache = {};
+  
+  // Static temporary posts to persist across widget recreation
+  static final List<Post> _tempPosts = [];
 
   @override
   bool get wantKeepAlive => true;
@@ -60,11 +65,66 @@ class _HomeFeedListState extends State<HomeFeedList>
       _futureCity = widget.userCity;
       _futureCountry = widget.userCountry;
     }
+    
+    // Listen for post creation and deletion events for optimistic updates
+    _eventSubscription = PostService.events.listen((event) {
+      debugPrint('📬 HomeFeedList received event: ${event.type}');
+      if (!mounted) {
+        debugPrint('⚠️ HomeFeedList not mounted, skipping event');
+        return;
+      }
+      
+      if (event.type == FeedEventType.postCreated) {
+        debugPrint('📬 Post created event received');
+        final postData = event.data;
+        if (postData is Post) {
+          debugPrint('➕ Processing post: ${postData.id}');
+          debugPrint('➕ Post title: ${postData.title}');
+          debugPrint('➕ Post author: ${postData.authorName}');
+          debugPrint('➕ Post media URL: ${postData.mediaUrl}');
+          debugPrint('➕ Post media type: ${postData.mediaType}');
+          
+          // Check if this is an update to an existing temporary post
+          final existingIndex = _tempPosts.indexWhere((p) => p.id == postData.id);
+          if (existingIndex != -1) {
+            debugPrint('🔄 Updating existing temporary post at index: $existingIndex');
+            // Replace the existing temporary post with updated version
+            setState(() {
+              _tempPosts[existingIndex] = postData;
+            });
+            debugPrint('🔄 Temporary post updated with media URL: ${postData.mediaUrl != null}');
+          } else {
+            debugPrint('➕ Adding new temporary post to feed: ${postData.id}');
+            // Add new temporary post to the top of the feed
+            setState(() {
+              _tempPosts.insert(0, postData);
+            });
+          }
+          debugPrint('➕ Temporary post processed. Current count: ${_tempPosts.length}');
+          debugPrint('➕ Temp posts IDs: ${_tempPosts.map((p) => p.id).toList()}');
+        } else {
+          debugPrint('⚠️ Event data is not a Post object: ${postData.runtimeType}');
+        }
+      } else if (event.type == FeedEventType.postDeleted) {
+        debugPrint('📬 Post deleted event received');
+        final postId = event.data;
+        if (postId is String) {
+          debugPrint('➖ Removing temporary post: $postId');
+          // Remove temporary post
+          setState(() {
+            _tempPosts.removeWhere((p) => p.id == postId);
+          });
+          debugPrint('➖ Temporary post removed. Current count: ${_tempPosts.length}');
+        }
+      }
+    });
+
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
+    _eventSubscription?.cancel();
     super.dispose();
   }
 
@@ -74,6 +134,7 @@ class _HomeFeedListState extends State<HomeFeedList>
         _futureCountry != widget.userCountry;
 
     if (_feedFuture == null || paramsChanged) {
+      debugPrint('📥 Fetching fresh posts for: ${widget.feedType}');
       _futureFeedType = widget.feedType;
       _futureCity = widget.userCity;
       _futureCountry = widget.userCountry;
@@ -83,16 +144,28 @@ class _HomeFeedListState extends State<HomeFeedList>
         userCountry: widget.userCountry,
         limit: 20, // Initial load limit
       );
+    } else {
+      debugPrint('📥 Using existing future for: ${widget.feedType}');
     }
     return _feedFuture!;
   }
 
   /// Public method to force feed refresh (called after post creation)
   void refreshFeed() {
+    debugPrint('🔄 Refreshing feed: $_cacheKey');
     _postsCache.remove(_cacheKey); // Clear cache
     setState(() {
       _feedFuture = null;
+      // Don't clear temporary posts here - they should persist until real post arrives
+      debugPrint('🔄 Feed future reset, will fetch fresh data');
+      debugPrint('🔄 Temp posts preserved during refresh: ${_tempPosts.length}');
     });
+  }
+  
+  /// Static method to clear all temporary posts
+  static void clearAllTempPosts() {
+    debugPrint('🧹 Clearing all temporary posts');
+    _tempPosts.clear();
   }
 
   @override
@@ -163,13 +236,34 @@ class _HomeFeedListState extends State<HomeFeedList>
         final response = snapshot.data ?? _postsCache[_cacheKey];
         final posts = response?.data ?? [];
         
+        // Clear temporary posts when we get fresh posts from server
+        // This happens when _feedFuture is null and we're fetching fresh data
+        if (_feedFuture == null && posts.isNotEmpty && _tempPosts.isNotEmpty && snapshot.connectionState == ConnectionState.done) {
+          // Check if these are actually new posts (not from cache)
+          final isFreshData = response != null && response != _postsCache[_cacheKey];
+          if (isFreshData) {
+            debugPrint('🔄 Fresh posts from server (${posts.length}), clearing temporary posts (${_tempPosts.length})');
+            _tempPosts.clear();
+          }
+        }
+        
+        // Combine temporary posts with real posts
+        final allPosts = [..._tempPosts, ...posts];
+        debugPrint('📊 Building feed display:');
+        debugPrint('📊  - Temp posts: ${_tempPosts.length}');
+        debugPrint('📊  - Real posts: ${posts.length}');
+        debugPrint('📊  - Total posts: ${allPosts.length}');
+        if (_tempPosts.isNotEmpty) {
+          debugPrint('📊  - Temp post IDs: ${_tempPosts.map((p) => p.id).toList()}');
+        }
+        
         final filteredPosts = widget.searchQuery.isEmpty
-            ? posts.where((post) {
+            ? allPosts.where((post) {
                 // Hide archived events from the feed entirely
                 if (post.isEvent && post.computedStatus == 'archived') return false;
                 return true;
               }).toList()
-            : posts.where((post) {
+            : allPosts.where((post) {
                 // Hide archived events from the feed entirely
                 if (post.isEvent && post.computedStatus == 'archived') return false;
                 final q = widget.searchQuery.toLowerCase();

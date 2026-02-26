@@ -161,9 +161,16 @@ class _HomeScreenState extends State<HomeScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const NewPostScreen()),
-      ).then((result) {
+      ).then((result) async {
         if (result == true) {
-          _refreshFeeds();
+          debugPrint('📝 Post creation confirmed, triggering feed refresh');
+          // Force a more aggressive refresh
+          await Future.delayed(const Duration(milliseconds: 200));
+          if (mounted) {
+            _refreshFeeds();
+            // Also trigger a hot reload to ensure UI updates
+            setState(() {});
+          }
         }
       });
       return;
@@ -172,7 +179,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _refreshFeeds() {
+    debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
     setState(() => _feedRevision++);
+    // Also force a rebuild of the entire widget tree
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
 
