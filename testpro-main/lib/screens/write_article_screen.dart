@@ -1,13 +1,8 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import 'package:image_picker/image_picker.dart';
 import '../config/app_theme.dart';
-import '../services/backend_service.dart';
 import '../services/post_service.dart';
 import '../services/location_service.dart';
 import '../services/auth_service.dart';
-import '../services/media_upload_service.dart';
 
 /// A custom controller that styles Markdown-like syntax visually in the editor
 class MarkdownEditingController extends TextEditingController {
@@ -79,8 +74,6 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _subtitleController = TextEditingController();
   final MarkdownEditingController _contentController = MarkdownEditingController();
-  final ImagePicker _picker = ImagePicker();
-  File? _selectedImage;
   bool _isSubmitting = false;
 
   @override
@@ -126,13 +119,10 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
     }
   }
 
+  // Articles are text-only, no image picking needed
   Future<void> _pickImage() async {
-    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-    if (image != null) {
-      setState(() {
-        _selectedImage = File(image.path);
-      });
-    }
+    // Disabled - articles don't support images
+    return;
   }
 
   Future<void> _submit() async {
@@ -160,24 +150,13 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
     setState(() => _isSubmitting = true);
 
     try {
-      final String postId = '${user.uid}_${DateTime.now().millisecondsSinceEpoch}';
-      
-      String? coverImageUrl;
-      if (_selectedImage != null) {
-        coverImageUrl = await MediaUploadService.uploadPostMedia(
-          postId: postId,
-          data: await _selectedImage!.readAsBytes(),
-          fileExtension: _selectedImage!.path.split('.').last,
-          mediaType: 'image',
-        );
-      }
-
+      // Articles are text-only, no media upload
       final responseId = await PostService.createPost(
         title: title,
         body: content,
         category: 'Article',
-        mediaUrl: coverImageUrl,
-        mediaType: 'image',
+        mediaUrl: null,
+        mediaType: 'text',
         city: LocationService.getLocationString(),
       );
 
@@ -362,10 +341,7 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
                             icon: Icons.link,
                             onTap: () => _formatText('[', '](url)'),
                           ),
-                          _ToolbarIcon(
-                            icon: Icons.image_outlined,
-                            onTap: _pickImage,
-                          ),
+                          // Note: Articles are text-only, no images allowed
                           _ToolbarIcon(
                             icon: Icons.text_fields,
                             onTap: () {},
@@ -392,99 +368,32 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Image Preview with Delete Option
-                        if (_selectedImage != null)
-                          Stack(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.file(
-                                  _selectedImage!,
-                                  width: double.infinity,
-                                  height: 200,
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: GestureDetector(
-                                  onTap: () => setState(() => _selectedImage = null),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(4),
-                                    decoration: const BoxDecoration(
-                                      color: Colors.black54,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(Icons.close, color: Colors.white, size: 16),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        if (_selectedImage != null) const SizedBox(height: 16),
-                        
-                        // Add Image Action
-                        GestureDetector(
-                          onTap: _pickImage,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFE2E8F0)),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.02),
-                                  blurRadius: 4,
-                                  offset: const Offset(0, 1),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: const [
-                                Icon(Icons.camera_alt, size: 16, color: Color(0xFF0D7474)),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Add Image',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF334155),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        const Divider(color: Color(0xFFF1F5F9), thickness: 1.0),
-                        const SizedBox(height: 12),
-                        
-                        // Styled Content Field
+                        // Articles are text-only - no image upload
+                        // Text Editor
                         TextField(
                           controller: _contentController,
                           maxLines: null,
                           minLines: 15,
+                          keyboardType: TextInputType.multiline,
                           style: const TextStyle(
-                            fontSize: 15,
-                            color: Color(0xFF475569),
-                            height: 1.6,
+                            fontSize: 17,
+                            height: 1.7,
+                            color: Color(0xFF334155),
+                            fontFamily: 'Georgia',
                           ),
                           decoration: const InputDecoration(
-                            hintText: 'Write your article here...',
+                            hintText: 'Start writing your article...',
+                            hintStyle: TextStyle(color: Color(0xFFCBD5E0)),
                             border: InputBorder.none,
                             enabledBorder: InputBorder.none,
                             focusedBorder: InputBorder.none,
-                            filled: false,
-                            hintStyle: TextStyle(color: Color(0xFFCBD5E0), fontSize: 15),
                             contentPadding: EdgeInsets.zero,
                           ),
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(height: 24),
                 ],
               ),
             ),
@@ -495,18 +404,17 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
   }
 }
 
+// Simple toolbar icon widget
 class _ToolbarIcon extends StatelessWidget {
   final IconData? icon;
   final String? label;
   final bool isBold;
-  final Color? color;
   final VoidCallback onTap;
 
   const _ToolbarIcon({
-    this.icon, 
-    this.label, 
-    this.isBold = false, 
-    this.color,
+    this.icon,
+    this.label,
+    this.isBold = false,
     required this.onTap,
   });
 
@@ -514,21 +422,19 @@ class _ToolbarIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(6),
       child: Container(
-        width: 44,
-        height: 40,
-        alignment: Alignment.center,
-        child: icon != null
-            ? Icon(icon, size: 20, color: color ?? const Color(0xFF475569))
-            : Text(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: label != null
+            ? Text(
                 label!,
                 style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: isBold ? FontWeight.w900 : FontWeight.w700,
-                  color: color ?? const Color(0xFF475569),
+                  fontWeight: isBold ? FontWeight.bold : FontWeight.w500,
+                  fontSize: 15,
+                  color: const Color(0xFF475569),
                 ),
-              ),
+              )
+            : Icon(icon, size: 18, color: const Color(0xFF475569)),
       ),
     );
   }

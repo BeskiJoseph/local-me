@@ -69,6 +69,8 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
 
     final isVideo = widget.post.mediaType == 'video';
     final mediaUrl = widget.post.thumbnailUrl ?? widget.post.mediaUrl!;
+    // Instagram-style: 4:5 for images (compact), 9:16 for videos (vertical)
+    final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
 
     return Container(
       margin: const EdgeInsets.only(top: 12),
@@ -82,7 +84,7 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
               children: [
                 // Main Image/Video Thumbnail
                 AspectRatio(
-                  aspectRatio: 16 / 9,
+                  aspectRatio: aspectRatio,
                   child: Stack(
                     fit: StackFit.expand,
                     children: [

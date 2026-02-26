@@ -30,6 +30,7 @@ class Post {
   final bool isLiked;
   final double? distance; // Distance from user in km
   final double? trendingScore; // For global feed trending sort
+  final int viewCount; // View count for posts
 
   Post({
     required this.id,
@@ -61,6 +62,7 @@ class Post {
     this.isLiked = false,
     this.distance,
     this.trendingScore,
+    this.viewCount = 0,
   });
 
   factory Post.fromJson(Map<String, dynamic> json) {
@@ -109,6 +111,7 @@ class Post {
       isLiked: json['isLiked'] ?? false,
       distance: (json['distance'] as num?)?.toDouble(),
       trendingScore: (json['trendingScore'] as num?)?.toDouble(),
+      viewCount: json['viewCount'] as int? ?? 0,
     );
   }
 
@@ -144,6 +147,7 @@ class Post {
       'isFree': isFree,
       'attendeeCount': attendeeCount,
       'isLiked': isLiked,
+      'viewCount': viewCount,
     };
   }
 }

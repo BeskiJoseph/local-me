@@ -115,23 +115,43 @@ class _NewPostScreenState extends State<NewPostScreen> {
                 ),
               ),
               ListTile(
+                leading: const Icon(Icons.camera_alt_outlined),
+                title: const Text('Take Photo'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final file = await _picker.pickImage(source: ImageSource.camera);
+                  _processMedia(file, 'image', 'jpg');
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Choose from Gallery'),
+                title: const Text('Choose Photo from Gallery'),
                 onTap: () async {
                   Navigator.pop(context);
                   final file = await _picker.pickImage(source: ImageSource.gallery);
                   _processMedia(file, 'image', 'jpg');
                 },
               ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: const Text('Record Video'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final file = await _picker.pickVideo(source: ImageSource.camera);
+                  _processMedia(file, 'video', 'mp4');
+                },
+              ),
               ListTile(
                 leading: const Icon(Icons.video_library_outlined),
-                title: const Text('Choose Video'),
+                title: const Text('Choose Video from Gallery'),
                 onTap: () async {
                   Navigator.pop(context);
                   final file = await _picker.pickVideo(source: ImageSource.gallery);
                   _processMedia(file, 'video', 'mp4');
                 },
               ),
+              // Camera and Gallery options available
               const SizedBox(height: 16),
             ],
           ),
@@ -176,9 +196,17 @@ class _NewPostScreenState extends State<NewPostScreen> {
     final user = AuthService.currentUser;
     if (user == null) return;
 
-    if (_contentController.text.trim().isEmpty && _mediaBytes == null) {
+    // Normal posts REQUIRE image or video - text only not allowed
+    if (_mediaBytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please share some thoughts or add media')),
+        const SnackBar(content: Text('Please add an image or video to post')),
+      );
+      return;
+    }
+
+    if (_contentController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please add a caption')),
       );
       return;
     }

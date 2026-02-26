@@ -152,6 +152,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         });
         _initializeVideo();
         _loadAllStatus();
+        // Track post view
+        BackendService.trackPostView(widget.postId!).catchError((e) {
+          debugPrint('Error tracking view: $e');
+        });
       } else {
         setState(() => _isLoading = false);
       }
@@ -331,7 +335,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
                         child: AspectRatio(
-                          aspectRatio: 16 / 9,
+                          // Instagram-style: 4:5 for images, 9:16 for videos
+                          aspectRatio: post.mediaType == 'video' ? 9 / 16 : 4 / 5,
                           child: _isVideo && _videoController != null
                               ? Stack(
                                   alignment: Alignment.center,
@@ -480,7 +485,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                         ClipRRect(
                                           borderRadius: BorderRadius.circular(16),
                                           child: AspectRatio(
-                                            aspectRatio: 16 / 10,
+                                            // Instagram-style: 4:5
+                                            aspectRatio: 4 / 5,
                                             child: item.mediaUrl != null
                                                 ? Image.network(
                                                     ProxyHelper.getUrl(item.mediaUrl!),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:share_plus/share_plus.dart';
 import '../models/post.dart';
 import '../config/app_theme.dart';
 import '../services/auth_service.dart';
@@ -8,12 +9,13 @@ import '../services/post_service.dart';
 import '../utils/proxy_helper.dart';
 
 import '../screens/post_detail_screen.dart';
+import '../screens/post_insights_screen.dart';
 import '../core/utils/time_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
 import '../core/utils/navigation_utils.dart';
+import 'comments_bottom_sheet.dart';
 import 'package:intl/intl.dart';
-import 'dart:ui';
 
 /// ============================================================
 /// POST CARD — pixel-matched to screenshot
@@ -262,11 +264,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
               isLiked: _optimisticLiked ?? _isLiked,
               likeCount: _optimisticLikeCount ?? _likeCount,
               onLike: user != null ? _handleLike : null,
-              onComment: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => PostDetailScreen(post: post)),
-              ),
+              onComment: () => CommentsBottomSheet.show(context, post),
             ),
           ),
         ],
@@ -407,6 +405,167 @@ class _PostHeader extends StatelessWidget {
         isOwner: isOwner,
         post: post,
         onDelete: onDelete,
+        onEdit: () {
+          Navigator.pop(context);
+          // Navigate to edit screen (can be implemented later)
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Edit feature coming soon')),
+          );
+        },
+        onShare: () async {
+          Navigator.pop(context);
+          final shareText = '${post.title.isNotEmpty ? post.title : post.body}\n\nShared via App';
+          try {
+            await Share.share(shareText);
+          } catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Error sharing: $e')),
+              );
+            }
+          }
+        },
+        onViewInsights: () {
+          Navigator.pop(context);
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => PostInsightsScreen(post: post)),
+          );
+        },
+        onMute: () {
+          Navigator.pop(context);
+          _handleMuteUser(context);
+        },
+        onReport: () {
+          Navigator.pop(context);
+          _showReportDialog(context);
+        },
+      ),
+    );
+  }
+
+  void _handleMuteUser(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Mute @${post.authorName}?'),
+        content: Text(
+          "You won't see posts from @${post.authorName} in your feed anymore. You can unmute them from their profile.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              // Call mute user API
+              try {
+                final response = await BackendService.muteUser(post.authorId);
+                if (context.mounted) {
+                  if (response.success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('@${post.authorName} has been muted')),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Error: ${response.error}')),
+                    );
+                  }
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error muting user: $e')),
+                  );
+                }
+              }
+            },
+            child: const Text('Mute', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showReportDialog(BuildContext context) {
+    String? selectedReason;
+    final reasons = [
+      'Spam or misleading',
+      'Harassment or hate speech',
+      'Violence or dangerous content',
+      'Nudity or sexual content',
+      'False information',
+      'Intellectual property violation',
+      'Something else',
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Report Post'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Why are you reporting this post?',
+                  style: TextStyle(fontSize: 14, color: Color(0xFF666666)),
+                ),
+                const SizedBox(height: 16),
+                ...reasons.map((reason) => RadioListTile<String>(
+                      title: Text(reason, style: const TextStyle(fontSize: 14)),
+                      value: reason,
+                      groupValue: selectedReason,
+                      contentPadding: EdgeInsets.zero,
+                      onChanged: (value) {
+                        setState(() => selectedReason = value);
+                      },
+                    )),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: selectedReason == null
+                  ? null
+                  : () async {
+                      Navigator.pop(context);
+                      // Call report post API
+                      try {
+                        final response = await BackendService.reportPost(post.id, selectedReason!);
+                        if (context.mounted) {
+                          if (response.success) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Thank you for your report. We will review it shortly.'),
+                              ),
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Error: ${response.error}')),
+                            );
+                          }
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Error reporting post: $e')),
+                          );
+                        }
+                      }
+                    },
+              child: const Text('Report', style: TextStyle(color: Colors.red)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -440,7 +599,7 @@ class _CategoryChip extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Media — full width, 16:10 ratio, rounded corners, video badge
+// Media — Instagram-style compact, 4:5 for images, 9:16 for video
 // ─────────────────────────────────────────────────────────────
 class _PostMedia extends StatelessWidget {
   final Post post;
@@ -448,6 +607,10 @@ class _PostMedia extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isVideo = post.mediaType == 'video';
+    // Instagram-style: 4:5 for images (compact), 9:16 for videos (vertical)
+    final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
+    
     return GestureDetector(
       onTap: () => Navigator.push(
         context,
@@ -458,7 +621,7 @@ class _PostMedia extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: AspectRatio(
-            aspectRatio: 16 / 10,
+            aspectRatio: aspectRatio,
             child: Stack(
               fit: StackFit.expand,
               children: [
@@ -466,9 +629,15 @@ class _PostMedia extends StatelessWidget {
                   imageUrl: ProxyHelper.getUrl(
                       post.thumbnailUrl ?? post.mediaUrl!),
                   fit: BoxFit.cover,
-                  memCacheWidth: 800,
+                  memCacheWidth: 600,
                   placeholder: (context, url) => Container(
                     color: const Color(0xFFECECEC),
+                    child: const Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppTheme.primary,
+                      ),
+                    ),
                   ),
                   errorWidget: (context, url, error) => Container(
                     color: const Color(0xFFECECEC),
@@ -476,7 +645,7 @@ class _PostMedia extends StatelessWidget {
                         color: Color(0xFF8A8A8A)),
                   ),
                 ),
-                // Video duration badge
+                // Video play badge
                 if (post.mediaType == 'video')
                   Positioned(
                     bottom: 10,
@@ -569,12 +738,7 @@ class _ReactionRow extends StatelessWidget {
 
         const Spacer(),
 
-        // Bookmark
-        GestureDetector(
-          onTap: () {},
-          child: const Icon(Icons.bookmark_border_rounded,
-              color: Color(0xFF6E6E73), size: 22),
-        ),
+        // View count removed bookmark
       ],
     );
   }
@@ -630,8 +794,22 @@ class _OptionsSheet extends StatelessWidget {
   final bool isOwner;
   final Post post;
   final VoidCallback? onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onShare;
+  final VoidCallback? onViewInsights;
+  final VoidCallback? onMute;
+  final VoidCallback? onReport;
 
-  const _OptionsSheet({required this.isOwner, required this.post, this.onDelete});
+  const _OptionsSheet({
+    required this.isOwner,
+    required this.post,
+    this.onDelete,
+    this.onEdit,
+    this.onShare,
+    this.onViewInsights,
+    this.onMute,
+    this.onReport,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -662,18 +840,18 @@ class _OptionsSheet extends StatelessWidget {
             _Tile(
               icon: Icons.edit_outlined,
               label: 'Edit Post',
-              onTap: () => Navigator.pop(context),
+              onTap: onEdit ?? () => Navigator.pop(context),
             ),
             _Tile(
               icon: Icons.share_outlined,
               label: 'Share Post',
-              onTap: () => Navigator.pop(context),
+              onTap: onShare ?? () => Navigator.pop(context),
             ),
             _Tile(
               icon: Icons.bar_chart_outlined,
               label: 'View Insights',
               iconColor: const Color(0xFF2E7D6A), // Greenish from screenshot
-              onTap: () => Navigator.pop(context),
+              onTap: onViewInsights ?? () => Navigator.pop(context),
             ),
             _Tile(
               icon: Icons.delete_outline_rounded,
@@ -687,27 +865,22 @@ class _OptionsSheet extends StatelessWidget {
             ),
           ] else ...[
             _Tile(
-              icon: Icons.link_rounded,
+              icon: Icons.share_outlined,
               label: 'Share Post',
-              onTap: () => Navigator.pop(context),
-            ),
-            _Tile(
-              icon: Icons.bookmark_border_rounded,
-              label: 'Bookmark',
-              onTap: () => Navigator.pop(context),
+              onTap: onShare ?? () => Navigator.pop(context),
             ),
             _Tile(
               icon: Icons.notifications_off_outlined,
               label: 'Mute @${post.authorName.replaceAll(' ', '')}',
               labelColor: const Color(0xFFE53935), // reddish muted color
               iconColor: const Color(0xFF8A8A8A),
-              onTap: () => Navigator.pop(context),
+              onTap: onMute ?? () => Navigator.pop(context),
             ),
             _Tile(
               icon: Icons.outlined_flag_rounded,
               label: 'Report Post',
               labelColor: const Color(0xFFE53935),
-              onTap: () => Navigator.pop(context),
+              onTap: onReport ?? () => Navigator.pop(context),
               isLast: true,
             ),
           ],
@@ -751,7 +924,7 @@ class _Tile extends StatelessWidget {
   final VoidCallback onTap;
   final bool isLast;
 
-  _Tile({
+  const _Tile({
     required this.icon,
     required this.label,
     required this.onTap,

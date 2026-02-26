@@ -56,7 +56,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       return;
     }
 
-    _debounce = Timer(const Duration(milliseconds: 500), () async {
+    _debounce = Timer(const Duration(milliseconds: 300), () async {
       if (!mounted) return;
       
       setState(() {
@@ -270,7 +270,17 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         if (response == null || !response.success || response.data == null) return _buildEmptyState();
 
         final data = response.data!;
-        final List<Post> posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+        final List<Post> allPosts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+        
+        // Explore: Show only Image/Video posts (no Events, no Articles)
+        final posts = allPosts.where((post) {
+          // Skip events
+          if (post.isEvent) return false;
+          // Skip articles (text-only posts without media)
+          if (post.mediaUrl == null || post.mediaUrl!.isEmpty) return false;
+          // Only show image and video posts
+          return post.mediaType == 'image' || post.mediaType == 'video';
+        }).toList();
         
         if (posts.isEmpty) return _buildEmptyState();
 

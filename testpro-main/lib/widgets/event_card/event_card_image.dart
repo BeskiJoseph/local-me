@@ -19,7 +19,8 @@ class EventCardImage extends StatelessWidget {
       child: Stack(
         children: [
           AspectRatio(
-            aspectRatio: 16 / 9,
+            // Instagram-style compact for events: 4:5
+            aspectRatio: 4 / 5,
             child: Image.network(
               ProxyHelper.getUrl(post.mediaUrl!),
               fit: BoxFit.cover,

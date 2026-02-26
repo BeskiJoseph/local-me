@@ -62,6 +62,11 @@ class BackendService {
   static Future<ApiResponse<bool>> checkUsername(String username) => _instance.checkUsername(username);
   static Future<ApiResponse<bool>> checkEventAttendance(String eventId) => _instance.checkEventAttendance(eventId);
   static Future<ApiResponse<List<String>>> getMyEventIds() => _instance.getMyEventIds();
+  static Future<ApiResponse<bool>> trackPostView(String postId) => _instance.trackPostView(postId);
+  static Future<ApiResponse<Map<String, dynamic>>> getPostInsights(String postId) => _instance.getPostInsights(postId);
+  static Future<ApiResponse<bool>> muteUser(String userId) => _instance.muteUser(userId);
+  static Future<ApiResponse<bool>> unmuteUser(String userId) => _instance.unmuteUser(userId);
+  static Future<ApiResponse<bool>> reportPost(String postId, String reason) => _instance.reportPost(postId, reason);
 
   // --- Session Management ---
   static Future<void> syncCustomTokens() => BackendClient.syncCustomTokens();
@@ -494,6 +499,57 @@ class BackendClient {
         final ids = d['eventIds'] as List<dynamic>;
         return ids.map((e) => e.toString()).toList();
       });
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> trackPostView(String postId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/posts/$postId/view'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<Map<String, dynamic>>> getPostInsights(String postId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.get(
+        Uri.parse('$_baseUrl/api/posts/$postId/insights'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (d) => d as Map<String, dynamic>);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> muteUser(String userId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/profiles/mute/$userId'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> unmuteUser(String userId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/profiles/unmute/$userId'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> reportPost(String postId, String reason) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/posts/$postId/report'),
+        headers: await _getHeaders(token),
+        body: jsonEncode({'reason': reason}),
+      ));
+      return _processResponse(resp, (_) => true);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 }

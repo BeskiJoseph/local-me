@@ -5,7 +5,7 @@ import '../../services/post_service.dart';
 import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
 import '../../shared/widgets/user_avatar.dart';
-import '../../screens/post_detail_screen.dart';
+import '../comments_bottom_sheet.dart';
 import '../../core/utils/navigation_utils.dart';
 import '../../screens/group_chat_screen.dart';
 
@@ -209,14 +209,7 @@ class _EventCardFooterState extends State<EventCardFooter> {
                     icon: Icons.chat_bubble_outline,
                     label: 'Reply',
                     count: widget.post.commentCount,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => PostDetailScreen(post: widget.post),
-                        ),
-                      );
-                    },
+                    onTap: () => CommentsBottomSheet.show(context, widget.post),
                   ),
                   const Spacer(),
                   if (user != null)

@@ -33,10 +33,11 @@ class MediaUploadService {
     const apiUrl = String.fromEnvironment('API_URL');
     if (apiUrl.isNotEmpty) {
       _cachedBaseUrl = apiUrl;
+      if (kDebugMode) debugPrint('✅ Using production API: $_cachedBaseUrl');
       return _cachedBaseUrl!;
     }
 
-    // 2. Resolve default local URL based on platform (Development only)
+    // 2. Resolve default local URL based on platform
     String defaultUrl = 'http://localhost:4000';
     
     // Auto-detect Android emulator loopback
@@ -45,7 +46,7 @@ class MediaUploadService {
     }
     
     if (kDebugMode) {
-       debugPrint('ℹ️ Using default API URL: $defaultUrl (cached)');
+       debugPrint('ℹ️ Using local API URL: $defaultUrl');
     }
     
     _cachedBaseUrl = defaultUrl;

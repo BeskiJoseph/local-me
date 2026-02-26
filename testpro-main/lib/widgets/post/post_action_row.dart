@@ -3,7 +3,7 @@ import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
-import '../../screens/post_detail_screen.dart';
+import '../comments_bottom_sheet.dart';
 
 class PostActionRow extends StatefulWidget {
   final Post post;
@@ -174,14 +174,7 @@ class _PostActionRowState extends State<PostActionRow> {
 
               // Comment Action
               InkWell(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => PostDetailScreen(post: widget.post),
-                    ),
-                  );
-                },
+                onTap: () => CommentsBottomSheet.show(context, widget.post),
                 borderRadius: BorderRadius.circular(20),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
