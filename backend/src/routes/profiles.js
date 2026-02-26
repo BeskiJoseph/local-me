@@ -1,6 +1,7 @@
 import express from 'express';
 import Joi from 'joi';
 import { db } from '../config/firebase.js';
+import admin from 'firebase-admin';
 import authenticate, { clearUserCache } from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
 import logger from '../utils/logger.js';
@@ -247,6 +248,93 @@ router.get('/:uid', authenticate, async (req, res, next) => {
                 // Only show email to owner or admin
                 ...((req.user.uid === req.params.uid || req.user.role === 'admin') ? { email, role } : {})
             },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   POST /api/profiles/mute/:userId
+ * @desc    Mute a user (hide their posts from feed)
+ */
+router.post('/mute/:userId', authenticate, async (req, res, next) => {
+    try {
+        const currentUserId = req.user.uid;
+        const targetUserId = req.params.userId;
+
+        // Prevent self-mute
+        if (currentUserId === targetUserId) {
+            return res.status(400).json({
+                success: false,
+                error: 'You cannot mute yourself'
+            });
+        }
+
+        // Check if target user exists
+        const targetUserDoc = await db.collection('users').doc(targetUserId).get();
+        if (!targetUserDoc.exists) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        // Add to mutedUsers array
+        await db.collection('users').doc(currentUserId).update({
+            mutedUsers: admin.firestore.FieldValue.arrayUnion(targetUserId),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Log audit trail
+        await AuditService.logAction({
+            userId: currentUserId,
+            action: 'USER_MUTED',
+            metadata: { mutedUserId: targetUserId },
+            req
+        });
+
+        logger.info({ currentUserId, targetUserId }, 'User muted successfully');
+
+        return res.json({
+            success: true,
+            data: { muted: true, userId: targetUserId },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   POST /api/profiles/unmute/:userId
+ * @desc    Unmute a user
+ */
+router.post('/unmute/:userId', authenticate, async (req, res, next) => {
+    try {
+        const currentUserId = req.user.uid;
+        const targetUserId = req.params.userId;
+
+        // Remove from mutedUsers array
+        await db.collection('users').doc(currentUserId).update({
+            mutedUsers: admin.firestore.FieldValue.arrayRemove(targetUserId),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Log audit trail
+        await AuditService.logAction({
+            userId: currentUserId,
+            action: 'USER_UNMUTED',
+            metadata: { unmutedUserId: targetUserId },
+            req
+        });
+
+        logger.info({ currentUserId, targetUserId }, 'User unmuted successfully');
+
+        return res.json({
+            success: true,
+            data: { unmuted: true, userId: targetUserId },
             error: null
         });
     } catch (err) {

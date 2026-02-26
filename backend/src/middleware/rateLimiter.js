@@ -2,10 +2,33 @@ import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
 import { logSecurityEvent } from '../utils/logger.js';
 
-// General API rate limiter
+// In-memory store for user-specific rate limiting
+const userRateLimits = new Map();
+
+// Helper to check user-specific rate limit
+export const checkUserRateLimit = (userId, action, maxAttempts = 5, windowMs = 15 * 60 * 1000) => {
+    const key = `${userId}:${action}`;
+    const now = Date.now();
+    const userLimit = userRateLimits.get(key);
+    
+    if (!userLimit || now > userLimit.resetTime) {
+        userRateLimits.set(key, { count: 1, resetTime: now + windowMs });
+        return { allowed: true, remaining: maxAttempts - 1 };
+    }
+    
+    if (userLimit.count >= maxAttempts) {
+        return { allowed: false, retryAfter: Math.ceil((userLimit.resetTime - now) / 1000) };
+    }
+    
+    userLimit.count++;
+    return { allowed: true, remaining: maxAttempts - userLimit.count };
+};
+
+// General API rate limiter - reduce for production
+const isProduction = process.env.NODE_ENV === 'production';
 export const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // Increased for development to 1000 requests per windowMs
+    max: isProduction ? 200 : 1000, // Stricter in production
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,

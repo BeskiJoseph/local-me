@@ -69,15 +69,17 @@ router.post(
                         likeCount: admin.firestore.FieldValue.increment(1)
                     });
 
-                    // Trigger notification (async, non-blocking)
-                    _sendNotificationInternal({
-                        toUserId: postDoc.data().authorId,
-                        fromUserId: userId,
-                        fromUserName: actorDisplayName,
-                        type: 'like',
-                        postId,
-                        postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
-                    }).catch(err => logger.error('Notification Error', { err: err.message }));
+                    // Send notification to post author if different from liker
+                    if (postDoc.data().authorId !== userId) {
+                        _sendNotificationInternal({
+                            toUserId: postDoc.data().authorId,
+                            fromUserId: userId,
+                            fromUserName: actorDisplayName,
+                            type: 'like',
+                            postId,
+                            postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
+                        }).catch(err => logger.error('Like Notification Error', { err: err.message }));
+                    }
                 }
             });
 
@@ -139,15 +141,18 @@ router.post(
                     commentCount: admin.firestore.FieldValue.increment(1)
                 });
 
-                _sendNotificationInternal({
-                    toUserId: postDoc.data().authorId,
-                    fromUserId: userId,
-                    fromUserName: actorDisplayName,
-                    type: 'comment',
-                    postId,
-                    commentText: text,
-                    postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
-                }).catch(err => logger.error('Notification Error', { err: err.message }));
+                // Send notification to post author if different from commenter
+                if (postDoc.data().authorId !== userId) {
+                    _sendNotificationInternal({
+                        toUserId: postDoc.data().authorId,
+                        fromUserId: userId,
+                        fromUserName: actorDisplayName,
+                        type: 'comment',
+                        postId,
+                        commentText: text,
+                        postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
+                    }).catch(err => logger.error('Comment Notification Error', { err: err.message }));
+                }
             });
 
             // Log Audit Action after successful transaction
@@ -308,6 +313,19 @@ router.post(
                     transaction.update(eventRef, {
                         attendeeCount: admin.firestore.FieldValue.increment(1)
                     });
+
+                    // Send notification to event creator
+                    const eventData = eventDoc.data();
+                    if (eventData.authorId && eventData.authorId !== userId) {
+                        _sendNotificationInternal({
+                            toUserId: eventData.authorId,
+                            fromUserId: userId,
+                            fromUserName: resolveActorDisplayName(req),
+                            type: 'event_join',
+                            postId: eventId,
+                            postThumbnail: eventData.thumbnailUrl || eventData.mediaUrl
+                        }).catch(err => logger.error('Event Join Notification Error', { err: err.message }));
+                    }
                 }
             });
             return res.json({

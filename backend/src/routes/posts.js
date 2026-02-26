@@ -144,6 +144,7 @@ router.post('/', authenticate, async (req, res, next) => {
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             likeCount: 0,
             commentCount: 0,
+            viewCount: 0,
             visibility: isShadowBanned ? 'shadow' : 'public',
             status: 'active',
             geoHash: geoHash
@@ -547,6 +548,16 @@ router.get('/', authenticate, async (req, res, next) => {
         // ∩┐╜∩┐╜∩┐╜ 5. Embed Like State (Step 4) ∩┐╜∩┐╜∩┐╜
         const finalResponse = await embedLikeState(responseData, uid);
 
+        // ∩┐╜∩┐╜∩┐╜ 5.5. Filter out muted users' posts ∩┐╜∩┐╜∩┐╜
+        const userDoc = await db.collection('users').doc(uid).get();
+        const mutedUsers = userDoc.exists ? (userDoc.data().mutedUsers || []) : [];
+        
+        if (mutedUsers.length > 0 && finalResponse.data) {
+            finalResponse.data = finalResponse.data.filter(post => 
+                !mutedUsers.includes(post.authorId)
+            );
+        }
+
         // ∩┐╜∩┐╜∩┐╜ 6. Anti-Scraping Throttler (Layer 4) ∩┐╜∩┐╜∩┐╜
         // Adds 50-200ms of random jitter to feed requests to frustrate high-velocity scrapers
         // without visibly degrading UX.
@@ -752,6 +763,216 @@ router.get('/:id/messages', authenticate, async (req, res, next) => {
         return res.json({
             success: true,
             data: messages,
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   POST /api/posts/:id/view
+ * @desc    Track a post view
+ */
+router.post('/:id/view', authenticate, async (req, res, next) => {
+    try {
+        const postId = req.params.id;
+        const userId = req.user.uid;
+
+        // Get user location data
+        const userDoc = await db.collection('users').doc(userId).get();
+        const userData = userDoc.data();
+        
+        const viewData = {
+            userId,
+            userName: buildDisplayName({
+                displayName: req.user.displayName,
+                username: userData?.username,
+                firstName: userData?.firstName,
+                lastName: userData?.lastName,
+                email: userData?.email || req.user.email,
+                fallback: 'User'
+            }),
+            userAvatar: req.user.photoURL,
+            location: userData?.city || null,
+            viewedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        // Store the view in a subcollection
+        const viewRef = db.collection('posts').doc(postId).collection('views').doc(userId);
+        await viewRef.set(viewData, { merge: true });
+
+        // Increment view count on the post
+        await db.collection('posts').doc(postId).update({
+            viewCount: admin.firestore.FieldValue.increment(1)
+        });
+
+        return res.json({
+            success: true,
+            data: { viewed: true },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   GET /api/posts/:id/insights
+ * @desc    Get post insights (views, viewer info)
+ */
+router.get('/:id/insights', authenticate, async (req, res, next) => {
+    try {
+        const postId = req.params.id;
+        const userId = req.user.uid;
+
+        // Check if user owns the post
+        const postDoc = await db.collection('posts').doc(postId).get();
+        if (!postDoc.exists) {
+            return res.status(404).json({
+                success: false,
+                error: 'Post not found'
+            });
+        }
+
+        const postData = postDoc.data();
+        if (postData.authorId !== userId) {
+            return res.status(403).json({
+                success: false,
+                error: 'You can only view insights for your own posts'
+            });
+        }
+
+        // Get view count
+        const viewCount = postData.viewCount || 0;
+
+        // Get viewers from subcollection
+        const viewsSnapshot = await db.collection('posts')
+            .doc(postId)
+            .collection('views')
+            .orderBy('viewedAt', 'desc')
+            .limit(100)
+            .get();
+
+        const viewers = viewsSnapshot.docs.map(doc => ({
+            ...doc.data(),
+            viewedAt: doc.data().viewedAt?.toDate()?.toISOString()
+        }));
+
+        return res.json({
+            success: true,
+            data: {
+                viewCount,
+                viewers
+            },
+            error: null
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   POST /api/posts/:id/report
+ * @desc    Report a post for violation
+ */
+router.post('/:id/report', authenticate, async (req, res, next) => {
+    try {
+        const postId = req.params.id;
+        const reporterId = req.user.uid;
+        const { reason } = req.body;
+
+        // Validate reason
+        const validReasons = [
+            'Spam or misleading',
+            'Harassment or hate speech',
+            'Violence or dangerous content',
+            'Nudity or sexual content',
+            'False information',
+            'Intellectual property violation',
+            'Something else'
+        ];
+
+        if (!reason || !validReasons.includes(reason)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid or missing report reason'
+            });
+        }
+
+        // Check if post exists
+        const postDoc = await db.collection('posts').doc(postId).get();
+        if (!postDoc.exists) {
+            return res.status(404).json({
+                success: false,
+                error: 'Post not found'
+            });
+        }
+
+        const postData = postDoc.data();
+
+        // Prevent reporting own posts
+        if (postData.authorId === reporterId) {
+            return res.status(400).json({
+                success: false,
+                error: 'You cannot report your own post'
+            });
+        }
+
+        // Store report
+        const reportData = {
+            postId,
+            postAuthorId: postData.authorId,
+            reporterId,
+            reporterName: buildDisplayName({
+                displayName: req.user.displayName,
+                email: req.user.email,
+                fallback: 'User'
+            }),
+            reason,
+            status: 'pending', // pending, reviewed, dismissed, action_taken
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            postTitle: postData.title || postData.body?.substring(0, 100) || 'Untitled',
+            postMediaUrl: postData.mediaUrl || null
+        };
+
+        const reportRef = await db.collection('reports').add(reportData);
+
+        // Increment report count on post (for auto-flagging)
+        await db.collection('posts').doc(postId).update({
+            reportCount: admin.firestore.FieldValue.increment(1),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Auto-flag if multiple reports (threshold: 5)
+        const updatedPostDoc = await db.collection('posts').doc(postId).get();
+        const reportCount = updatedPostDoc.data().reportCount || 0;
+        
+        if (reportCount >= 5) {
+            await db.collection('posts').doc(postId).update({
+                visibility: 'flagged', // Flagged for review
+                flaggedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            logger.warn({ postId, reportCount }, 'Post auto-flagged due to multiple reports');
+        }
+
+        // Log audit trail
+        await AuditService.logAction({
+            userId: reporterId,
+            action: 'POST_REPORTED',
+            metadata: { postId, reason, reportId: reportRef.id },
+            req
+        });
+
+        logger.info({ postId, reporterId, reason }, 'Post reported successfully');
+
+        return res.json({
+            success: true,
+            data: { 
+                reported: true, 
+                reportId: reportRef.id,
+                postId 
+            },
             error: null
         });
     } catch (err) {

@@ -11,32 +11,63 @@ const router = express.Router();
 router.get('/', authenticate, async (req, res, next) => {
     try {
         const { q, type = 'posts', limit = 20 } = req.query;
-        if (!q) return res.json({ data: [] });
+        if (!q || q.trim().length < 1) return res.json({ data: [] });
 
+        const searchTerm = q.trim().toLowerCase();
         const pageSize = Math.min(parseInt(limit), 50);
-        let query;
+        let results = [];
 
         if (type === 'users') {
-            query = db.collection('users')
-                .where('username', '>=', q)
-                .where('username', '<=', q + '\uf8ff')
+            // Search users by username prefix (case-insensitive)
+            const usernameQuery = db.collection('users')
+                .where('username', '>=', searchTerm)
+                .where('username', '<=', searchTerm + '\uf8ff')
                 .limit(pageSize);
+            
+            // Also search by display name
+            const displayNameQuery = db.collection('users')
+                .where('displayName', '>=', searchTerm)
+                .where('displayName', '<=', searchTerm + '\uf8ff')
+                .limit(pageSize);
+            
+            const [usernameSnap, displayNameSnap] = await Promise.all([
+                usernameQuery.get(),
+                displayNameQuery.get()
+            ]);
+            
+            const userMap = new Map();
+            usernameSnap.docs.forEach(doc => userMap.set(doc.id, { id: doc.id, ...doc.data() }));
+            displayNameSnap.docs.forEach(doc => userMap.set(doc.id, { id: doc.id, ...doc.data() }));
+            
+            results = Array.from(userMap.values()).slice(0, pageSize);
         } else {
-            query = db.collection('posts')
+            // Search posts by title prefix
+            const titleQuery = db.collection('posts')
                 .where('visibility', '==', 'public')
                 .where('status', '==', 'active')
-                .where('text', '>=', q)
-                .where('text', '<=', q + '\uf8ff')
+                .where('title', '>=', searchTerm)
+                .where('title', '<=', searchTerm + '\uf8ff')
                 .limit(pageSize);
-            // Note: Cloud Firestore prefix search is limited. 
-            // Better to use Algolia/Typesense for full-text.
+            
+            // Also search by body text
+            const bodyQuery = db.collection('posts')
+                .where('visibility', '==', 'public')
+                .where('status', '==', 'active')
+                .where('body', '>=', searchTerm)
+                .where('body', '<=', searchTerm + '\uf8ff')
+                .limit(pageSize);
+            
+            const [titleSnap, bodySnap] = await Promise.all([
+                titleQuery.get(),
+                bodyQuery.get()
+            ]);
+            
+            const postMap = new Map();
+            titleSnap.docs.forEach(doc => postMap.set(doc.id, { id: doc.id, ...doc.data() }));
+            bodySnap.docs.forEach(doc => postMap.set(doc.id, { id: doc.id, ...doc.data() }));
+            
+            results = Array.from(postMap.values()).slice(0, pageSize);
         }
-
-        const snapshot = await query.get();
-        const results = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
 
         return res.json({
             success: true,

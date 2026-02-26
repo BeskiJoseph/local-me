@@ -2,8 +2,14 @@ import express from 'express';
 import { securityHeaders, corsOptions, requestTimeout } from './middleware/security.js';
 import httpLogger from './middleware/httpLogger.js';
 import errorHandler from './middleware/errorHandler.js';
+import logger from './utils/logger.js';
 
 const app = express();
+
+// Production error tracking
+if (process.env.NODE_ENV === 'production') {
+    logger.info('🔒 Production mode: Security features enabled');
+}
 
 // 1. Trust proxy for correct IP detection
 app.set('trust proxy', 1);
