@@ -43,6 +43,7 @@ router.post(
         const likeRef = db.collection('likes').doc(likeId);
         const postRef = db.collection('posts').doc(postId);
 
+        let notificationPayload = null;
         try {
             await db.runTransaction(async (transaction) => {
                 const [likeDoc, postDoc] = await Promise.all([
@@ -69,19 +70,25 @@ router.post(
                         likeCount: admin.firestore.FieldValue.increment(1)
                     });
 
-                    // Send notification to post author if different from liker
+                    // Prepare notification to post author if different from liker
                     if (postDoc.data().authorId !== userId) {
-                        _sendNotificationInternal({
+                        notificationPayload = {
                             toUserId: postDoc.data().authorId,
                             fromUserId: userId,
                             fromUserName: actorDisplayName,
                             type: 'like',
                             postId,
                             postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
-                        }).catch(err => logger.error('Like Notification Error', { err: err.message }));
+                        };
                     }
                 }
             });
+
+            // Trigger notification outside transaction for speed
+            if (notificationPayload) {
+                _sendNotificationInternal(notificationPayload)
+                    .catch(err => logger.error('Like Notification Error', { err: err.message }));
+            }
 
             // Log Audit Action after successful transaction
             // Log Audit Action in background (Async)
@@ -122,6 +129,7 @@ router.post(
         const postRef = db.collection('posts').doc(postId);
         const commentRef = db.collection('comments').doc();
 
+        let notificationPayload = null;
         try {
             await db.runTransaction(async (transaction) => {
                 const postDoc = await transaction.get(postRef);
@@ -141,9 +149,9 @@ router.post(
                     commentCount: admin.firestore.FieldValue.increment(1)
                 });
 
-                // Send notification to post author if different from commenter
+                // Prepare notification to post author if different from commenter
                 if (postDoc.data().authorId !== userId) {
-                    _sendNotificationInternal({
+                    notificationPayload = {
                         toUserId: postDoc.data().authorId,
                         fromUserId: userId,
                         fromUserName: actorDisplayName,
@@ -151,9 +159,15 @@ router.post(
                         postId,
                         commentText: text,
                         postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
-                    }).catch(err => logger.error('Comment Notification Error', { err: err.message }));
+                    };
                 }
             });
+
+            // Trigger notification outside transaction
+            if (notificationPayload) {
+                _sendNotificationInternal(notificationPayload)
+                    .catch(err => logger.error('Comment Notification Error', { err: err.message }));
+            }
 
             // Log Audit Action after successful transaction
             // Log Audit Action in background

@@ -57,6 +57,11 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       case FeedEventType.eventMembershipChanged:
         // Membership changes affect community/event surfaces, not feed list items directly.
         break;
+      case FeedEventType.postLiked:
+        final data = event.data as Map<String, dynamic>;
+        _likedPostIds[data['postId']] = data['isLiked'];
+        _feedController.updatePostLike(data['postId'], data['isLiked'], data['likeCount']);
+        break;
     }
   }
   

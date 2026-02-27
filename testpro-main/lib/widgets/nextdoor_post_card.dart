@@ -16,6 +16,7 @@ import '../core/session/user_session.dart';
 import '../core/utils/navigation_utils.dart';
 import 'comments_bottom_sheet.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 
 /// ============================================================
 /// POST CARD — pixel-matched to screenshot
@@ -80,6 +81,11 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
           _optimisticLiked = null;
           _optimisticLikeCount = null;
         });
+        // Emit global event for sync across feeds
+        PostService.emit(FeedEvent(
+          FeedEventType.postLiked, 
+          {'postId': widget.post.id, 'isLiked': newTarget, 'likeCount': _likeCount}
+        ));
       }
     } catch (e) {
       if (mounted) {
@@ -298,7 +304,10 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
 // ─────────────────────────────────────────────────────────────
 // Header: avatar | name + location | time | ···
 // ─────────────────────────────────────────────────────────────
-class _PostHeader extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────
+// Header: avatar | name + location | follow | time | ···
+// ─────────────────────────────────────────────────────────────
+class _PostHeader extends StatefulWidget {
   final Post post;
   final dynamic user;
   final VoidCallback? onDelete;
@@ -306,15 +315,80 @@ class _PostHeader extends StatelessWidget {
   const _PostHeader({required this.post, this.user, this.onDelete});
 
   @override
+  State<_PostHeader> createState() => _PostHeaderState();
+}
+
+class _PostHeaderState extends State<_PostHeader> {
+  bool _isFollowing = false;
+  bool _isBusy = false;
+  StreamSubscription? _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkInitialFollowState();
+    _subscription = PostService.events.listen((event) {
+      if (event.type == FeedEventType.userFollowed) {
+        final data = event.data as Map<String, dynamic>;
+        if (data['userId'] == widget.post.authorId) {
+          if (mounted) setState(() => _isFollowing = data['isFollowing']);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkInitialFollowState() async {
+    if (widget.user == null || widget.post.authorId == widget.user.uid) return;
+    try {
+      final res = await BackendService.checkFollowState(widget.post.authorId);
+      if (res.success && mounted) {
+        setState(() => _isFollowing = res.data ?? false);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFollow() async {
+    if (_isBusy) return;
+    setState(() => _isBusy = true);
+    final newState = !_isFollowing;
+    
+    // Optimistic
+    setState(() => _isFollowing = newState);
+    PostService.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': newState}));
+
+    try {
+      final res = await BackendService.toggleFollow(widget.post.authorId);
+      if (!res.success && mounted) {
+        // Rollback
+        setState(() => _isFollowing = !newState);
+        PostService.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': !newState}));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isFollowing = !newState);
+        PostService.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': !newState}));
+      }
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder(
+    return ValueListenableBuilder<UserSessionData?>(
       valueListenable: UserSession.current,
       builder: (context, sessionData, _) {
-        final isMe = UserSession.isMe(post.authorId);
-        final displayAvatar = isMe ? (sessionData?.avatarUrl ?? post.authorProfileImage) : post.authorProfileImage;
+        final isMe = UserSession.isMe(widget.post.authorId);
+        final displayAvatar = isMe ? (sessionData?.avatarUrl ?? widget.post.authorProfileImage) : widget.post.authorProfileImage;
         final displayName = isMe 
-            ? (sessionData?.displayName ?? post.authorName) 
-            : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
+            ? (sessionData?.displayName ?? widget.post.authorName) 
+            : ((widget.post.authorName.isEmpty || widget.post.authorName == 'User') ? 'User' : widget.post.authorName);
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -322,8 +396,8 @@ class _PostHeader extends StatelessWidget {
             // Avatar
             GestureDetector(
               onTap: () {
-                if (user != null && post.authorId != user.uid) {
-                  NavigationUtils.navigateToProfile(context, post.authorId);
+                if (widget.user != null && widget.post.authorId != widget.user.uid) {
+                  NavigationUtils.navigateToProfile(context, widget.post.authorId);
                 }
               },
               child: UserAvatar(
@@ -351,61 +425,80 @@ class _PostHeader extends StatelessWidget {
                       color: Color(0xFF1A1A1A),
                     ),
                   ),
-                  if (post.city != null && post.city!.isNotEmpty) ...[
+                  if (widget.post.city != null && widget.post.city!.isNotEmpty) ...[
                     const SizedBox(height: 1),
                     Row(
                       children: [
-                        const Icon(Icons.location_on_rounded,
-                            size: 13, color: Color(0xFF8A8A8A)),
-                    const SizedBox(width: 2),
-                    Text(
-                      post.city!,
-                      style: const TextStyle(
-                        fontFamily: AppTheme.fontFamily,
-                        fontSize: 12,
-                        color: Color(0xFF8A8A8A),
-                      ),
+                        const Icon(Icons.location_on_rounded, size: 13, color: Color(0xFF8A8A8A)),
+                        const SizedBox(width: 2),
+                        Text(
+                          widget.post.city!,
+                          style: const TextStyle(
+                            fontFamily: AppTheme.fontFamily,
+                            fontSize: 12,
+                            color: Color(0xFF8A8A8A),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
-                ),
-              ],
-            ],
-          ),
-        ),
-
-          // Time
-          Text(
-            TimeUtils.formatTimeAgoCompact(post.createdAt),
-            style: const TextStyle(
-              fontFamily: AppTheme.fontFamily,
-              fontSize: 13,
-              color: Color(0xFF8A8A8A),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
 
-          // 3-dot menu
-          GestureDetector(
-            onTap: () => _showOptions(context),
-            child: const Icon(Icons.more_horiz,
-                color: Color(0xFF8A8A8A), size: 22),
-          ),
+            // Follow Button (for others)
+            if (!isMe && widget.user != null) ...[
+              TextButton(
+                onPressed: _toggleFollow,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  _isFollowing ? 'Following' : 'Follow',
+                  style: TextStyle(
+                    color: _isFollowing ? const Color(0xFF8A8A8A) : AppTheme.primary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    fontFamily: AppTheme.fontFamily,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
 
+            // Time
+            Text(
+              TimeUtils.formatTimeAgoCompact(widget.post.createdAt),
+              style: const TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 13,
+                color: Color(0xFF8A8A8A),
+              ),
+            ),
+            const SizedBox(width: 8),
+
+            // 3-dot menu
+            GestureDetector(
+              onTap: () => _showOptions(context),
+              child: const Icon(Icons.more_horiz, color: Color(0xFF8A8A8A), size: 22),
+            ),
           ],
         );
-      }
+      },
     );
   }
 
   void _showOptions(BuildContext context) {
-    final isOwner = user != null && post.authorId == user.uid;
+    final isOwner = widget.user != null && widget.post.authorId == widget.user.uid;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (context) => _OptionsSheet(
         isOwner: isOwner,
-        post: post,
-        onDelete: onDelete,
+        post: widget.post,
+        onDelete: widget.onDelete,
         onEdit: () {
           Navigator.pop(context);
           // Navigate to edit screen (can be implemented later)
@@ -415,7 +508,7 @@ class _PostHeader extends StatelessWidget {
         },
         onShare: () async {
           Navigator.pop(context);
-          final shareText = '${post.title.isNotEmpty ? post.title : post.body}\n\nShared via App';
+          final shareText = '${widget.post.title.isNotEmpty ? widget.post.title : widget.post.body}\n\nShared via App';
           try {
             await Share.share(shareText);
           } catch (e) {
@@ -430,7 +523,7 @@ class _PostHeader extends StatelessWidget {
           Navigator.pop(context);
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => PostInsightsScreen(post: post)),
+            MaterialPageRoute(builder: (_) => PostInsightsScreen(post: widget.post)),
           );
         },
         onMute: () {
@@ -449,9 +542,9 @@ class _PostHeader extends StatelessWidget {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Mute @${post.authorName}?'),
+        title: Text('Mute @${widget.post.authorName}?'),
         content: Text(
-          "You won't see posts from @${post.authorName} in your feed anymore. You can unmute them from their profile.",
+          "You won't see posts from @${widget.post.authorName} in your feed anymore. You can unmute them from their profile.",
         ),
         actions: [
           TextButton(
@@ -463,11 +556,11 @@ class _PostHeader extends StatelessWidget {
               Navigator.pop(context);
               // Call mute user API
               try {
-                final response = await BackendService.muteUser(post.authorId);
+                final response = await BackendService.muteUser(widget.post.authorId);
                 if (context.mounted) {
                   if (response.success) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('@${post.authorName} has been muted')),
+                      SnackBar(content: Text('@${widget.post.authorName} has been muted')),
                     );
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -541,7 +634,7 @@ class _PostHeader extends StatelessWidget {
                       Navigator.pop(context);
                       // Call report post API
                       try {
-                        final response = await BackendService.reportPost(post.id, selectedReason!);
+                        final response = await BackendService.reportPost(widget.post.id, selectedReason!);
                         if (context.mounted) {
                           if (response.success) {
                             ScaffoldMessenger.of(context).showSnackBar(

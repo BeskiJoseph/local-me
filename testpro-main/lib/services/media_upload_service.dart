@@ -37,16 +37,16 @@ class MediaUploadService {
       return _cachedBaseUrl!;
     }
 
-    // 2. Resolve default local URL based on platform
+    // 2. Resolve default URL
     String defaultUrl = 'http://localhost:4000';
     
-    // Auto-detect Android emulator loopback
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      defaultUrl = 'http://10.0.2.2:4000';
-    }
+    // Auto-detect Android emulator loopback (disabled for prod config)
+    // if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    //   defaultUrl = 'http://10.0.2.2:4000';
+    // }
     
     if (kDebugMode) {
-       debugPrint('ℹ️ Using local API URL: $defaultUrl');
+       debugPrint('ℹ️ Using API URL: $defaultUrl');
     }
     
     _cachedBaseUrl = defaultUrl;

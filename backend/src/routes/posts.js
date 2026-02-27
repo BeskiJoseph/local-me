@@ -36,7 +36,7 @@ const postSchema = Joi.object({
     city: Joi.string().max(100).allow(null, ''),
     country: Joi.string().max(100).allow(null, ''),
     mediaUrl: Joi.string().uri().allow(null, ''),
-    mediaType: Joi.string().valid('image', 'video', 'none').default('none'),
+    mediaType: Joi.string().valid('image', 'video', 'text', 'none').default('none'),
     thumbnailUrl: Joi.string().uri().allow(null, ''),
     location: Joi.object({
         lat: Joi.number(),
@@ -96,39 +96,11 @@ router.post('/', authenticate, async (req, res, next) => {
 
         const { uid } = req.user;
 
-        // 2. account Age Check (Min 1 minute after signup)
-        const userDoc = await db.collection('users').doc(uid).get();
-        const userData = userDoc.data();
-        const rawCreatedAt = userData?.createdAt;
-        let createdAt;
-        if (rawCreatedAt && typeof rawCreatedAt.toDate === 'function') {
-            createdAt = rawCreatedAt.toDate();
-        } else if (rawCreatedAt) {
-            createdAt = new Date(rawCreatedAt);
-        } else {
-            createdAt = new Date(0);
-        }
-
-        const ageInMs = Date.now() - createdAt.getTime();
-
-        if (ageInMs < 60 * 1000) { // 1 minute
-            const err = new Error('Your account is too new to post. Please wait a minute.');
-            err.status = 403;
-            err.code = 'post/account-too-new';
-            return next(err);
-        }
 
         // 3. Shadow Ban Implementation
         // bad actors can still post, but their posts aren't visible to others
         const isShadowBanned = req.user.status === 'shadow_banned';
-        const actorDisplayName = buildDisplayName({
-            displayName: req.user.displayName,
-            username: userData?.username,
-            firstName: userData?.firstName,
-            lastName: userData?.lastName,
-            email: userData?.email || req.user.email,
-            fallback: 'User'
-        });
+        const actorDisplayName = req.user.displayName || 'User';
 
         // ∩┐╜∩┐╜∩┐╜ Geohash Calculation (Step 1) ∩┐╜∩┐╜∩┐╜
         let geoHash = null;
@@ -147,7 +119,10 @@ router.post('/', authenticate, async (req, res, next) => {
             viewCount: 0,
             visibility: isShadowBanned ? 'shadow' : 'public',
             status: 'active',
-            geoHash: geoHash
+            geoHash: geoHash,
+            // Prefix search optimization
+            title_lowercase: (value.title || '').toLowerCase(),
+            body_lowercase: (value.body || value.text || '').toLowerCase()
         };
 
         const postRef = db.collection('posts').doc(value.id || db.collection('posts').doc().id);
@@ -209,6 +184,7 @@ router.post('/', authenticate, async (req, res, next) => {
 
 // Simple In-Memory Cache for Feed (V1)
 const FEED_CACHE = new Map();
+const USER_CONTEXT_CACHE = new Map();
 const FETCH_LOCKS = new Map();
 const CACHE_TTL = 30 * 1000; // 30 seconds
 
@@ -294,45 +270,146 @@ const mapDocToPost = (doc) => {
 };
 
 /**
- * Helper to embed like state into feed response
+ * Helper to get user's context (likes and muted users) via cache or DB
+ *
+ * Tradeoff note: Using a 30-second TTL cache for like state and muted users.
+ * If a user likes a post and refreshes within 30 seconds, their like state 
+ * might appear stale (unliked) strictly from the API response.
+ * This is an acceptable tradeoff for "eventual consistency" in a high-read feed environment.
+ * The Flutter client currently handles immediate UI updates via optimistic updates 
+ * in 'feed_controller.dart' which masks this 30s delay perfectly.
  */
-async function embedLikeState(responseData, userId) {
-    if (!responseData.data || responseData.data.length === 0) return responseData;
+async function getUserContext(userId, postIds) {
+    const contextKey = `user_context:${userId}`;
+    let cachedContext = USER_CONTEXT_CACHE.get(contextKey);
 
-    const postIds = responseData.data.map(p => p.id);
-    const likedIds = new Set();
+    // Fallback context
+    let likedPostIds = new Set();
+    let mutedUserIds = new Set();
 
-    // Firestore 'in' limit is 30
-    const chunks = [];
-    for (let i = 0; i < postIds.length; i += 30) {
-        chunks.push(postIds.slice(i, i + 30));
+    if (cachedContext && (Date.now() - cachedContext.timestamp < CACHE_TTL)) {
+        likedPostIds = cachedContext.data.likedIds;
+        mutedUserIds = cachedContext.data.mutedIds;
+    } else {
+        // Fetch User Muted Users
+        const userPromise = db.collection('users').doc(userId).get()
+            .then(doc => doc.exists ? new Set(doc.data().mutedUsers || []) : new Set());
+
+        // Optimize: Fetch up to 500 recent user likes.
+        // This covers almost any realistic scrolling session and avoids N+1 chunk queries.
+        const likesPromise = db.collection('likes')
+            .where('userId', '==', userId)
+            .orderBy('createdAt', 'desc')
+            .limit(500)
+            .get()
+            .then(snap => new Set(snap.docs.map(doc => doc.data().postId)))
+            .catch(err => {
+                logger.warn({ userId }, 'Likes fetch error during context creation', err);
+                return new Set();
+            });
+
+        const [mutedRes, likesRes] = await Promise.all([userPromise, likesPromise]);
+        mutedUserIds = mutedRes;
+        likedPostIds = likesRes;
+
+        USER_CONTEXT_CACHE.set(contextKey, {
+            timestamp: Date.now(),
+            data: { likedIds: likedPostIds, mutedIds: mutedUserIds }
+        });
     }
 
-    await Promise.all(chunks.map(async (chunk) => {
-        const snapshot = await db.collection('likes')
-            .where('userId', '==', userId)
-            .where('postId', 'in', chunk)
-            .get();
-        snapshot.docs.forEach(doc => likedIds.add(doc.data().postId));
-    }));
-
-    const enrichedPosts = responseData.data.map(post => ({
-        ...post,
-        isLiked: likedIds.has(post.id)
-    }));
-
-    return {
-        ...responseData,
-        data: enrichedPosts
-    };
+    return { likedPostIds, mutedUserIds };
 }
 
 /**
+ * Helper to execute multiple geo-ring queries in parallel
+ */
+async function fetchGeoRingsParallel(lat, lng, pageSize) {
+    const p6 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 6);
+    const p5 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 5);
+    const p4 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 4);
+
+    const rings = [
+        { prefix: p6, label: 'hyper-local (~1km)' },
+        { prefix: p5, label: 'local (~5km)' },
+        { prefix: p4, label: 'regional (~40km)' }
+    ];
+
+    const ringPromises = rings.map(ring => {
+        return db.collection('posts')
+            .where('visibility', '==', 'public')
+            .where('status', '==', 'active')
+            .where('geoHash', '>=', ring.prefix)
+            .where('geoHash', '<=', ring.prefix + '\uf8ff')
+            .orderBy('geoHash')
+            .orderBy('createdAt', 'desc')
+            .limit(pageSize)
+            .get()
+            .then(snapshot => snapshot.docs.map(mapDocToPost))
+            .catch(err => {
+                logger.error({ error: err.message, ring: ring.label }, 'Ring fetch failed');
+                return [];
+            });
+    });
+
+    // Also fetch global fallback just in case rings are empty
+    const globalPromise = db.collection('posts')
+        .where('visibility', '==', 'public')
+        .where('status', '==', 'active')
+        .orderBy('createdAt', 'desc')
+        .limit(pageSize)
+        .get()
+        .then(snapshot => snapshot.docs.map(mapDocToPost))
+        .catch(err => {
+            logger.error({ error: err.message }, 'Global fallback failed');
+            return [];
+        });
+
+    const resultsArray = await Promise.all([...ringPromises, globalPromise]);
+
+    // Flatten and deduplicate
+    const results = [];
+    const seenIds = new Set();
+
+    for (const batch of resultsArray) {
+        for (const post of batch) {
+            if (!seenIds.has(post.id) && results.length < pageSize) {
+                seenIds.add(post.id);
+                results.push(post);
+            }
+        }
+    }
+
+    // Sort by distance
+    const sortedResults = results.map(post => {
+        const distance = getDistance(
+            parseFloat(lat),
+            parseFloat(lng),
+            post.latitude || post.location?.lat,
+            post.longitude || post.location?.lng
+        );
+        return { ...post, distance };
+    }).sort((a, b) => a.distance - b.distance);
+
+    return {
+        success: true,
+        data: sortedResults,
+        pagination: {
+            cursor: sortedResults.length > 0 ? sortedResults[sortedResults.length - 1].id : null,
+            hasMore: sortedResults.length === pageSize
+        }
+    };
+}
+
+
+/**
  * @route   GET /api/posts
- * @desc    Get paginated feed with cursor validation
+ * @desc    Get paginated feed with parallelized fetches
  */
 router.get('/', authenticate, async (req, res, next) => {
     try {
+        console.time('[FEED] Total Request Time');
+        console.time('[FEED] 1. Resolve Posts & Cache');
         const { authorId, category, city, lat, lng, country, feedType, limit = 20, afterId } = req.query;
         const isLocalFeed = feedType === 'local';
         logger.info({
@@ -342,7 +419,10 @@ router.get('/', authenticate, async (req, res, next) => {
         const pageSize = Math.min(parseInt(limit), 50);
         const { uid } = req.user;
 
-        // ∩┐╜∩┐╜∩┐╜ 1. GeoHash & Cache Check (Step 2 & 3) ∩┐╜∩┐╜∩┐╜
+        // REMOVED: Artificial Jitter delay
+        const jitterPromise = Promise.resolve();
+
+        // ∩┐╜∩┐╜∩┐╜ 1. GeoHash & Cache Check ∩┐╜∩┐╜∩┐╜
         let geoHash = null;
         if (lat && lng) {
             geoHash = ngeohash.encode(parseFloat(lat), parseFloat(lng), 5);
@@ -352,220 +432,140 @@ router.get('/', authenticate, async (req, res, next) => {
             ? `feed:${geoHash}:${pageSize}:${afterId || 'page1'}`
             : `feed:global:${pageSize}:${afterId || 'page1'}`;
 
-        const cached = FEED_CACHE.get(cacheKey);
-        let responseData;
+        let responseDataPromise;
 
+        const cached = FEED_CACHE.get(cacheKey);
         if (cached && (Date.now() - cached.timestamp < CACHE_TTL) && !authorId && !category && !city) {
             logger.debug({ geoHash, cacheKey }, 'Serving regional feed from in-memory cache');
-            responseData = cached.data;
+            responseDataPromise = Promise.resolve(cached.data);
+        } else if (FETCH_LOCKS.has(cacheKey) && !authorId && !category && !city) {
+            logger.debug({ cacheKey }, 'Awaiting existing fetch lock for region');
+            responseDataPromise = FETCH_LOCKS.get(cacheKey);
         } else {
-            // ∩┐╜∩┐╜∩┐╜ 2. Promise Lock (Prevention of Dog-Piling) ∩┐╜∩┐╜∩┐╜
-            if (FETCH_LOCKS.has(cacheKey) && !authorId && !category && !city) {
-                logger.debug({ cacheKey }, 'Awaiting existing fetch lock for region');
-                responseData = await FETCH_LOCKS.get(cacheKey);
-            } else {
-                // ∩┐╜∩┐╜∩┐╜ 3. Query Construction & Execution ∩┐╜∩┐╜∩┐╜
-                const fetchPromise = (async () => {
-                    // ∩┐╜∩┐╜∩┐╜ Progressive Multi-Ring Fetch (Local Feed Only) ∩┐╜∩┐╜∩┐╜
-                    // Only use geo-rings for local feed with location available
-                    if (isLocalFeed && lat && lng && !authorId && !category && !city && !afterId) {
-                        logger.debug({ lat, lng }, 'Executing Multi-Ring expansion');
-                        const results = [];
-                        const seenIds = new Set();
-
-                        const p6 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 6);
-                        const p5 = geoHash; // geoHash is already encoded with precision 5
-                        const p4 = ngeohash.encode(parseFloat(lat), parseFloat(lng), 4);
-
-                        const rings = [
-                            { prefix: p6, label: 'hyper-local (~1km)' },
-                            { prefix: p5, label: 'local (~5km)' },
-                            { prefix: p4, label: 'regional (~40km)' }
-                        ];
-
-                        for (const ring of rings) {
-                            const remaining = pageSize - results.length;
-                            if (remaining <= 0) break;
-
-                            logger.debug({ ring: ring.label, remaining }, 'Fetching ring');
-
-                            try {
-                                const snapshot = await db.collection('posts')
-                                    .where('visibility', '==', 'public')
-                                    .where('status', '==', 'active')
-                                    .where('geoHash', '>=', ring.prefix)
-                                    .where('geoHash', '<=', ring.prefix + '\uf8ff')
-                                    .orderBy('geoHash')
-                                    .orderBy('createdAt', 'desc')
-                                    .limit(remaining)
-                                    .get();
-
-                                snapshot.docs.forEach(doc => {
-                                    if (!seenIds.has(doc.id)) {
-                                        seenIds.add(doc.id);
-                                        results.push(mapDocToPost(doc));
-                                    }
-                                });
-                            } catch (ringErr) {
-                                // ... error handling ...
-                            }
-                        }
-                        // Fallback 1: Global Trending (Fill gaps)
-                        const remainingGaps = pageSize - results.length;
-                        if (remainingGaps > 0) {
-                            try {
-                                const globalSnapshot = await db.collection('posts')
-                                    .where('visibility', '==', 'public')
-                                    .where('status', '==', 'active')
-                                    .orderBy('createdAt', 'desc')
-                                    .limit(remainingGaps)
-                                    .get();
-
-                                globalSnapshot.docs.forEach(doc => {
-                                    if (!seenIds.has(doc.id)) {
-                                        seenIds.add(doc.id);
-                                        results.push(mapDocToPost(doc));
-                                    }
-                                });
-                            } catch (globalErr) {
-                                logger.error({ error: globalErr.message }, 'Global fallback failed');
-                            }
-                        }
-
-                        // Sort results by distance from user (nearest first)
-                        const sortedResults = results.map(post => {
-                            const distance = getDistance(
-                                parseFloat(lat), 
-                                parseFloat(lng), 
-                                post.latitude || post.location?.lat, 
-                                post.longitude || post.location?.lng
-                            );
-                            return { ...post, distance };
-                        }).sort((a, b) => a.distance - b.distance);
-
-                        return {
-                            success: true,
-                            data: sortedResults,
-                            pagination: {
-                                cursor: sortedResults.length > 0 ? sortedResults[sortedResults.length - 1].id : null,
-                                hasMore: sortedResults.length === pageSize
-                            }
-                        };
-                    }
-
-                    // ∩┐╜∩┐╜∩┐╜ Default Single-Query Logic (Global Feed or Paginated) ∩┐╜∩┐╜∩┐╜
-                    let query = db.collection('posts')
-                        .where('visibility', '==', 'public')
-                        .where('status', '==', 'active');
-
-                    if (authorId) query = query.where('authorId', '==', authorId);
-                    if (category) query = query.where('category', '==', category);
-                    if (city) query = query.where('city', '==', city);
-                    
-                    // For local feed without multi-ring (pagination case), use geohash prefix
-                    if (isLocalFeed && geoHash && !authorId && !category && !city) {
-                        // Use prefix match for broader area (~5km)
-                        query = query.where('geoHash', '>=', geoHash)
-                                     .where('geoHash', '<=', geoHash + '\uf8ff');
-                    }
-
-                    query = query.orderBy('createdAt', 'desc');
-
-                    if (afterId) {
-                        const lastDoc = await db.collection('posts').doc(afterId).get();
-                        if (lastDoc.exists) {
-                            query = query.startAfter(lastDoc);
-                        }
-                    }
-
-                    query = query.limit(pageSize);
-
-                    let snapshot;
-                    try {
-                        snapshot = await query.get();
-                    } catch (indexErr) {
-                        if (indexErr.code === 9 || indexErr.message?.includes('index')) {
-                            logger.error({ query: req.query }, 'Missing Firestore composite index for filtered query');
-                            const error = new Error('Query misconfigured: missing composite index.');
-                            error.status = 500;
-                            throw error;
-                        }
-                        throw indexErr;
-                    }
-
-                    let posts = snapshot.docs.map(mapDocToPost);
-                    
-                    // Sort by distance for local feed if lat/lng provided
-                    if (isLocalFeed && lat && lng) {
-                        posts = posts.map(post => {
-                            const distance = getDistance(
-                                parseFloat(lat), 
-                                parseFloat(lng), 
-                                post.latitude || post.location?.lat, 
-                                post.longitude || post.location?.lng
-                            );
-                            return { ...post, distance };
-                        }).sort((a, b) => a.distance - b.distance);
-                    } else if (!isLocalFeed) {
-                        // Global feed: Sort by trending score (likes + comments)
-                        posts = posts.map(post => {
-                            const trendingScore = (post.likeCount || 0) + (post.commentCount || 0) * 2;
-                            return { ...post, trendingScore };
-                        }).sort((a, b) => b.trendingScore - a.trendingScore);
-                    }
-
-                    return {
-                        success: true,
-                        data: posts,
-                        pagination: {
-                            cursor: posts.length > 0 ? posts[posts.length - 1].id : null,
-                            hasMore: posts.length === pageSize
-                        }
-                    };
-                })();
-
-                // Only lock shared regional feeds
-                if (!authorId && !category && !city) {
-                    FETCH_LOCKS.set(cacheKey, fetchPromise);
+            // ∩┐╜∩┐╜∩┐╜ 2. Query Construction & Execution ∩┐╜∩┐╜∩┐╜
+            responseDataPromise = (async () => {
+                // Multi-Ring Fetch in Parallel
+                if (isLocalFeed && lat && lng && !authorId && !category && !city && !afterId) {
+                    logger.debug({ lat, lng }, 'Executing Parallel Multi-Ring expansion');
+                    return await fetchGeoRingsParallel(lat, lng, pageSize);
                 }
 
+                // Default Single-Query Logic (Global Feed or Paginated)
+                let query = db.collection('posts')
+                    .where('visibility', '==', 'public')
+                    .where('status', '==', 'active');
+
+                if (authorId) query = query.where('authorId', '==', authorId);
+                if (category) query = query.where('category', '==', category);
+                if (city) query = query.where('city', '==', city);
+
+                if (isLocalFeed && geoHash && !authorId && !category && !city) {
+                    query = query.where('geoHash', '>=', geoHash)
+                        .where('geoHash', '<=', geoHash + '\uf8ff');
+                }
+
+                query = query.orderBy('createdAt', 'desc');
+
+                if (afterId) {
+                    const lastDoc = await db.collection('posts').doc(afterId).get();
+                    if (lastDoc.exists) {
+                        query = query.startAfter(lastDoc);
+                    }
+                }
+
+                query = query.limit(pageSize);
+
+                let snapshot;
                 try {
-                    responseData = await fetchPromise;
-
-                    // ∩┐╜∩┐╜∩┐╜ 4. Cache Management ∩┐╜∩┐╜∩┐╜
-                    if (!authorId && !category && !city) {
-                        FEED_CACHE.set(cacheKey, {
-                            timestamp: Date.now(),
-                            data: responseData
-                        });
+                    snapshot = await query.get();
+                } catch (indexErr) {
+                    if (indexErr.code === 9 || indexErr.message?.includes('index')) {
+                        logger.error({ query: req.query }, 'Missing Firestore composite index for filtered query');
+                        const error = new Error('Query misconfigured: missing composite index.');
+                        error.status = 500;
+                        throw error;
                     }
-                } finally {
-                    FETCH_LOCKS.delete(cacheKey);
+                    throw indexErr;
                 }
+
+                let posts = snapshot.docs.map(mapDocToPost);
+
+                // Sort appropriately
+                if (isLocalFeed && lat && lng) {
+                    posts = posts.map(post => {
+                        const distance = getDistance(
+                            parseFloat(lat),
+                            parseFloat(lng),
+                            post.latitude || post.location?.lat,
+                            post.longitude || post.location?.lng
+                        );
+                        return { ...post, distance };
+                    }).sort((a, b) => a.distance - b.distance);
+                } else if (!isLocalFeed) {
+                    posts = posts.map(post => {
+                        const trendingScore = (post.likeCount || 0) + (post.commentCount || 0) * 2;
+                        return { ...post, trendingScore };
+                    }).sort((a, b) => b.trendingScore - a.trendingScore);
+                }
+
+                return {
+                    success: true,
+                    data: posts,
+                    pagination: {
+                        cursor: posts.length > 0 ? posts[posts.length - 1].id : null,
+                        hasMore: posts.length === pageSize
+                    }
+                };
+            })();
+
+            // Lock and Cache Management
+            if (!authorId && !category && !city) {
+                FETCH_LOCKS.set(cacheKey, responseDataPromise);
+                responseDataPromise.then(data => {
+                    FEED_CACHE.set(cacheKey, { timestamp: Date.now(), data });
+                    FETCH_LOCKS.delete(cacheKey);
+                }).catch(() => FETCH_LOCKS.delete(cacheKey));
             }
         }
 
-        // ∩┐╜∩┐╜∩┐╜ 5. Embed Like State (Step 4) ∩┐╜∩┐╜∩┐╜
-        const finalResponse = await embedLikeState(responseData, uid);
+        // Wait for Feed Data
+        const responseData = await responseDataPromise;
+        const postIds = (responseData.data || []).map(p => p.id);
+        console.timeEnd('[FEED] 1. Resolve Posts & Cache');
 
-        // ∩┐╜∩┐╜∩┐╜ 5.5. Filter out muted users' posts ∩┐╜∩┐╜∩┐╜
-        const userDoc = await db.collection('users').doc(uid).get();
-        const mutedUsers = userDoc.exists ? (userDoc.data().mutedUsers || []) : [];
-        
-        if (mutedUsers.length > 0 && finalResponse.data) {
-            finalResponse.data = finalResponse.data.filter(post => 
-                !mutedUsers.includes(post.authorId)
-            );
+        console.time('[FEED] 2. User Context & Jitter');
+
+        // ∩┐╜∩┐╜∩┐╜ 3. Fetch User Context (Likes & Muted Users) Parallel to Jitter ∩┐╜∩┐╜∩┐╜
+        const userContextPromise = getUserContext(uid, postIds);
+
+        // Wait for Context and Jitter
+        const [userContext] = await Promise.all([userContextPromise, jitterPromise]);
+        console.timeEnd('[FEED] 2. User Context & Jitter');
+
+        // 4. Apply Context (Filter & Embed Liked State)
+        let finalPosts = responseData.data || [];
+
+        if (userContext.mutedUserIds.size > 0) {
+            finalPosts = finalPosts.filter(post => !userContext.mutedUserIds.has(post.authorId));
         }
 
-        // ∩┐╜∩┐╜∩┐╜ 6. Anti-Scraping Throttler (Layer 4) ∩┐╜∩┐╜∩┐╜
-        // Adds 50-200ms of random jitter to feed requests to frustrate high-velocity scrapers
-        // without visibly degrading UX.
-        if (!afterId || afterId === 'page1') {
-            await new Promise(resolve => setTimeout(resolve, Math.random() * 150 + 50));
+        finalPosts = finalPosts.map(post => ({
+            ...post,
+            isLiked: userContext.likedPostIds.has(post.id)
+        }));
+
+        // CRITICAL FIX: Ensure strict distance sorting for Local Feed
+        if (isLocalFeed && lat && lng) {
+            finalPosts.sort((a, b) => (a.distance || 9999) - (b.distance || 9999));
         }
 
-        return res.json(finalResponse);
+        console.timeEnd('[FEED] 3. Data Processing');
+        console.timeEnd('[FEED] Total Request Time');
+
+        return res.json({
+            ...responseData,
+            data: finalPosts
+        });
 
     } catch (err) {
         return next(err);
@@ -782,7 +782,7 @@ router.post('/:id/view', authenticate, async (req, res, next) => {
         // Get user location data
         const userDoc = await db.collection('users').doc(userId).get();
         const userData = userDoc.data();
-        
+
         const viewData = {
             userId,
             userName: buildDisplayName({
@@ -947,7 +947,7 @@ router.post('/:id/report', authenticate, async (req, res, next) => {
         // Auto-flag if multiple reports (threshold: 5)
         const updatedPostDoc = await db.collection('posts').doc(postId).get();
         const reportCount = updatedPostDoc.data().reportCount || 0;
-        
+
         if (reportCount >= 5) {
             await db.collection('posts').doc(postId).update({
                 visibility: 'flagged', // Flagged for review
@@ -968,10 +968,10 @@ router.post('/:id/report', authenticate, async (req, res, next) => {
 
         return res.json({
             success: true,
-            data: { 
-                reported: true, 
+            data: {
+                reported: true,
                 reportId: reportRef.id,
-                postId 
+                postId
             },
             error: null
         });

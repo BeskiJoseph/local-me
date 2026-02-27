@@ -4,7 +4,7 @@ import '../models/post.dart';
 import '../models/paginated_response.dart';
 import '../repositories/post_repository.dart';
 
-enum FeedEventType { postCreated, postDeleted, eventMembershipChanged }
+enum FeedEventType { postCreated, postDeleted, postLiked, userFollowed, eventMembershipChanged }
 
 class FeedEvent {
   final FeedEventType type;
@@ -42,7 +42,7 @@ class PostService {
     String? country,
     String category = 'General',
     String? mediaUrl,
-    String mediaType = 'image',
+    String mediaType = 'none',
     String? thumbnailUrl,
   }) async {
     final result = await _repository.createPost(

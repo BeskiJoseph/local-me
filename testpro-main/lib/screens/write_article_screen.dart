@@ -156,7 +156,7 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
         body: content,
         category: 'Article',
         mediaUrl: null,
-        mediaType: 'text',
+        mediaType: 'none',
         city: LocationService.getLocationString(),
       );
 

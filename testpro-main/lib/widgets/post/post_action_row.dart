@@ -133,18 +133,18 @@ class _PostActionRowState extends State<PostActionRow> {
                   child: Row(
                     children: [
                       Icon(
-                        isLiked ? Icons.thumb_up : Icons.thumb_up_outlined,
+                        isLiked ? Icons.favorite : Icons.favorite_border,
                         size: 20,
                         color: isLiked
-                            ? const Color(0xFF00B87C)
+                            ? const Color(0xFFE53935)
                             : const Color(0xFF8E8E93),
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        isLiked ? 'Useful' : 'Useful',
+                        isLiked ? 'Liked' : 'Like',
                         style: TextStyle(
                           color: isLiked
-                              ? const Color(0xFF00B87C)
+                              ? const Color(0xFFE53935)
                               : const Color(0xFF3A3A3C),
                           fontWeight: FontWeight.w500,
                           fontSize: 13,
@@ -157,7 +157,7 @@ class _PostActionRowState extends State<PostActionRow> {
                           displayCount.toString(),
                           style: TextStyle(
                             color: isLiked 
-                                ? const Color(0xFF00B87C) 
+                                ? const Color(0xFFE53935) 
                                 : const Color(0xFF8E8E93),
                             fontWeight: FontWeight.w400,
                             fontSize: 12,

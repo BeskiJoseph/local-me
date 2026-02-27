@@ -34,8 +34,10 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   bool _isLoadingPosts = false;
   String? _cursor;
   bool _hasMore = true;
-  final Map<String, bool> _likedPostIds = {};
+  Map<String, bool> _likedPostIds = {};
   List<String> _myEventIds = [];
+  bool _isFollowing = false;
+  bool _isTogglingFollow = false;
 
   String get profileUserId {
     final uid = widget.userId ?? AuthService.currentUser?.uid;
@@ -64,6 +66,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     if (profileUserId.isEmpty) return;
     await Future.wait([
       _loadProfile(),
+      _loadFollowState(),
       _loadPosts(refresh: true),
       _loadMyEvents(),
     ]);
@@ -107,6 +110,36 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
           _profileError = 'Failed to load profile';
         });
       }
+    }
+  }
+
+  Future<void> _loadFollowState() async {
+    final user = AuthService.currentUser;
+    if (user == null || isOwnProfile) return;
+    try {
+      final response = await BackendService.checkFollowState(profileUserId);
+      if (response.success && mounted) {
+        setState(() => _isFollowing = response.data ?? false);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFollow() async {
+    if (_isTogglingFollow) return;
+    setState(() => _isTogglingFollow = true);
+    
+    final originalState = _isFollowing;
+    setState(() => _isFollowing = !originalState);
+
+    try {
+      final response = await BackendService.toggleFollow(profileUserId);
+      if (!response.success && mounted) {
+        setState(() => _isFollowing = originalState);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isFollowing = originalState);
+    } finally {
+      if (mounted) setState(() => _isTogglingFollow = false);
     }
   }
 
@@ -393,42 +426,81 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
 
                     const SizedBox(height: 24),
 
-                    // Own Profile Actions (Matching the screenshot)
-                    if (isOwnProfile)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: _ActionBtn(
-                                label: 'Edit profile',
-                                color: const Color(0xFF2E7D6A), // Teal like screenshot
-                                isOutlined: false,
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => EditProfileScreen(profile: profile),
-                                    ),
-                                  );
-                                },
-                              ),
+                    // Profile Actions
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: isOwnProfile
+                          ? Row(
+                              children: [
+                                Expanded(
+                                  child: _ActionBtn(
+                                    label: 'Edit profile',
+                                    color: const Color(0xFF2E7D6A),
+                                    isOutlined: false,
+                                    onTap: () async {
+                                      final result = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => EditProfileScreen(profile: profile),
+                                        ),
+                                      );
+                                      if (result == true) _loadData();
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                // Stats integrated into a compact row
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: const Color(0xFFEEEEEE)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      _buildStatItem('${profile?.subscribers ?? 0}', 'Followers'),
+                                      const SizedBox(width: 16),
+                                      _buildVerticalDivider(),
+                                      const SizedBox(width: 16),
+                                      _buildStatItem('${profile?.followingCount ?? 0}', 'Following'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Row(
+                              children: [
+                                Expanded(
+                                  child: _ActionBtn(
+                                    label: _isFollowing ? 'Following' : 'Follow',
+                                    color: _isFollowing ? Colors.grey.shade300 : const Color(0xFF2E7D6A),
+                                    isOutlined: _isFollowing,
+                                    onTap: _toggleFollow,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                // Stats for other user
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: const Color(0xFFEEEEEE)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      _buildStatItem('${profile?.subscribers ?? 0}', 'Followers'),
+                                      const SizedBox(width: 16),
+                                      _buildVerticalDivider(),
+                                      const SizedBox(width: 16),
+                                      _buildStatItem('${profile?.followingCount ?? 0}', 'Following'),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: _ActionBtn(
-                                label: '${profile?.followingCount ?? 0}', // Stats in button
-                                icon: Icons.people_outline,
-                                color: const Color(0xFF2E7D6A),
-                                isOutlined: false,
-                                onTap: () {},
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                    const SizedBox(height: 32),
+                    ),
                   ],
                 ),
               ),

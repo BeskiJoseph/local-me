@@ -18,7 +18,7 @@ class PostRepository {
     String? country,
     String category = 'General',
     String? mediaUrl,
-    String mediaType = 'image',
+    String mediaType = 'none',
     String? thumbnailUrl,
   }) async {
     final response = await BackendService.createPost({
@@ -29,7 +29,7 @@ class PostRepository {
       'city': city,
       'country': country,
       'mediaUrl': mediaUrl,
-      'mediaType': mediaType,
+      'mediaType': (mediaUrl == null || mediaUrl.isEmpty) ? 'none' : mediaType,
       'thumbnailUrl': thumbnailUrl,
       'location': (latitude != null && longitude != null) ? {
         'lat': latitude,

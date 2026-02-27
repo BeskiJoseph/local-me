@@ -6,6 +6,8 @@ class Comment {
   final String? authorProfileImage;
   final String text;
   final DateTime createdAt;
+  final int likeCount;
+  final bool isLiked;
 
   Comment({
     required this.id,
@@ -15,6 +17,8 @@ class Comment {
     this.authorProfileImage,
     required this.text,
     required this.createdAt,
+    this.likeCount = 0,
+    this.isLiked = false,
   });
 
   factory Comment.fromJson(Map<String, dynamic> json) {
@@ -32,11 +36,29 @@ class Comment {
       authorProfileImage: json['authorProfileImage'] as String?,
       text: json['text'] as String? ?? '',
       createdAt: parseDate(json['createdAt']),
+      likeCount: json['likeCount'] as int? ?? 0,
+      isLiked: json['isLiked'] as bool? ?? false,
     );
   }
 
   factory Comment.fromMap(Map<String, dynamic> map) => Comment.fromJson(map);
 
+  Comment copyWith({
+    int? likeCount,
+    bool? isLiked,
+  }) {
+    return Comment(
+      id: id,
+      postId: postId,
+      authorId: authorId,
+      authorName: authorName,
+      authorProfileImage: authorProfileImage,
+      text: text,
+      createdAt: createdAt,
+      likeCount: likeCount ?? this.likeCount,
+      isLiked: isLiked ?? this.isLiked,
+    );
+  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -47,6 +69,8 @@ class Comment {
       'authorProfileImage': authorProfileImage,
       'text': text,
       'createdAt': createdAt.toIso8601String(),
+      'likeCount': likeCount,
+      'isLiked': isLiked,
     };
   }
 }

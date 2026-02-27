@@ -62,8 +62,8 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     super.dispose();
   }
 
-  Future<void> _loadComments() async {
-    setState(() => _isLoading = true);
+  Future<void> _loadComments({bool showLoader = true}) async {
+    if (showLoader) setState(() => _isLoading = true);
     try {
       final comments = await CommentService.getComments(widget.post.id);
       if (mounted) {
@@ -83,14 +83,29 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
     if (text.isEmpty || user == null) return;
 
-    setState(() => _isSending = true);
+    // --- Optimistic UI Start ---
+    final optimisticComment = Comment(
+      id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+      postId: widget.post.id,
+      authorId: user.uid,
+      authorName: user.displayName ?? 'You',
+      authorProfileImage: user.photoURL,
+      text: text,
+      createdAt: DateTime.now(),
+      likeCount: 0,
+      isLiked: false,
+    );
+
+    setState(() {
+      _comments.add(optimisticComment);
+      _isSending = true; // Still show spinner on the send button but not the whole list
+    });
+
     _commentController.clear();
     FocusScope.of(context).unfocus();
 
-    try {
-      await BackendService.addComment(widget.post.id, text);
-      await _loadComments();
-      // Scroll to bottom to show new comment
+    // Scroll to bottom immediately for the optimistic comment
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
@@ -98,10 +113,55 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
           curve: Curves.easeOut,
         );
       }
+    });
+    // --- Optimistic UI End ---
+
+    try {
+      final response = await BackendService.addComment(widget.post.id, text);
+      if (response.success) {
+        // Sync with backend in background
+        await _loadComments(showLoader: false);
+      } else {
+        throw Exception(response.error ?? 'Failed to add comment');
+      }
     } catch (e) {
-      // Error handled silently
+      // Rollback optimistic comment on error
+      if (mounted) {
+        setState(() {
+          _comments.removeWhere((c) => c.id == optimisticComment.id);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  Future<void> _toggleCommentLike(Comment comment) async {
+    final index = _comments.indexWhere((c) => c.id == comment.id);
+    if (index == -1) return;
+
+    final updatedComment = comment.copyWith(
+      isLiked: !comment.isLiked,
+      likeCount: comment.isLiked ? comment.likeCount - 1 : comment.likeCount + 1,
+    );
+
+    setState(() {
+      _comments[index] = updatedComment;
+    });
+
+    try {
+      // TODO: Implement BackendService.toggleCommentLike when endpoint is available
+      // await BackendService.toggleCommentLike(comment.postId, comment.id);
+    } catch (e) {
+      // Rollback on error
+      if (mounted) {
+        setState(() {
+          _comments[index] = comment;
+        });
+      }
     }
   }
 
@@ -326,34 +386,6 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                // Like and reply actions
-                Row(
-                  children: [
-                    Icon(
-                      Icons.favorite_border,
-                      size: 16,
-                      color: Colors.grey.shade500,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Like',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade500,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Text(
-                      'Reply',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade500,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),

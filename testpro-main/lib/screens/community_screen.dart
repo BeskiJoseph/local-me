@@ -271,8 +271,6 @@ class _CommunityScreenState extends State<CommunityScreen> {
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          const Icon(Icons.tune_rounded, color: Color(0xFF1A1A1A), size: 26),
         ],
       ),
     );

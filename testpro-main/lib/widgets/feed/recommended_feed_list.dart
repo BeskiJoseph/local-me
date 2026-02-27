@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../services/feed_service.dart';
+import '../../services/post_service.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
-import '../post_card.dart';
+import '../../core/state/feed_controller.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
 import '../../services/backend_service.dart';
@@ -19,15 +20,12 @@ class RecommendedFeedList extends StatefulWidget {
 
 class _RecommendedFeedListState extends State<RecommendedFeedList> with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
-  final List<Post> _posts = [];
-  bool _isLoading = false;
-  bool _hasMore = true;
-  String? _afterId;
-  String? _error;
+  final FeedController _feedController = FeedController();
   final String _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
   final Map<String, bool> _likedPostIds = {};
   
   Timer? _debounce;
+  StreamSubscription? _eventSubscription;
 
   @override
   bool get wantKeepAlive => true;
@@ -37,6 +35,26 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
     super.initState();
     _loadMorePosts();
     _scrollController.addListener(_onScroll);
+    _eventSubscription = PostService.events.listen(_handleFeedEvent);
+  }
+
+  void _handleFeedEvent(FeedEvent event) {
+    if (!mounted) return;
+
+    switch (event.type) {
+      case FeedEventType.postDeleted:
+        _feedController.deletePost(event.data);
+        break;
+      case FeedEventType.postLiked:
+        final data = event.data as Map<String, dynamic>;
+        setState(() {
+          _likedPostIds[data['postId']] = data['isLiked'];
+        });
+        _feedController.updatePostLike(data['postId'], data['isLiked'], data['likeCount']);
+        break;
+      default:
+        break;
+    }
   }
 
   void _onScroll() {
@@ -45,9 +63,9 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
     _debounce = Timer(const Duration(milliseconds: 300), () {
       if (_scrollController.hasClients &&
           _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
-          !_isLoading &&
-          _hasMore &&
-          _error == null) {
+          !_feedController.isLoading &&
+          _feedController.hasMore &&
+          _feedController.error == null) {
         _loadMorePosts();
       }
     });
@@ -56,43 +74,35 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
   @override
   void dispose() {
     _debounce?.cancel();
+    _eventSubscription?.cancel();
     _scrollController.dispose();
+    _feedController.dispose();
     super.dispose();
   }
 
   Future<void> _loadMorePosts({bool refresh = false}) async {
-    if (_isLoading) return;
-    if (!refresh && !_hasMore) return;
+    if (_feedController.isLoading) return;
+    if (!refresh && !_feedController.hasMore) return;
 
     debugPrint('🚀 RECOMMENDED FEED API CALLED');
 
     if (refresh) {
-      if (mounted) {
-        setState(() {
-          _posts.clear();
-          _hasMore = true;
-          _afterId = null;
-          _error = null;
-          _isLoading = true;
-        });
-      }
+      _feedController.clear(notify: false);
+      _likedPostIds.clear();
+      _feedController.setLoading(true);
     } else {
-      if (mounted) {
-        setState(() {
-          _isLoading = true;
-          _error = null;
-        });
-      }
+      _feedController.setLoading(true);
+      _feedController.setError(null);
     }
 
     try {
       final user = AuthService.currentUser;
       if (user == null) {
-        if (mounted) setState(() => _error = 'User not authenticated');
+        if (mounted) _feedController.setError('User not authenticated');
         return;
       }
 
-      final lastId = _posts.isNotEmpty ? _posts.last.id : null;
+      final lastId = _feedController.cursor;
       final newPosts = await FeedService.getRecommendedFeed(
         userId: user.uid,
         sessionId: _sessionId,
@@ -101,81 +111,84 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
       );
 
       if (mounted) {
-        setState(() {
-          if (refresh) {
-            _posts.clear();
-            _likedPostIds.clear();
-          }
-          
-          final existingIds = _posts.map((p) => p.id).toSet();
-          final uniqueNew = newPosts.where((p) => !existingIds.contains(p.id));
-          _posts.addAll(uniqueNew);
-
-          for (var p in newPosts) {
-            _likedPostIds[p.id] = p.isLiked;
-          }
-
-          if (newPosts.length < 10) _hasMore = false;
-        });
+        for (var p in newPosts) {
+          _likedPostIds[p.id] = p.isLiked;
+        }
+        _feedController.appendPosts(
+          newPosts, 
+          refresh: refresh, 
+          nextCursor: newPosts.length == 10 ? newPosts.last.id : null
+        );
       }
     } catch (e) {
       debugPrint('Error loading recommended posts: $e');
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) _feedController.setError(e.toString());
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) _feedController.setLoading(false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required by AutomaticKeepAliveClientMixin
-    if (_posts.isEmpty && _isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    
+    return ListenableBuilder(
+      listenable: _feedController,
+      builder: (context, _) {
+        final posts = _feedController.posts;
+        final isLoading = _feedController.isLoading;
+        final error = _feedController.error;
+        final hasMore = _feedController.hasMore;
 
-    if (_error != null && _posts.isEmpty) {
-      return _buildErrorState(_error!);
-    }
+        if (posts.isEmpty && isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-    if (_posts.isEmpty && !_isLoading) {
-      return _buildEmptyState();
-    }
+        if (error != null && posts.isEmpty) {
+          return _buildErrorState(error);
+        }
 
-    return RefreshIndicator(
-      onRefresh: () => _loadMorePosts(refresh: true),
-      color: const Color(0xFF6C5CE7),
-      child: ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.only(top: 8, bottom: 80),
-        itemCount: _posts.length + (_hasMore || _error != null ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index == _posts.length) {
-            if (_error != null) {
-              return _buildRetryFooter();
-            }
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16.0),
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            );
-          }
-          final post = _posts[index];
-          // Hide archived/expired events
-          if ((post.isEvent || post.category.toLowerCase() == 'events') 
-              && post.computedStatus == 'archived') {
-            return const SizedBox.shrink();
-          }
-          // Route events to EventPostCard
-          if (post.isEvent || post.category.toLowerCase() == 'events') {
-            return EventPostCard(post: post);
-          }
-          return NextdoorStylePostCard(
-            post: post,
-            initialIsLiked: _likedPostIds[post.id],
-          );
-        },
-      ),
+        if (posts.isEmpty && !isLoading) {
+          return _buildEmptyState();
+        }
+
+        return RefreshIndicator(
+          onRefresh: () => _loadMorePosts(refresh: true),
+          color: const Color(0xFF6C5CE7),
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.only(top: 8, bottom: 80),
+            itemCount: posts.length + (hasMore || error != null ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == posts.length) {
+                if (error != null) {
+                  return _buildRetryFooter();
+                }
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                );
+              }
+              final post = posts[index];
+              // Hide archived/expired events
+              if ((post.isEvent || post.category.toLowerCase() == 'events') 
+                  && post.computedStatus == 'archived') {
+                return const SizedBox.shrink();
+              }
+              // Route events to EventPostCard
+              if (post.isEvent || post.category.toLowerCase() == 'events') {
+                return EventPostCard(post: post);
+              }
+              return NextdoorStylePostCard(
+                post: post,
+                initialIsLiked: _likedPostIds[post.id],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 

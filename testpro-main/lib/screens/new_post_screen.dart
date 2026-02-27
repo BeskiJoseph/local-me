@@ -19,6 +19,7 @@ import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:io';
+
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
 

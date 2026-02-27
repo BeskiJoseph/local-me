@@ -60,6 +60,17 @@ class FeedController extends ChangeNotifier {
     }
   }
 
+  void updatePostLike(String postId, bool isLiked, int likeCount) {
+    final index = _posts.indexWhere((p) => p.id == postId);
+    if (index != -1) {
+      _posts[index] = _posts[index].copyWith(
+        isLiked: isLiked,
+        likeCount: likeCount,
+      );
+      notifyListeners();
+    }
+  }
+
   /// Prepend a new post to the feed (for optimistic post creation)
   void prependPost(Post post) {
     if (!_posts.any((p) => p.id == post.id)) {

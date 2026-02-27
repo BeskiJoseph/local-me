@@ -74,7 +74,6 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     
     // Background load secondary content
     _loadComments();
-    _loadRecommended();
   }
 
   Future<void> _loadLikeState() async {
@@ -450,86 +449,6 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                   const SizedBox(height: 10),
                   _buildCommentsList(),
 
-                  const SizedBox(height: 24),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: const Text(
-                      'Recommended',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1C1C1E),
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    height: 200,
-                    child: _isLoadingRecommended
-                        ? const Center(child: CircularProgressIndicator())
-                        : _recommendedPosts.isEmpty
-                            ? const Center(child: Text('No recommendations yet', style: TextStyle(fontFamily: 'Inter', color: Colors.grey)))
-                            : ListView.separated(
-                                scrollDirection: Axis.horizontal,
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                itemCount: _recommendedPosts.length,
-                                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                                itemBuilder: (context, index) {
-                                  final item = _recommendedPosts[index];
-                                  return SizedBox(
-                                    width: 150,
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        ClipRRect(
-                                          borderRadius: BorderRadius.circular(16),
-                                          child: AspectRatio(
-                                            // Instagram-style: 4:5
-                                            aspectRatio: 4 / 5,
-                                            child: item.mediaUrl != null
-                                                ? Image.network(
-                                                    ProxyHelper.getUrl(item.mediaUrl!),
-                                                    fit: BoxFit.cover,
-                                                    errorBuilder: (context, error, stackTrace) {
-                                                      return Container(color: Colors.grey.shade100);
-                                                    },
-                                                  )
-                                                : Container(
-                                                    color: Colors.grey.shade100,
-                                                    alignment: Alignment.center,
-                                                    child: Icon(Icons.image_outlined, color: Colors.grey.shade400),
-                                                  ),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 10),
-                                        Text(
-                                          item.title,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 14,
-                                            color: Color(0xFF1C1C1E),
-                                            fontFamily: 'Inter',
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          item.authorName,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            color: Colors.grey.shade600,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                  ),
                   const SizedBox(height: 16),
                 ],
               ),
@@ -768,15 +687,15 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         child: Row(
           children: [
             Icon(
-              isLiked ? Icons.thumb_up_rounded : Icons.thumb_up_outlined,
+              isLiked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
               size: 20,
-              color: isLiked ? const Color(0xFF00B87C) : const Color(0xFF8E8E93),
+              color: isLiked ? const Color(0xFFE53935) : const Color(0xFF8E8E93),
             ),
             const SizedBox(width: 6),
             Text(
-              displayLikeCount > 0 ? '$displayLikeCount Useful' : 'Useful',
+              displayLikeCount > 0 ? '$displayLikeCount Liked' : 'Like',
               style: TextStyle(
-                color: isLiked ? const Color(0xFF00B87C) : const Color(0xFF3A3A3C),
+                color: isLiked ? const Color(0xFFE53935) : const Color(0xFF3A3A3C),
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
                 fontFamily: 'Inter',
