@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../config/app_theme.dart';
 import 'package:geolocator/geolocator.dart';
@@ -141,11 +142,11 @@ class _HomeScreenState extends State<HomeScreen> {
           UserService.updateUserProfile(
             userId: userId,
             location: locationStr,
-          ).catchError((e) => debugPrint('Silent error syncing location: $e'));
+          ).catchError((e) => kDebugMode ? debugPrint('Silent error syncing location: $e') : null);
         }
       }
     } catch (e) {
-      debugPrint('Error detecting location: $e');
+      if (kDebugMode) debugPrint('Error detecting location: $e');
       if (mounted) {
         setState(() {
           _isLoadingLocation = false;
@@ -163,7 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute(builder: (_) => const NewPostScreen()),
       ).then((result) async {
         if (result == true) {
-          debugPrint('📝 Post creation confirmed, triggering feed refresh');
+          if (kDebugMode) debugPrint('📝 Post creation confirmed, triggering feed refresh');
           // Force a more aggressive refresh
           await Future.delayed(const Duration(milliseconds: 200));
           if (mounted) {
@@ -179,7 +180,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _refreshFeeds() {
-    debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
+    if (kDebugMode) debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
     setState(() => _feedRevision++);
     // Also force a rebuild of the entire widget tree
     WidgetsBinding.instance.addPostFrameCallback((_) {

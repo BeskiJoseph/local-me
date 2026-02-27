@@ -126,7 +126,12 @@ router.patch('/me', authenticate, async (req, res, next) => {
         const updateData = {
             ...normalizedValue,
             ...(effectiveUsername ? { username: effectiveUsername.toLowerCase() } : {}),
-            ...(effectiveDisplayName ? { displayName: effectiveDisplayName } : {}),
+            ...(effectiveDisplayName ? {
+                displayName: effectiveDisplayName,
+                displayName_lowercase: effectiveDisplayName.toLowerCase()
+            } : {}),
+            ...(normalizedValue.firstName ? { firstName_lowercase: normalizedValue.firstName.toLowerCase() } : {}),
+            ...(normalizedValue.lastName ? { lastName_lowercase: normalizedValue.lastName.toLowerCase() } : {}),
             email: email,
             updatedAt: new Date(),
         };

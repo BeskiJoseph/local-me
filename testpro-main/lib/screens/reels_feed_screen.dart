@@ -815,18 +815,35 @@ class _ReelPostItemState extends State<ReelPostItem> {
                     _commentController.clear();
                     FocusScope.of(context).unfocus();
 
+                    // Optimistic insert
+                    final tempComment = Comment(
+                      id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+                      postId: widget.post.id,
+                      text: text,
+                      authorId: user.uid,
+                      authorName: user.displayName ?? user.email?.split('@')[0] ?? 'You',
+                      authorProfileImage: user.photoURL,
+                      createdAt: DateTime.now(),
+                    );
+                    setState(() {
+                      _cachedComments = [...(_cachedComments ?? []), tempComment];
+                    });
+
                     final response = await BackendService.addComment(widget.post.id, text);
                     if (!response.success && mounted) {
+                      // Remove temp comment on failure
+                      setState(() {
+                        _cachedComments?.removeWhere((c) => c.id == tempComment.id);
+                      });
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Error: ${response.error}')),
                       );
                     } else if (mounted) {
-                      // Refresh comments after adding new one
-                      setState(() {
-                        _cachedComments = null;
-                        _commentsFuture = CommentService.getComments(widget.post.id)
-                          ..then((value) => _cachedComments = value);
-                      });
+                      // Sync with server in background
+                      _commentsFuture = CommentService.getComments(widget.post.id)
+                        ..then((value) {
+                          if (mounted) setState(() => _cachedComments = value);
+                        });
                     }
                   }
                 },

@@ -76,6 +76,7 @@ router.post(
                             toUserId: postDoc.data().authorId,
                             fromUserId: userId,
                             fromUserName: actorDisplayName,
+                            fromUserProfileImage: req.user.photoURL,
                             type: 'like',
                             postId,
                             postThumbnail: postDoc.data().thumbnailUrl || postDoc.data().mediaUrl
@@ -106,7 +107,7 @@ router.post(
             });
         } catch (error) {
             logger.error('Like Error', { error: error.message, postId, userId });
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: 'An internal error occurred' });
         }
     }
 );
@@ -155,6 +156,7 @@ router.post(
                         toUserId: postDoc.data().authorId,
                         fromUserId: userId,
                         fromUserName: actorDisplayName,
+                        fromUserProfileImage: req.user.photoURL,
                         type: 'comment',
                         postId,
                         commentText: text,
@@ -168,6 +170,24 @@ router.post(
                 _sendNotificationInternal(notificationPayload)
                     .catch(err => logger.error('Comment Notification Error', { err: err.message }));
             }
+
+            // Mentions logic
+            _processMentions(text, userId).then(mentionUids => {
+                mentionUids.forEach(targetUid => {
+                    // Don't send mention if they already got a comment notification
+                    if (notificationPayload && targetUid === notificationPayload.toUserId) return;
+
+                    _sendNotificationInternal({
+                        toUserId: targetUid,
+                        fromUserId: userId,
+                        fromUserName: actorDisplayName,
+                        fromUserProfileImage: req.user.photoURL,
+                        type: 'mention',
+                        postId,
+                        commentText: text
+                    }).catch(err => logger.error('Mention Notification Error', { err: err.message }));
+                });
+            });
 
             // Log Audit Action after successful transaction
             // Log Audit Action in background
@@ -184,7 +204,7 @@ router.post(
                 error: null
             });
         } catch (error) {
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: 'An internal error occurred' });
         }
     }
 );
@@ -249,6 +269,7 @@ router.post(
                         toUserId: targetUserId,
                         fromUserId: userId,
                         fromUserName: actorDisplayName,
+                        fromUserProfileImage: req.user.photoURL,
                         type: 'follow'
                     }).catch(err => logger.error('Notification Error', { err: err.message }));
                 }
@@ -259,7 +280,7 @@ router.post(
                 error: null
             });
         } catch (error) {
-            return res.status(500).json({ error: error.message });
+            return res.status(500).json({ error: 'An internal error occurred' });
         }
     }
 );
@@ -354,7 +375,7 @@ router.post(
 );
 
 // Helper for notifications (mirrors existing Firestore logic)
-async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, type, postId, postThumbnail, commentText }) {
+async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, fromUserProfileImage, type, postId, postThumbnail, commentText }) {
     if (!toUserId || toUserId === fromUserId) return;
 
     // Construct data object without undefined values
@@ -362,6 +383,7 @@ async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, t
         toUserId,
         fromUserId,
         fromUserName,
+        fromUserProfileImage,
         type,
         isRead: false,
         timestamp: admin.firestore.FieldValue.serverTimestamp()
@@ -372,6 +394,37 @@ async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, t
     if (commentText !== undefined) notificationData.commentText = commentText;
 
     await db.collection('notifications').add(notificationData);
+}
+
+/**
+ * Extracts mentions from text and returns unique list of mentioned uids
+ */
+async function _processMentions(text, currentUserId) {
+    if (!text) return [];
+    const mentionRegex = /@([a-zA-Z0-9._]+)/g;
+    const matches = [...text.matchAll(mentionRegex)];
+    if (matches.length === 0) return [];
+
+    const usernames = [...new Set(matches.map(m => m[1].toLowerCase()))];
+    const mentionUids = [];
+
+    // Chunk username lookups to avoid massive IN clauses
+    for (let i = 0; i < usernames.length; i += 10) {
+        const chunk = usernames.slice(i, i + 10);
+        const userSnapshot = await db.collection('users')
+            .where('username', 'in', chunk)
+            .limit(10)
+            .get();
+
+        userSnapshot.docs.forEach(doc => {
+            const uid = doc.id;
+            if (uid !== currentUserId) {
+                mentionUids.push(uid);
+            }
+        });
+    }
+
+    return [...new Set(mentionUids)];
 }
 
 /**

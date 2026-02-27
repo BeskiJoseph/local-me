@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -141,7 +142,10 @@ class _NewPostScreenState extends State<NewPostScreen> {
                 title: const Text('Record Video'),
                 onTap: () async {
                   Navigator.pop(context);
-                  final file = await _picker.pickVideo(source: ImageSource.camera);
+                  final file = await _picker.pickVideo(
+                    source: ImageSource.camera,
+                    maxDuration: const Duration(seconds: 60),
+                  );
                   _processMedia(file, 'video', 'mp4');
                 },
               ),
@@ -150,7 +154,10 @@ class _NewPostScreenState extends State<NewPostScreen> {
                 title: const Text('Choose Video from Gallery'),
                 onTap: () async {
                   Navigator.pop(context);
-                  final file = await _picker.pickVideo(source: ImageSource.gallery);
+                  final file = await _picker.pickVideo(
+                    source: ImageSource.gallery,
+                    maxDuration: const Duration(seconds: 60),
+                  );
                   _processMedia(file, 'video', 'mp4');
                 },
               ),
@@ -165,6 +172,24 @@ class _NewPostScreenState extends State<NewPostScreen> {
 
   Future<void> _processMedia(XFile? file, String type, String extension) async {
     if (file == null) return;
+
+    // Check file size before proceeding (100MB limit)
+    final fileLength = await file.length();
+    const maxSizeBytes = 100 * 1024 * 1024; // 100MB
+    if (fileLength > maxSizeBytes) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'File too large (${(fileLength / 1024 / 1024).toStringAsFixed(1)}MB). Max allowed: 100MB.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() => _isGeneratingThumbnail = type == 'video');
 
     final bytes = await file.readAsBytes();
@@ -182,7 +207,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
         );
         if (path != null) thumbnailData = await File(path).readAsBytes();
       } catch (e) {
-        debugPrint('Thumbnail error: $e');
+      if (kDebugMode) debugPrint('Thumbnail error: $e');
       }
     }
 
@@ -254,7 +279,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
     );
     
     // Emit event to show temporary post immediately
-    debugPrint('📤 Emitting temporary post event: ${tempPost.id}');
+    if (kDebugMode) debugPrint('📤 Emitting temporary post event: ${tempPost.id}');
     PostService.emit(FeedEvent(FeedEventType.postCreated, tempPost));
     
     try {
@@ -307,8 +332,8 @@ class _NewPostScreenState extends State<NewPostScreen> {
       );
       
       // Emit updated temp post with media URL
-      debugPrint('📤 Emitting updated temporary post event with media: ${updatedTempPost.id}');
-      debugPrint('📤 Media URL: ${updatedTempPost.mediaUrl}');
+      if (kDebugMode) debugPrint('📤 Emitting updated temporary post event with media: ${updatedTempPost.id}');
+      if (kDebugMode) debugPrint('📤 Media URL: ${updatedTempPost.mediaUrl}');
       PostService.emit(FeedEvent(FeedEventType.postCreated, updatedTempPost));
 
       // 2. Create post via PostService (handles backend call + event emission)
@@ -327,18 +352,18 @@ class _NewPostScreenState extends State<NewPostScreen> {
       if (!mounted) return;
       
       if (createdPostId.isNotEmpty) {
-        debugPrint('✅ Post created successfully with ID: $createdPostId');
+        if (kDebugMode) debugPrint('✅ Post created successfully with ID: $createdPostId');
         // Emit final post to replace temp post
         // The backend service will emit the real post event
         Navigator.pop(context, true);
       } else {
-        debugPrint('❌ Post creation failed');
+        if (kDebugMode) debugPrint('❌ Post creation failed');
         // Remove temp post on failure
         PostService.emit(FeedEvent(FeedEventType.postDeleted, tempPostId));
         throw Exception('Failed to create post');
       }
     } catch (e) {
-      debugPrint('Submit error: $e');
+      if (kDebugMode) debugPrint('Submit error: $e');
       // Remove temp post on error
       PostService.emit(FeedEvent(FeedEventType.postDeleted, tempPostId));
       if (mounted) {

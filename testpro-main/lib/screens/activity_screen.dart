@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -65,7 +66,7 @@ class _ActivityScreenState extends State<ActivityScreen>
         setState(() => _isLoading = false);
       }
     } catch (e) {
-      debugPrint('Error loading notifications: $e');
+      if (kDebugMode) debugPrint('Error loading notifications: $e');
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -187,7 +188,14 @@ class _ActivityScreenState extends State<ActivityScreen>
       );
     }
     
-    if (_notifications.isEmpty) {
+    final filteredNotifications = _notifications.where((n) {
+      if (_tabController.index == 1) {
+        return n.type == NotificationType.mention;
+      }
+      return true;
+    }).toList();
+
+    if (filteredNotifications.isEmpty) {
       return const EmptyStateWidget(
         icon: Icons.notifications_none_rounded,
         title: 'No activity yet',
@@ -196,10 +204,10 @@ class _ActivityScreenState extends State<ActivityScreen>
 
     return ListView.builder(
       padding: EdgeInsets.zero,
-      itemCount: _notifications.length,
+      itemCount: filteredNotifications.length,
       itemBuilder: (context, index) {
         // Simple section header logic
-        if (index == 5 && _notifications.length > 5) {
+        if (index == 5 && filteredNotifications.length > 5) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -216,15 +224,15 @@ class _ActivityScreenState extends State<ActivityScreen>
                 ),
               ),
               _NotificationTile(
-                notification: _notifications[index],
-                onTap: () => _handleNotificationTap(_notifications[index]),
+                notification: filteredNotifications[index],
+                onTap: () => _handleNotificationTap(filteredNotifications[index]),
               ),
             ],
           );
         }
         return _NotificationTile(
-          notification: _notifications[index],
-          onTap: () => _handleNotificationTap(_notifications[index]),
+          notification: filteredNotifications[index],
+          onTap: () => _handleNotificationTap(filteredNotifications[index]),
         );
       },
     );
@@ -255,7 +263,7 @@ class _ActivityScreenState extends State<ActivityScreen>
       try {
         await BackendService.markNotificationAsRead(notification.id);
       } catch (e) {
-        debugPrint('Error marking notification as read: $e');
+        if (kDebugMode) debugPrint('Error marking notification as read: $e');
       }
     }
 

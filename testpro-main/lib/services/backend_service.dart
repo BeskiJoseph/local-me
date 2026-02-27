@@ -185,7 +185,7 @@ class BackendClient {
   }) async {
     // 1. Use Custom Token if available
     if (!skipCustomCheck && _customAccessToken != null) {
-      final response = await requestFn(_customAccessToken!);
+      final response = await requestFn(_customAccessToken!).timeout(const Duration(seconds: 30));
       if (response.statusCode == 401 && !retried) {
         // Attempt Custom Refresh
         if (_customRefreshToken != null) {
@@ -204,7 +204,7 @@ class BackendClient {
     final firebaseToken = await getIdToken();
     if (firebaseToken == null) throw StateError('User not authenticated');
 
-    final response = await requestFn(firebaseToken);
+    final response = await requestFn(firebaseToken).timeout(const Duration(seconds: 30));
     
     // We NO LONGER call syncCustomTokens() here to prevent side-effect loops.
     // Sync should be orchestrated by the AuthState listener or an explicit login call.

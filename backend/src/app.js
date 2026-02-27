@@ -26,12 +26,25 @@ app.use(requestTimeout);
 
 // 4. Health Check (Public - No Limiter or Health-specific Limiter)
 import { progressiveLimiter } from './middleware/progressiveLimiter.js';
-app.get('/health', progressiveLimiter('health'), (_, res) => {
-    res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-    });
+import { db } from './config/firebase.js';
+app.get('/health', progressiveLimiter('health'), async (_, res) => {
+    try {
+        // Quick Firestore connectivity check
+        await db.collection('_health').doc('ping').set({ ts: Date.now() }, { merge: true });
+        res.json({
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            db: 'connected',
+        });
+    } catch (err) {
+        res.status(503).json({
+            status: 'degraded',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            db: 'unreachable',
+        });
+    }
 });
 
 // 5. Public Routes (IP-based limiting)

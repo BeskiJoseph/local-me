@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../config/app_theme.dart';
 import '../services/post_service.dart';
+import '../services/backend_service.dart';
 import '../services/location_service.dart';
 import '../services/auth_service.dart';
+import '../models/post.dart';
 
 /// A custom controller that styles Markdown-like syntax visually in the editor
 class MarkdownEditingController extends TextEditingController {
@@ -163,6 +166,15 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
       if (!mounted) return;
 
       if (responseId.isNotEmpty) {
+        // Fetch new post and emit for instant display
+        BackendService.getPost(responseId).then((response) {
+          if (response.success && response.data != null) {
+            final post = Post.fromJson(response.data!);
+            PostService.emit(FeedEvent(FeedEventType.postCreated, post));
+          }
+        });
+        
+        if (!mounted) return;
         Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Article posted successfully!')),
@@ -171,7 +183,7 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
         throw Exception('Failed to post article');
       }
     } catch (e) {
-      debugPrint('Error posting article: $e');
+      if (kDebugMode) debugPrint('Error posting article: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),

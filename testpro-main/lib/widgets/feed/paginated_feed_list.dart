@@ -48,8 +48,14 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
 
     switch (event.type) {
       case FeedEventType.postCreated:
-        // Fetch only the new post instead of full refresh
-        _fetchAndPrependNewPost(event.data as String);
+        if (event.data is String) {
+          _fetchAndPrependNewPost(event.data as String);
+        } else if (event.data is Post) {
+          final post = event.data as Post;
+          if (_shouldIncludePost(post)) {
+            _feedController.prependPost(post);
+          }
+        }
         break;
       case FeedEventType.postDeleted:
         _feedController.deletePost(event.data);

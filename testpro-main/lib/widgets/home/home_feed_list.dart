@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import '../../services/post_service.dart';
+import '../../services/backend_service.dart';
 import '../../models/post.dart';
 import '../../models/paginated_response.dart';
 import '../../config/app_theme.dart';
@@ -49,6 +50,9 @@ class _HomeFeedListState extends State<HomeFeedList>
   // Static temporary posts to persist across widget recreation
   static final List<Post> _tempPosts = [];
 
+  // Static set of deleted post IDs to persist optimistic removals
+  static final Set<String> _deletedPostIds = {};
+
   @override
   bool get wantKeepAlive => true;
   
@@ -79,31 +83,18 @@ class _HomeFeedListState extends State<HomeFeedList>
         final postData = event.data;
         if (postData is Post) {
           debugPrint('➕ Processing post: ${postData.id}');
-          debugPrint('➕ Post title: ${postData.title}');
-          debugPrint('➕ Post author: ${postData.authorName}');
-          debugPrint('➕ Post media URL: ${postData.mediaUrl}');
-          debugPrint('➕ Post media type: ${postData.mediaType}');
-          
-          // Check if this is an update to an existing temporary post
-          final existingIndex = _tempPosts.indexWhere((p) => p.id == postData.id);
-          if (existingIndex != -1) {
-            debugPrint('🔄 Updating existing temporary post at index: $existingIndex');
-            // Replace the existing temporary post with updated version
-            setState(() {
-              _tempPosts[existingIndex] = postData;
-            });
-            debugPrint('🔄 Temporary post updated with media URL: ${postData.mediaUrl != null}');
-          } else {
-            debugPrint('➕ Adding new temporary post to feed: ${postData.id}');
-            // Add new temporary post to the top of the feed
-            setState(() {
-              _tempPosts.insert(0, postData);
-            });
-          }
-          debugPrint('➕ Temporary post processed. Current count: ${_tempPosts.length}');
-          debugPrint('➕ Temp posts IDs: ${_tempPosts.map((p) => p.id).toList()}');
+          _processPostCreated(postData);
+        } else if (postData is String) {
+          debugPrint('➕ Processing postId: $postData');
+          // Fetch the full post object if only ID was emitted
+          BackendService.getPost(postData).then((response) {
+            if (response.success && response.data != null && mounted) {
+              final post = Post.fromJson(response.data!);
+              _processPostCreated(post);
+            }
+          });
         } else {
-          debugPrint('⚠️ Event data is not a Post object: ${postData.runtimeType}');
+          debugPrint('⚠️ Event data is not a Post or String: ${postData.runtimeType}');
         }
       } else if (event.type == FeedEventType.postDeleted) {
         debugPrint('📬 Post deleted event received');
@@ -113,8 +104,9 @@ class _HomeFeedListState extends State<HomeFeedList>
           // Remove temporary post
           setState(() {
             _tempPosts.removeWhere((p) => p.id == postId);
+            _deletedPostIds.add(postId);
           });
-          debugPrint('➖ Temporary post removed. Current count: ${_tempPosts.length}');
+          debugPrint('➖ Temporary post removed and tombstoned. Current count: ${_tempPosts.length}');
         }
       }
     });
@@ -126,6 +118,32 @@ class _HomeFeedListState extends State<HomeFeedList>
     _scrollController.dispose();
     _eventSubscription?.cancel();
     super.dispose();
+  }
+
+  void _processPostCreated(Post postData) {
+    debugPrint('➕ Post title: ${postData.title}');
+    debugPrint('➕ Post author: ${postData.authorName}');
+    debugPrint('➕ Post media URL: ${postData.mediaUrl}');
+    debugPrint('➕ Post media type: ${postData.mediaType}');
+    
+    // Check if this is an update to an existing temporary post
+    final existingIndex = _tempPosts.indexWhere((p) => p.id == postData.id);
+    if (existingIndex != -1) {
+      debugPrint('🔄 Updating existing temporary post at index: $existingIndex');
+      // Replace the existing temporary post with updated version
+      setState(() {
+        _tempPosts[existingIndex] = postData;
+      });
+      debugPrint('🔄 Temporary post updated with media URL: ${postData.mediaUrl != null}');
+    } else {
+      debugPrint('➕ Adding new temporary post to feed: ${postData.id}');
+      // Add new temporary post to the top of the feed
+      setState(() {
+        _tempPosts.insert(0, postData);
+      });
+    }
+    debugPrint('➕ Temporary post processed. Current count: ${_tempPosts.length}');
+    debugPrint('➕ Temp posts IDs: ${_tempPosts.map((p) => p.id).toList()}');
   }
 
   Future<PaginatedResponse<Post>> _getFuture() {
@@ -249,6 +267,9 @@ class _HomeFeedListState extends State<HomeFeedList>
         
         // Combine temporary posts with real posts
         final allPosts = [..._tempPosts, ...posts];
+
+        // Apply optimistic deletion filter (tombstones)
+        allPosts.removeWhere((p) => _deletedPostIds.contains(p.id));
         debugPrint('📊 Building feed display:');
         debugPrint('📊  - Temp posts: ${_tempPosts.length}');
         debugPrint('📊  - Real posts: ${posts.length}');

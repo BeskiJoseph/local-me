@@ -47,10 +47,12 @@ router.post('/token', deviceContext, async (req, res) => {
             return res.status(401).json({
                 success: false,
                 error: 'Invalid or expired Firebase token',
-                debug: {
-                    message: verifyError.message,
-                    code: verifyError.code
-                }
+                ...(process.env.NODE_ENV !== 'production' ? {
+                    debug: {
+                        message: verifyError.message,
+                        code: verifyError.code
+                    }
+                } : {})
             });
         }
 
@@ -285,6 +287,9 @@ router.post('/refresh', deviceContext, async (req, res) => {
  * @access  Public
  */
 router.get('/debug', (req, res) => {
+    if (process.env.NODE_ENV === 'production') {
+        return res.status(404).json({ success: false, error: 'Not found' });
+    }
     res.json({
         success: true,
         data: {

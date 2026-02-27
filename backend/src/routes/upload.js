@@ -23,9 +23,14 @@ const router = express.Router();
 // MULTER (MEMORY ONLY)
 // ============================================
 const upload = multer({
-    storage: multer.memoryStorage(),
+    storage: multer.diskStorage({
+        destination: os.tmpdir(),
+        filename: (req, file, cb) => {
+            cb(null, `upload_${crypto.randomUUID()}${path.extname(file.originalname)}`);
+        },
+    }),
     limits: {
-        fileSize: 200 * 1024 * 1024, // 200MB (increased for videos)
+        fileSize: 100 * 1024 * 1024, // 100MB max
         files: 1,
     },
 });
@@ -59,7 +64,7 @@ function getExtension(mime) {
 }
 
 async function uploadToR2(file, key, bufferOverride = null) {
-    const body = bufferOverride || file.buffer;
+    const body = bufferOverride || await fs.readFile(file.path);
     const size = bufferOverride ? bufferOverride.length : file.size;
 
     await r2Client.send(
@@ -72,6 +77,9 @@ async function uploadToR2(file, key, bufferOverride = null) {
             CacheControl: 'public, max-age=31536000, immutable',
         })
     );
+
+    // Clean up uploaded temp file
+    try { await fs.unlink(file.path).catch(() => { }); } catch (_) { }
 }
 
 // ============================================
@@ -153,7 +161,7 @@ router.post(
                 postId.replace(/[^a-zA-Z0-9-_]/g, '').slice(0, 100) || 'uncategorized';
             const folder = mediaType === 'video' ? 'videos' : 'images';
 
-            let finalBuffer = req.file.buffer;
+            let finalBuffer = await fs.readFile(req.file.path);
             let finalKey = `posts/${req.user.uid}/${safePostId}/${folder}/${crypto.randomUUID()}.${ext}`;
 
             // Handle video processing
@@ -162,8 +170,8 @@ router.post(
                 tempInputPath = path.join(os.tmpdir(), `input_${tempId}.${ext}`);
                 tempOutputPath = path.join(os.tmpdir(), `output_${tempId}.mp4`); // Always output mp4 for consistency
 
-                // Write buffer to temp file
-                await fs.writeFile(tempInputPath, req.file.buffer);
+                // Use multer's disk file directly as input
+                tempInputPath = req.file.path;
 
                 // Check duration
                 const metadata = await getVideoMetadata(tempInputPath);

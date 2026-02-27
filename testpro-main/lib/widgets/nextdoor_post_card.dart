@@ -637,9 +637,11 @@ class _PostHeaderState extends State<_PostHeader> {
                         final response = await BackendService.reportPost(widget.post.id, selectedReason!);
                         if (context.mounted) {
                           if (response.success) {
+                            // Hide reported post from feed for this user
+                            PostService.emit(FeedEvent(FeedEventType.postDeleted, widget.post.id));
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('Thank you for your report. We will review it shortly.'),
+                                content: Text('Thank you for your report. Post hidden from your feed.'),
                               ),
                             );
                           } else {

@@ -38,7 +38,12 @@ class MediaUploadService {
     }
 
     // 2. Resolve default URL
-    String defaultUrl = 'http://localhost:4000';
+    String defaultUrl = 'http://10.211.157.94:4000';
+    
+    // Warn in release mode if using localhost (production misconfiguration)
+    if (!kDebugMode) {
+      debugPrint('⚠️ WARNING: API_URL not set! Falling back to localhost. This will NOT work in production.');
+    }
     
     // Auto-detect Android emulator loopback (disabled for prod config)
     // if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
@@ -98,9 +103,12 @@ class MediaUploadService {
       ),
     );
 
-    // 3. Send Request (Increased timeout for enterprise-grade video support)
+    // 3. Send Request (Longer timeout for video uploads)
+    final timeoutDuration = mediaType == 'video'
+        ? const Duration(seconds: 300) // 5 min for videos
+        : const Duration(seconds: 120); // 2 min for images
     if (kDebugMode) debugPrint('Sending request${isRetry ? ' (Retry)' : ''}...');
-    final streamed = await request.send().timeout(const Duration(seconds: 120));
+    final streamed = await request.send().timeout(timeoutDuration);
     
     final response = await http.Response.fromStream(streamed);
     if (kDebugMode) debugPrint('Response received: ${response.statusCode}');

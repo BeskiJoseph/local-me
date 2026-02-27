@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
@@ -98,6 +99,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   }
 
   Future<void> _loadComments() async {
+    if (!mounted) return;
     setState(() => _isLoadingComments = true);
     try {
       final response = await BackendService.getComments(_post!.id);
@@ -153,14 +155,14 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         _loadAllStatus();
         // Track post view
         BackendService.trackPostView(widget.postId!).catchError((e) {
-          debugPrint('Error tracking view: $e');
+          if (kDebugMode) debugPrint('Error tracking view: $e');
         });
       } else {
         setState(() => _isLoading = false);
       }
     } catch (e) {
       setState(() => _isLoading = false);
-      debugPrint('Error loading post: $e');
+      if (kDebugMode) debugPrint('Error loading post: $e');
     }
   }
 

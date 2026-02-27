@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import '../models/signup_data.dart';
@@ -184,7 +185,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
       data.latitude = position.latitude;
       data.longitude = position.longitude;
     } catch (e) {
-      debugPrint("Location initialization error: $e");
+      if (kDebugMode) debugPrint("Location initialization error: $e");
     }
 
     if (mounted) {

@@ -20,7 +20,13 @@ class AuditService {
             await db.collection('audit_logs').add(logEntry);
 
             // Also log to console/pino for real-time observability
-            logger.info({ audit: true, ...logEntry }, `Audit Log: ${action}`);
+            // Create a sanitized version for the logger to avoid serializing complex objects like FieldValue
+            const { timestamp, ...logContent } = logEntry;
+            logger.info({
+                audit: true,
+                ...logContent,
+                timestamp: new Date().toISOString()
+            }, `Audit Log: ${action}`);
         } catch (error) {
             // We don't want to crash the main request if audit logging fails, 
             // but we MUST log the failure.

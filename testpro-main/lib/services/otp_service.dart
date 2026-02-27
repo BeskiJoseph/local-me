@@ -22,7 +22,7 @@ class OtpService {
       
       if (kDebugMode) debugPrint("sendOtp Success");
     } catch (e) {
-      debugPrint('Error in sendOtp: $e');
+      if (kDebugMode) debugPrint('Error in sendOtp: $e');
       if (e is Exception) rethrow;
       throw Exception('Failed to send OTP. Please check your connection.');
     }
@@ -47,7 +47,7 @@ class OtpService {
       
       if (kDebugMode) debugPrint("verifyOtp Success");
     } catch (e) {
-      debugPrint('Error in verifyOtp: $e');
+      if (kDebugMode) debugPrint('Error in verifyOtp: $e');
       if (e is Exception) rethrow;
       throw Exception('Verification failed. Please try again.');
     }

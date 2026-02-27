@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -6,7 +7,9 @@ import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
 import '../services/post_service.dart';
 import '../services/backend_service.dart';
+import '../models/post.dart';
 import 'package:geolocator/geolocator.dart';
+import 'group_chat_screen.dart';
 
 class CreateEventScreen extends StatefulWidget {
   const CreateEventScreen({super.key});
@@ -147,7 +150,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       try {
         position = await Geolocator.getCurrentPosition().timeout(const Duration(seconds: 5));
       } catch (e) {
-        debugPrint('Location detection failed (optional): $e');
+        if (kDebugMode) debugPrint('Location detection failed (optional): $e');
       }
       
       String? coverImageUrl;
@@ -181,13 +184,20 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       if (!mounted) return;
 
       if (createdPostResp.success && createdPostResp.data != null) {
-        // Return to Home with refresh signal instead of going to GroupChat
-        Navigator.pop(context, true);
+        final post = Post.fromJson(createdPostResp.data!);
+        PostService.emit(FeedEvent(FeedEventType.postCreated, post));
+        
+        if (!mounted) return;
+        // Navigate to the newly created group chat
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => GroupChatScreen(event: post)),
+        );
       } else {
         Navigator.pop(context, true);
       }
     } catch (e) {
-      debugPrint('Error creating event: $e');
+      if (kDebugMode) debugPrint('Error creating event: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),

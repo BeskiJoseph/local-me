@@ -49,7 +49,7 @@ router.post(
 
             const msg = {
                 to: email,
-                from: process.env.SENDGRID_FROM_EMAIL || 'noreply@testpro.com', // User needs to verify this
+                from: process.env.SENDGRID_FROM_EMAIL,
                 subject: 'Your Verification Code',
                 text: `Your verification code is: ${otp}. It will expire in 10 minutes.`,
                 html: `

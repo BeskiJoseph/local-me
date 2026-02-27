@@ -276,10 +276,8 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         final posts = allPosts.where((post) {
           // Skip events
           if (post.isEvent) return false;
-          // Skip articles (text-only posts without media)
-          if (post.mediaUrl == null || post.mediaUrl!.isEmpty) return false;
-          // Only show image and video posts
-          return post.mediaType == 'image' || post.mediaType == 'video';
+          // Show all other posts, including text-only articles
+          return true;
         }).toList();
         
         if (posts.isEmpty) return _buildEmptyState();
@@ -332,6 +330,35 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
                       right: 8,
                       child: Icon(Icons.play_circle_outline, color: Colors.white, size: 20),
                     ),
+                  // Title overlay
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                          colors: [
+                            Colors.black.withOpacity(0.7),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: Text(
+                        post.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             );

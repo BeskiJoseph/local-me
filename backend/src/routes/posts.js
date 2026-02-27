@@ -167,6 +167,21 @@ router.post('/', authenticate, async (req, res, next) => {
 
         logger.info({ postId: postRef.id, userId: uid }, 'Post created successfully');
 
+        // Trigger mentions notifications
+        const textToProcess = `${value.title || ''} ${value.body || ''} ${value.text || ''}`;
+        _processMentions(textToProcess, uid).then(mentionUids => {
+            mentionUids.forEach(targetUid => {
+                _sendNotificationInternal({
+                    toUserId: targetUid,
+                    fromUserId: uid,
+                    fromUserName: actorDisplayName,
+                    fromUserProfileImage: req.user.photoURL,
+                    type: 'mention',
+                    postId: postRef.id,
+                }).catch(err => logger.error('Post Mention Notification Error', { err: err.message }));
+            });
+        });
+
         return res.status(201).json({
             success: true,
             data: {
@@ -979,5 +994,65 @@ router.post('/:id/report', authenticate, async (req, res, next) => {
         next(err);
     }
 });
+
+// ============================================
+// HELPER FUNCTIONS (used by post creation for mentions)
+// ============================================
+
+/**
+ * Extracts @mentions from text and returns unique list of mentioned uids
+ */
+async function _processMentions(text, currentUserId) {
+    if (!text) return [];
+    const mentionRegex = /@([a-zA-Z0-9._]+)/g;
+    const matches = [...text.matchAll(mentionRegex)];
+    if (matches.length === 0) return [];
+
+    const usernames = [...new Set(matches.map(m => m[1].toLowerCase()))];
+    const mentionUids = [];
+
+    for (let i = 0; i < usernames.length; i += 10) {
+        const chunk = usernames.slice(i, i + 10);
+        const userSnapshot = await db.collection('users')
+            .where('username', 'in', chunk)
+            .limit(10)
+            .get();
+
+        userSnapshot.docs.forEach(doc => {
+            const uid = doc.id;
+            if (uid !== currentUserId) {
+                mentionUids.push(uid);
+            }
+        });
+    }
+
+    return [...new Set(mentionUids)];
+}
+
+/**
+ * Creates a notification document in Firestore
+ */
+async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, fromUserProfileImage, type, postId, postThumbnail, commentText }) {
+    if (!toUserId || toUserId === fromUserId) return;
+    try {
+        const notificationData = {
+            toUserId,
+            fromUserId,
+            fromUserName: fromUserName || 'Someone',
+            fromUserProfileImage: fromUserProfileImage || null,
+            type,
+            isRead: false,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        if (postId !== undefined) notificationData.postId = postId;
+        if (postThumbnail !== undefined) notificationData.postThumbnail = postThumbnail;
+        if (commentText !== undefined) notificationData.commentText = commentText;
+
+        await db.collection('notifications').add(notificationData);
+    } catch (err) {
+        logger.error('Notification creation failed', { err: err.message, toUserId, type });
+    }
+}
 
 export default router;

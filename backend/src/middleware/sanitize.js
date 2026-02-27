@@ -47,7 +47,10 @@ export const validateFileMagicBytes = async (req, res, next) => {
 
     try {
         const { fileTypeFromBuffer } = await import('file-type');
-        const fileType = await fileTypeFromBuffer(req.file.buffer);
+        const fs = await import('fs/promises');
+        // Read first 4100 bytes from disk for magic byte detection
+        const fileBuffer = await fs.readFile(req.file.path);
+        const fileType = await fileTypeFromBuffer(fileBuffer);
 
         if (!fileType) {
             logSecurityEvent('INVALID_FILE_TYPE', {

@@ -1,6 +1,7 @@
 import express from 'express';
 import { db } from '../config/firebase.js';
 import authenticate from '../middleware/auth.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -10,20 +11,46 @@ const router = express.Router();
  */
 router.get('/', authenticate, async (req, res, next) => {
     try {
-        const snapshot = await db.collection('notifications')
-            .where('toUserId', '==', req.user.uid)
-            .orderBy('timestamp', 'desc')
-            .limit(50)
-            .get();
+        logger.info({ userId: req.user.uid }, 'Fetching notifications');
 
-        const notifications = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            timestamp: doc.data().timestamp?.toDate()?.toISOString()
-        }));
+        let snapshot;
+        try {
+            // Primary query: orderBy timestamp (requires composite index)
+            snapshot = await db.collection('notifications')
+                .where('toUserId', '==', req.user.uid)
+                .orderBy('timestamp', 'desc')
+                .limit(50)
+                .get();
+        } catch (indexError) {
+            // Fallback: if composite index doesn't exist, query without orderBy
+            logger.warn({ error: indexError.message }, 'Notifications index error, falling back to unordered query');
+            snapshot = await db.collection('notifications')
+                .where('toUserId', '==', req.user.uid)
+                .limit(50)
+                .get();
+        }
 
-        return res.json({ data: notifications });
+        logger.info({ count: snapshot.docs.length, userId: req.user.uid }, 'Notifications fetched');
+
+        const notifications = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                ...data,
+                timestamp: data.timestamp?.toDate?.()
+                    ? data.timestamp.toDate().toISOString()
+                    : data.createdAt?.toDate?.()
+                        ? data.createdAt.toDate().toISOString()
+                        : new Date().toISOString()
+            };
+        });
+
+        // Sort by timestamp descending (in case fallback query was used)
+        notifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        return res.json({ success: true, data: notifications });
     } catch (err) {
+        logger.error({ error: err.message, stack: err.stack }, 'Notifications fetch error');
         next(err);
     }
 });

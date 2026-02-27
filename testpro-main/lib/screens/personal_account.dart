@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
@@ -64,12 +65,14 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
 
   Future<void> _loadData() async {
     if (profileUserId.isEmpty) return;
-    await Future.wait([
-      _loadProfile(),
-      _loadFollowState(),
-      _loadPosts(refresh: true),
-      _loadMyEvents(),
-    ]);
+    
+    // Load profile header first for better perceived performance
+    _loadProfile();
+    
+    // Then load other sections in parallel without blocking the UI
+    _loadFollowState();
+    _loadPosts(refresh: true);
+    _loadMyEvents();
   }
 
   Future<void> _loadMyEvents() async {
@@ -103,7 +106,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         });
       }
     } catch (e) {
-      debugPrint('Error loading profile: $e');
+      if (kDebugMode) debugPrint('Error loading profile: $e');
       if (mounted) {
         setState(() {
           _isLoadingProfile = false;
@@ -180,7 +183,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         setState(() => _isLoadingPosts = false);
       }
     } catch (e) {
-      debugPrint('Error loading profile posts: $e');
+      if (kDebugMode) debugPrint('Error loading profile posts: $e');
       if (mounted) setState(() => _isLoadingPosts = false);
     }
   }

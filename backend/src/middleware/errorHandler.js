@@ -9,7 +9,7 @@ const errorHandler = (err, req, res, next) => {
         stack: err.stack,
         path: req.path,
         method: req.method,
-        body: req.body,
+        body: isProd ? '[REDACTED]' : req.body,
         userId: req.user?.uid
     });
 

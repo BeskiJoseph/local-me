@@ -18,44 +18,45 @@ router.get('/', authenticate, async (req, res, next) => {
         let results = [];
 
         if (type === 'users') {
-            // Search users by username prefix (case-insensitive)
+            // Search users by username (lowercase) or display name (lowercase)
             const usernameQuery = db.collection('users')
                 .where('username', '>=', searchTerm)
                 .where('username', '<=', searchTerm + '\uf8ff')
                 .limit(pageSize);
 
-            // Also search by display name
             const displayNameQuery = db.collection('users')
-                .where('displayName', '>=', searchTerm)
-                .where('displayName', '<=', searchTerm + '\uf8ff')
+                .where('displayName_lowercase', '>=', searchTerm)
+                .where('displayName_lowercase', '<=', searchTerm + '\uf8ff')
                 .limit(pageSize);
 
-            const [usernameSnap, displayNameSnap] = await Promise.all([
+            const firstNameQuery = db.collection('users')
+                .where('firstName_lowercase', '>=', searchTerm)
+                .where('firstName_lowercase', '<=', searchTerm + '\uf8ff')
+                .limit(pageSize);
+
+            const [usernameSnap, displayNameSnap, firstNameSnap] = await Promise.all([
                 usernameQuery.get(),
-                displayNameQuery.get()
+                displayNameQuery.get(),
+                firstNameQuery.get()
             ]);
 
             const userMap = new Map();
-            usernameSnap.docs.forEach(doc => userMap.set(doc.id, { id: doc.id, ...doc.data() }));
-            displayNameSnap.docs.forEach(doc => userMap.set(doc.id, { id: doc.id, ...doc.data() }));
+            const docs = [...usernameSnap.docs, ...displayNameSnap.docs, ...firstNameSnap.docs];
+            docs.forEach(doc => userMap.set(doc.id, { id: doc.id, ...doc.data() }));
 
             results = Array.from(userMap.values()).slice(0, pageSize);
         } else {
-            // Search posts by title prefix (case-insensitive)
+            // Search posts by title or body prefix (case-insensitive)
+            // Simplified queries to avoid composite index requirements on localhost
             const titleQuery = db.collection('posts')
-                .where('visibility', '==', 'public')
-                .where('status', '==', 'active')
                 .where('title_lowercase', '>=', searchTerm)
                 .where('title_lowercase', '<=', searchTerm + '\uf8ff')
-                .limit(pageSize);
+                .limit(pageSize * 2);
 
-            // Also search by body text (case-insensitive)
             const bodyQuery = db.collection('posts')
-                .where('visibility', '==', 'public')
-                .where('status', '==', 'active')
                 .where('body_lowercase', '>=', searchTerm)
                 .where('body_lowercase', '<=', searchTerm + '\uf8ff')
-                .limit(pageSize);
+                .limit(pageSize * 2);
 
             const [titleSnap, bodySnap] = await Promise.all([
                 titleQuery.get(),
@@ -63,8 +64,15 @@ router.get('/', authenticate, async (req, res, next) => {
             ]);
 
             const postMap = new Map();
-            titleSnap.docs.forEach(doc => postMap.set(doc.id, { id: doc.id, ...doc.data() }));
-            bodySnap.docs.forEach(doc => postMap.set(doc.id, { id: doc.id, ...doc.data() }));
+            const allDocs = [...titleSnap.docs, ...bodySnap.docs];
+
+            allDocs.forEach(doc => {
+                const data = doc.data();
+                // Filter by visibility and status in memory to avoid composite index requirement
+                if (data.visibility === 'public' && data.status === 'active') {
+                    postMap.set(doc.id, { id: doc.id, ...data });
+                }
+            });
 
             results = Array.from(postMap.values()).slice(0, pageSize);
         }

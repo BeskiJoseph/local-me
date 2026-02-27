@@ -78,7 +78,7 @@ class LocationService {
         await BackendService.updateProfile({'location': locationStr});
       }
     } catch (e) {
-      debugPrint('Location service error: $e');
+      if (kDebugMode) debugPrint('Location service error: $e');
     } finally {
       _isDetecting = false;
     }
