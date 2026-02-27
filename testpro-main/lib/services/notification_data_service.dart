@@ -6,7 +6,7 @@ class NotificationDataService {
   /// Previous 15s polling was contributing to the request storm.
   static Stream<List<ActivityNotification>> notificationsStream(String userId) async* {
     yield await _fetch(userId);
-    await for (final _ in Stream.periodic(const Duration(minutes: 5))) {
+    await for (final _ in Stream.periodic(const Duration(seconds: 30))) {
       yield await _fetch(userId);
     }
   }

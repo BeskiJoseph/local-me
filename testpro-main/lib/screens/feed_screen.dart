@@ -15,9 +15,9 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
   late TabController _tabController;
   int _currentTabIndex = 0;
 
-  // In a real app, integrate location service. Using defaults for MVP/Demo.
-  final String _userCity = "San Francisco";
-  final String _userCountry = "USA";
+  // Use LocationService for dynamic location names
+  String? get _userCity => LocationService.currentCity;
+  String? get _userCountry => LocationService.currentCountry;
 
   @override
   void initState() {

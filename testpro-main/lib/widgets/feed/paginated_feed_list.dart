@@ -92,7 +92,9 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     // Check if post matches this feed's criteria
     switch (widget.feedType) {
       case 'local':
-        return post.city == widget.userCity;
+        // RELAXED: Trust the backend's ring-expansion results (up to 40km).
+        // Strict city-name comparison was blocking nearby/adjacent city posts.
+        return true;
       case 'global':
         return true;
       default:
@@ -129,6 +131,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     if (!refresh && !_feedController.hasMore) return;
 
     debugPrint('🚀 FEED API CALLED: ${widget.feedType}');
+    debugPrint('📍 FEED ARGS: city=${widget.userCity}, country=${widget.userCountry}');
 
     if (refresh) {
       _feedController.clear(notify: false);
