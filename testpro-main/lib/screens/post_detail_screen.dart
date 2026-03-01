@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -15,6 +16,7 @@ import '../core/utils/time_utils.dart';
 import '../core/utils/navigation_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
+import '../services/socket_service.dart';
 
 class PostDetailScreen extends StatefulWidget {
   final Post? post;
@@ -47,6 +49,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   bool _isLoadingRecommended = false;
   bool _isTogglingLike = false;
   bool _isTogglingFollow = false;
+  StreamSubscription? _postEventSubscription;
   
   void _navigateToUserProfile(String userId) {
     NavigationUtils.navigateToProfile(context, userId);
@@ -60,9 +63,29 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       _likeCount = _post!.likeCount;
       _initializeVideo();
       _loadAllStatus();
+      SocketService.joinPost(_post!.id);
     } else {
       _loadPost();
     }
+    
+    // Global Event Sync
+    _postEventSubscription = PostService.events.listen((event) {
+      if (!mounted || _post == null) return;
+      
+      if (event.type == FeedEventType.postLiked && event.data['postId'] == _post!.id) {
+        setState(() {
+          _isLiked = event.data['isLiked'];
+          _likeCount = event.data['likeCount'];
+          _optimisticLiked = null;
+          _optimisticLikeCount = null;
+        });
+      } else if (event.type == FeedEventType.userFollowed && event.data['userId'] == _post!.authorId) {
+        setState(() {
+          _isFollowed = event.data['isFollowing'];
+          _optimisticSubscribed = null;
+        });
+      }
+    });
   }
 
   Future<void> _loadAllStatus() async {
@@ -102,7 +125,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     if (!mounted) return;
     setState(() => _isLoadingComments = true);
     try {
-      final response = await BackendService.getComments(_post!.id);
+      final response = await BackendService.getComments(_post!.id, limit: 10); // Show top 10 initially
       if (!mounted) return;
       if (response.success && response.data != null) {
         setState(() {
@@ -153,6 +176,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         });
         _initializeVideo();
         _loadAllStatus();
+        SocketService.joinPost(_post!.id);
         // Track post view
         BackendService.trackPostView(widget.postId!).catchError((e) {
           if (kDebugMode) debugPrint('Error tracking view: $e');
@@ -182,6 +206,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
   @override
   void dispose() {
+    if (_post != null) {
+      SocketService.leavePost(_post!.id);
+    }
+    _postEventSubscription?.cancel();
     _videoController?.dispose();
     _commentController.dispose();
     super.dispose();
@@ -600,8 +628,43 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
               if (text.isNotEmpty && user != null) {
                  _commentController.clear();
                  FocusScope.of(context).unfocus();
-                 final response = await BackendService.addComment(_post!.id, text);
-                 if (response.success) _loadComments();
+
+                 // --- Optimistic UI ---
+                 final optimistic = Comment(
+                    id: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+                    postId: _post!.id,
+                    authorId: user.uid,
+                    authorName: user.displayName ?? 'You',
+                    authorProfileImage: user.photoURL,
+                    text: text,
+                    createdAt: DateTime.now(),
+                 );
+
+                 setState(() {
+                   _comments.insert(0, optimistic);
+                 });
+
+                 try {
+                   final response = await BackendService.addComment(_post!.id, text);
+                   if (response.success && response.data != null) {
+                     final realComment = Comment.fromJson(response.data!);
+                     if (mounted) {
+                       setState(() {
+                         final idx = _comments.indexWhere((c) => c.id == optimistic.id);
+                         if (idx != -1) _comments[idx] = realComment;
+                       });
+                     }
+                   } else {
+                     throw Exception(response.error);
+                   }
+                 } catch (e) {
+                   if (mounted) {
+                     setState(() {
+                       _comments.removeWhere((c) => c.id == optimistic.id);
+                     });
+                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Comment failed: $e')));
+                   }
+                 }
               }
             },
             child: Container(
@@ -666,7 +729,12 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         try {
           final response = await BackendService.toggleLike(_post!.id);
           if (response.success) {
-            _loadLikeState();
+            // Emit to sync other instances of this post card/screen
+            PostService.emit(FeedEvent(FeedEventType.postLiked, {
+              'postId': _post!.id,
+              'isLiked': newTarget,
+              'likeCount': _optimisticLikeCount ?? displayLikeCount,
+            }));
           } else {
             throw response.error ?? "Failed";
           }
@@ -724,7 +792,11 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         try {
           final response = await BackendService.toggleFollow(_post!.authorId);
           if (response.success) {
-            await _loadFollowState();
+            // Emit to sync
+            PostService.emit(FeedEvent(FeedEventType.userFollowed, {
+              'userId': _post!.authorId,
+              'isFollowing': !current,
+            }));
           }
           setState(() => _optimisticSubscribed = null);
         } catch (e) {

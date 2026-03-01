@@ -7,7 +7,9 @@ class Comment {
   final String text;
   final DateTime createdAt;
   final int likeCount;
+  final int replyCount;
   final bool isLiked;
+  final String? parentId;
 
   Comment({
     required this.id,
@@ -18,7 +20,9 @@ class Comment {
     required this.text,
     required this.createdAt,
     this.likeCount = 0,
+    this.replyCount = 0,
     this.isLiked = false,
+    this.parentId,
   });
 
   factory Comment.fromJson(Map<String, dynamic> json) {
@@ -37,7 +41,9 @@ class Comment {
       text: json['text'] as String? ?? '',
       createdAt: parseDate(json['createdAt']),
       likeCount: json['likeCount'] as int? ?? 0,
+      replyCount: json['replyCount'] as int? ?? 0,
       isLiked: json['isLiked'] as bool? ?? false,
+      parentId: json['parentId'] as String?,
     );
   }
 
@@ -45,6 +51,7 @@ class Comment {
 
   Comment copyWith({
     int? likeCount,
+    int? replyCount,
     bool? isLiked,
   }) {
     return Comment(
@@ -56,7 +63,9 @@ class Comment {
       text: text,
       createdAt: createdAt,
       likeCount: likeCount ?? this.likeCount,
+      replyCount: replyCount ?? this.replyCount,
       isLiked: isLiked ?? this.isLiked,
+      parentId: parentId,
     );
   }
 
@@ -70,7 +79,9 @@ class Comment {
       'text': text,
       'createdAt': createdAt.toIso8601String(),
       'likeCount': likeCount,
+      'replyCount': replyCount,
       'isLiked': isLiked,
+      'parentId': parentId,
     };
   }
 }

@@ -53,16 +53,25 @@ class ApiResponse<T> {
 class ApiResponsePagination {
   final String? cursor;
   final bool hasMore;
+  final num? lastDistance;
+  final String? lastPostId;
+  final String? fallbackLevel;
 
   ApiResponsePagination({
     this.cursor,
     this.hasMore = false,
+    this.lastDistance,
+    this.lastPostId,
+    this.fallbackLevel,
   });
 
   factory ApiResponsePagination.fromJson(Map<String, dynamic> json) {
     return ApiResponsePagination(
       cursor: json['cursor'] as String?,
       hasMore: json['hasMore'] as bool? ?? false,
+      lastDistance: json['lastDistance'] != null ? (json['lastDistance'] as num) : null,
+      lastPostId: json['lastPostId'] as String?,
+      fallbackLevel: json['fallbackLevel'] as String?,
     );
   }
 }

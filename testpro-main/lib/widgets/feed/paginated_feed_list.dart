@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/post_service.dart';
 import '../../services/backend_service.dart';
 import '../../core/state/feed_controller.dart';
+import '../../core/state/feed_session.dart';
 import '../../models/post.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
@@ -28,9 +29,11 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
   final FeedController _feedController = FeedController();
   final Map<String, bool> _likedPostIds = {};
   
-  // Debounce scroll triggers to prevent rapid-fire requests
   Timer? _debounce;
+  Timer? _pollingTimer;
   StreamSubscription? _eventSubscription;
+  DateTime _feedLoadedAt = DateTime.now();
+  int _newPostsCount = 0;
 
   @override
   bool get wantKeepAlive => true;
@@ -41,6 +44,47 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     _loadMorePosts();
     _scrollController.addListener(_onScroll);
     _eventSubscription = PostService.events.listen(_handleFeedEvent);
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (_) => _checkForNewPosts());
+  }
+
+  Future<void> _checkForNewPosts() async {
+    if (widget.feedType != 'local') return;
+    final pos = await PostService.getCurrentPosition();
+    if (pos == null) return;
+
+    try {
+      final response = await BackendService.getNewPostsSince(
+        lat: pos.latitude,
+        lng: pos.longitude,
+        sinceTimestamp: _feedLoadedAt.millisecondsSinceEpoch,
+        maxDistance: _feedController.lastDistance > 0 ? _feedController.lastDistance : null,
+      );
+
+      if (response.success && response.data != null) {
+        final List<dynamic> rawPosts = response.data!;
+        if (rawPosts.isEmpty) return;
+
+        final newPosts = rawPosts.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+        
+        // Mark as seen in session
+        FeedSession.instance.markSeen(newPosts.map((p) => p.id).toList());
+        
+        if (mounted) {
+          setState(() {
+            _newPostsCount += newPosts.length;
+            _feedController.injectNewPosts(newPosts);
+            _feedLoadedAt = DateTime.now();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Silent polling error: $e');
+    }
   }
 
   void _handleFeedEvent(FeedEvent event) {
@@ -50,23 +94,17 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       case FeedEventType.postCreated:
         if (event.data is String) {
           _fetchAndPrependNewPost(event.data as String);
-        } else if (event.data is Post) {
-          final post = event.data as Post;
-          if (_shouldIncludePost(post)) {
-            _feedController.prependPost(post);
-          }
         }
         break;
       case FeedEventType.postDeleted:
         _feedController.deletePost(event.data);
         break;
-      case FeedEventType.eventMembershipChanged:
-        // Membership changes affect community/event surfaces, not feed list items directly.
-        break;
       case FeedEventType.postLiked:
         final data = event.data as Map<String, dynamic>;
         _likedPostIds[data['postId']] = data['isLiked'];
         _feedController.updatePostLike(data['postId'], data['isLiked'], data['likeCount']);
+        break;
+      default:
         break;
     }
   }
@@ -76,36 +114,17 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       final response = await BackendService.getPost(postId);
       if (response.success && response.data != null) {
         final post = Post.fromJson(response.data!);
-        // Only add if it matches this feed's criteria
-        if (_shouldIncludePost(post)) {
-          _feedController.prependPost(post);
-        }
+        _feedController.prependPost(post);
       }
     } catch (e) {
       debugPrint('Error fetching new post: $e');
-      // Fallback: refresh the feed
-      _loadMorePosts(refresh: true);
     }
   }
-  
-  bool _shouldIncludePost(Post post) {
-    // Check if post matches this feed's criteria
-    switch (widget.feedType) {
-      case 'local':
-        // RELAXED: Trust the backend's ring-expansion results (up to 40km).
-        // Strict city-name comparison was blocking nearby/adjacent city posts.
-        return true;
-      case 'global':
-        return true;
-      default:
-        return true;
-    }
-  }
-
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _pollingTimer?.cancel();
     _eventSubscription?.cancel();
     _scrollController.dispose();
     _feedController.dispose();
@@ -130,35 +149,47 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     if (_feedController.isLoading) return;
     if (!refresh && !_feedController.hasMore) return;
 
-    debugPrint('🚀 FEED API CALLED: ${widget.feedType}');
-    debugPrint('📍 FEED ARGS: city=${widget.userCity}, country=${widget.userCountry}');
-
     if (refresh) {
       _feedController.clear(notify: false);
       _likedPostIds.clear();
       _feedController.setLoading(true);
+      FeedSession.instance.reset(); // Clear session deduplication on manual refresh
     } else {
       _feedController.setLoading(true);
       _feedController.setError(null);
     }
+
+    final isLocal = widget.feedType == 'local';
 
     try {
       final response = await PostService.getPostsPaginated(
         feedType: widget.feedType,
         userCity: widget.userCity,
         userCountry: widget.userCountry,
-        afterId: _feedController.cursor,
+        // For global feed, use afterId. For local, use distance cursors.
+        afterId: isLocal ? null : _feedController.cursor,
+        lastDistance: isLocal ? _feedController.lastDistance : null,
+        lastPostId: isLocal ? _feedController.lastPostId : null,
+        watchedIds: FeedSession.instance.seenIdsParam,
         limit: 10,
       );
 
       final data = response.data;
-      final nextCursor = response.nextCursor;
+      // Update shared cross-feed session
+      FeedSession.instance.markSeen(data.map((p) => p.id).toList());
 
       if (mounted) {
         for (var p in data) {
           _likedPostIds[p.id] = p.isLiked;
         }
-        _feedController.appendPosts(data, refresh: refresh, nextCursor: nextCursor);
+        _feedController.appendPosts(
+          data, 
+          refresh: refresh, 
+          nextCursor: response.nextCursor,
+          newLastDistance: response.lastDistance,
+          newLastPostId: response.lastPostId,
+          fallbackLevel: response.fallbackLevel,
+        );
       }
     } catch (e) {
       debugPrint('Error loading posts: $e');
@@ -174,7 +205,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required by AutomaticKeepAliveClientMixin
+    super.build(context);
     
     return ListenableBuilder(
       listenable: _feedController,
@@ -185,7 +216,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         final hasMore = _feedController.hasMore;
 
         if (posts.isEmpty && isLoading) {
-          return _buildLoadingState();
+          return const Center(child: CircularProgressIndicator());
         }
         
         if (error != null && posts.isEmpty) {
@@ -196,48 +227,109 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
           return _buildEmptyState(widget.feedType);
         }
 
-        return RefreshIndicator(
-          onRefresh: _onRefresh,
-          color: const Color(0xFF6C5CE7),
-          child: ListView.builder(
-            controller: _scrollController,
-            padding: const EdgeInsets.only(top: 8, bottom: 80),
-            itemCount: posts.length + (hasMore || error != null ? 1 : 0),
-            itemBuilder: (context, index) {
-              if (index == posts.length) {
-                if (error != null) {
-                  return _buildRetryFooter();
-                }
-                return const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: CircularProgressIndicator(strokeWidth: 2),
+        return Stack(
+          children: [
+            RefreshIndicator(
+              onRefresh: _onRefresh,
+              color: const Color(0xFF6C5CE7),
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.only(top: 8, bottom: 80),
+                itemCount: posts.length + (hasMore || error != null ? 1 : 0) + (_feedController.isCycling ? 1 : 0),
+                itemBuilder: (context, index) {
+                  // Cycle Banner at position 0
+                  if (_feedController.isCycling && index == 0) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      color: Colors.blue.withOpacity(0.05),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.refresh, size: 16, color: Colors.blue),
+                          const SizedBox(width: 8),
+                          Text(
+                            'You\'ve seen all nearby posts — showing from the beginning',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blue.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  // Adjust index if cycling banner is shown
+                  final adjustedIndex = _feedController.isCycling ? index - 1 : index;
+
+                  if (adjustedIndex == posts.length) {
+                    if (error != null) {
+                      return _buildRetryFooter();
+                    }
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16.0),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  }
+                  
+                  // Defensive check
+                  if (adjustedIndex < 0 || adjustedIndex >= posts.length) {
+                    return const SizedBox.shrink();
+                  }
+                  
+                  final post = posts[adjustedIndex];
+                  if (post.isEvent || post.category.toLowerCase() == 'events') {
+                    return EventPostCard(post: post);
+                  }
+                  return NextdoorStylePostCard(
+                    post: post,
+                    initialIsLiked: _likedPostIds[post.id],
+                  );
+                },
+              ),
+            ),
+            if (_newPostsCount > 0)
+              Positioned(
+                top: 16,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: GestureDetector(
+                    onTap: () {
+                      _scrollController.animateTo(0,
+                          duration: const Duration(milliseconds: 500),
+                          curve: Curves.easeOut);
+                      setState(() => _newPostsCount = 0);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.2),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        '↑ $_newPostsCount new posts nearby',
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                    ),
                   ),
-                );
-              }
-              final post = posts[index];
-              // Hide archived/expired events
-              if ((post.isEvent || post.category.toLowerCase() == 'events') 
-                  && post.computedStatus == 'archived') {
-                return const SizedBox.shrink();
-              }
-              // Route events to EventPostCard
-              if (post.isEvent || post.category.toLowerCase() == 'events') {
-                return EventPostCard(post: post);
-              }
-              return NextdoorStylePostCard(
-                post: post,
-                initialIsLiked: _likedPostIds[post.id],
-              );
-            },
-          ),
+                ),
+              ),
+          ],
         );
       },
     );
-  }
-
-  void _loadMorePostsManual({bool refresh = false}) {
-    _loadMorePosts(refresh: refresh);
   }
 
   Widget _buildRetryFooter() {
@@ -255,127 +347,17 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
     );
   }
 
-  Widget _buildLoadingState() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: 5,
-      itemBuilder: (context, index) {
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _buildShimmer(40, 40, isCircle: true),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildShimmer(100, 12),
-                      const SizedBox(height: 4),
-                      _buildShimmer(60, 10),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              _buildShimmer(double.infinity, 12),
-              const SizedBox(height: 4),
-              _buildShimmer(double.infinity, 12),
-              const SizedBox(height: 4),
-              _buildShimmer(200, 12),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildShimmer(double width, double height, {bool isCircle = false}) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        color: Colors.grey.shade300,
-        borderRadius: isCircle ? null : BorderRadius.circular(8),
-        shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
-      ),
-    );
-  }
-
   Widget _buildErrorState(String error) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFFF6B9D), Color(0xFFFF7675)],
-              ),
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFFF6B9D).withValues(alpha: 0.3),
-                  blurRadius: 20,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: const Icon(Icons.error_outline, size: 48, color: Colors.white),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Oops! Something went wrong',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Please try again',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey,
-                ),
-          ),
-          const SizedBox(height: 24),
-          Container(
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF6C5CE7), Color(0xFF0984E3)],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF6C5CE7).withValues(alpha: 0.3),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => _loadMorePostsManual(refresh: true),
-                borderRadius: BorderRadius.circular(16),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                  child: Text(
-                    'Retry',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          const Icon(Icons.error_outline, size: 48, color: Colors.red),
+          const SizedBox(height: 16),
+          Text('Error: $error'),
+          ElevatedButton(
+            onPressed: () => _loadMorePosts(refresh: true),
+            child: const Text('Retry'),
           ),
         ],
       ),
@@ -383,102 +365,15 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
   }
 
   Widget _buildEmptyState(String feedType) {
-    String title;
-    String subtitle;
-    IconData icon;
-
-    switch (feedType) {
-      case 'local':
-        title = 'No local posts yet';
-        subtitle = 'Be the first to share in your area!';
-        icon = Icons.location_on;
-        break;
-      case 'global':
-        title = 'No global posts yet';
-        subtitle = 'Share your voice with the world!';
-        icon = Icons.public;
-        break;
-      default:
-        title = 'No posts yet';
-        subtitle = 'Be the first to post!';
-        icon = Icons.post_add;
-    }
-
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.all(32),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF6C5CE7), Color(0xFF0984E3)],
-              ),
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF6C5CE7).withValues(alpha: 0.3),
-                  blurRadius: 30,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Icon(icon, size: 64, color: Colors.white),
-          ),
-          const SizedBox(height: 32),
+          const Icon(Icons.post_add, size: 64, color: Colors.grey),
+          const SizedBox(height: 16),
           Text(
-            title,
-            style: Theme.of(context).textTheme.headlineSmall,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            subtitle,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey,
-                ),
-          ),
-          const SizedBox(height: 32),
-          Container(
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF00D2A0), Color(0xFF00CEC9)],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF00D2A0).withValues(alpha: 0.3),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () {
-                  // Navigate to create post
-                },
-                borderRadius: BorderRadius.circular(16),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.add, color: Colors.white),
-                      SizedBox(width: 8),
-                      Text(
-                        'Create Post',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+            'No $feedType posts available',
+            style: const TextStyle(fontSize: 18, color: Colors.grey),
           ),
         ],
       ),

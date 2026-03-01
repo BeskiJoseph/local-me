@@ -8,6 +8,7 @@ import 'firebase_options.dart';
 import 'services/notification_service.dart';
 import 'config/app_theme.dart';
 import 'core/session/user_session.dart';
+import 'services/socket_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +18,7 @@ void main() async {
   );
 
   await NotificationService.initialize();
+  SocketService.init();
 
   runApp(const MyApp());
 }

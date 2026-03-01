@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import '../config/app_theme.dart';
-import '../widgets/feed/recommended_feed_list.dart';
 import '../widgets/feed/paginated_feed_list.dart';
+import '../services/location_service.dart';
 
-/// Premium feed screen with Local, National, Global tabs
+/// Premium feed screen with Local and Global tabs
 class FeedScreen extends StatefulWidget {
   const FeedScreen({super.key});
 
@@ -14,10 +14,6 @@ class FeedScreen extends StatefulWidget {
 class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   int _currentTabIndex = 0;
-
-  // Use LocationService for dynamic location names
-  String? get _userCity => LocationService.currentCity;
-  String? get _userCountry => LocationService.currentCountry;
 
   @override
   void initState() {
@@ -71,12 +67,12 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
           ),
         ],
       ),
-      // IndexedStack keeps all tabs alive — no rebuild, no re-fetch on tab switch
+      // IndexedStack keeps both tabs alive
       body: IndexedStack(
         index: _currentTabIndex,
         children: [
-          PaginatedFeedList(feedType: 'local', userCity: _userCity, userCountry: _userCountry),
-          const RecommendedFeedList(),
+          const PaginatedFeedList(feedType: 'local'),
+          const PaginatedFeedList(feedType: 'global'),
         ],
       ),
     );

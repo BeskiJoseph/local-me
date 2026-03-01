@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/post.dart';
 import '../models/paginated_response.dart';
 import '../repositories/post_repository.dart';
+import '../services/location_service.dart';
 
 enum FeedEventType { postCreated, postDeleted, postLiked, userFollowed, eventMembershipChanged }
 
@@ -22,7 +23,6 @@ class PostService {
   static void emit(FeedEvent event) {
     if (kDebugMode) debugPrint('📡 PostService emitting event: ${event.type}');
     _eventController.add(event);
-    if (kDebugMode) debugPrint('📡 Event added to stream controller');
   }
 
   static PostRepository get repository => _repository;
@@ -58,9 +58,7 @@ class PostService {
       mediaType: mediaType,
       thumbnailUrl: thumbnailUrl,
     );
-    if (kDebugMode) debugPrint('🔥 Post created with ID: $result');
     emit(FeedEvent(FeedEventType.postCreated, result));
-    if (kDebugMode) debugPrint('📧 FeedEvent emitted for post creation');
     return result;
   }
 
@@ -69,15 +67,14 @@ class PostService {
     emit(FeedEvent(FeedEventType.postDeleted, postId));
   }
 
-  static Stream<List<Post>> postsByScope(String scope) {
-    return _repository.postsByScope(scope);
-  }
-
   static Future<PaginatedResponse<Post>> getPostsPaginated({
     required String feedType,
     String? userCity,
     String? userCountry,
     String? afterId,
+    double? lastDistance,
+    String? lastPostId,
+    String? watchedIds,
     int limit = 10,
   }) {
     return _repository.getPostsPaginated(
@@ -85,19 +82,10 @@ class PostService {
       userCity: userCity,
       userCountry: userCountry,
       afterId: afterId,
+      lastDistance: lastDistance,
+      lastPostId: lastPostId,
+      watchedIds: watchedIds,
       limit: limit,
-    );
-  }
-
-  static Stream<List<Post>> postsForFeed({
-    required String feedType,
-    String? userCity,
-    String? userCountry,
-  }) {
-    return _repository.postsForFeed(
-      feedType: feedType,
-      userCity: userCity,
-      userCountry: userCountry,
     );
   }
 
@@ -105,8 +93,11 @@ class PostService {
     return _repository.postsByAuthor(authorId);
   }
 
-  // --- Event Related Methods ---
+  static Stream<List<Post>> postsByScope(String scope) {
+    return _repository.postsByScope(scope);
+  }
 
+  // --- Event Related Methods ---
   static Stream<int> eventAttendeesCountStream(String eventId) {
     return _repository.eventAttendeesCountStream(eventId);
   }
@@ -148,8 +139,13 @@ class PostService {
     emit(FeedEvent(FeedEventType.postCreated, createdEventId));
     return createdEventId;
   }
+
   static Stream<bool> isAttendingEventStream(String eventId, String userId) {
     return _repository.isAttendingEventStream(eventId, userId);
   }
-}
 
+  // Adding Location proxy for PaginatedFeedList since it expects it
+  static Future<dynamic> getCurrentPosition() async {
+    return LocationService.currentPosition;
+  }
+}

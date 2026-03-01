@@ -19,7 +19,6 @@ class BackendService {
 
   // --- Static Proxies ---
   static Future<ApiResponse<bool>> toggleLike(String postId) => _instance.toggleLike(postId);
-  static Future<ApiResponse<String>> addComment(String postId, String text) => _instance.addComment(postId, text);
   static Future<ApiResponse<bool>> toggleFollow(String targetUserId) => _instance.toggleFollow(targetUserId);
   static Future<ApiResponse<bool>> toggleEventJoin(String eventId) => _instance.toggleEventJoin(eventId);
   static Future<ApiResponse<String>> createPost(Map<String, dynamic> data) => _instance.createPost(data);
@@ -38,9 +37,12 @@ class BackendService {
     String? country,
     double? lat,
     double? lng,
-    String? feedType, // 'local' or 'global'
+    String? feedType,
     int limit = 20,
     String? afterId,
+    double? lastDistance,
+    String? lastPostId,
+    String? watchedIds,
   }) => _instance.getPosts(
     authorId: authorId,
     category: category,
@@ -51,8 +53,17 @@ class BackendService {
     feedType: feedType,
     limit: limit,
     afterId: afterId,
+    lastDistance: lastDistance,
+    lastPostId: lastPostId,
+    watchedIds: watchedIds,
   );
-  static Future<ApiResponse<List<dynamic>>> getComments(String postId) => _instance.getComments(postId);
+  static Future<ApiResponse<List<dynamic>>> getComments(String postId, {String? afterId, int limit = 20, String sort = 'newest'}) => 
+      _instance.getComments(postId, afterId: afterId, limit: limit, sort: sort);
+  static Future<ApiResponse<List<dynamic>>> getReplies(String commentId, {String? afterId, int limit = 10}) => 
+      _instance.getReplies(commentId, afterId: afterId, limit: limit);
+  static Future<ApiResponse<bool>> toggleCommentLike(String commentId) => _instance.toggleCommentLike(commentId);
+  static Future<ApiResponse<Map<String, dynamic>>> addComment(String postId, String text, {String? parentId}) => 
+      _instance.addComment(postId, text, parentId: parentId);
   static Future<ApiResponse<List<dynamic>>> search({required String query, String type = 'posts', int limit = 20}) => 
       _instance.search(query: query, type: type, limit: limit);
   static Future<ApiResponse<List<dynamic>>> getNotifications() => _instance.getNotifications();
@@ -67,7 +78,18 @@ class BackendService {
   static Future<ApiResponse<bool>> muteUser(String userId) => _instance.muteUser(userId);
   static Future<ApiResponse<bool>> unmuteUser(String userId) => _instance.unmuteUser(userId);
   static Future<ApiResponse<bool>> reportPost(String postId, String reason) => _instance.reportPost(postId, reason);
-
+  static Future<ApiResponse<List<dynamic>>> getNewPostsSince({
+    required double lat,
+    required double lng,
+    required int sinceTimestamp,
+    double? maxDistance,
+  }) => _instance.getNewPostsSince(
+    lat: lat,
+    lng: lng,
+    sinceTimestamp: sinceTimestamp,
+    maxDistance: maxDistance,
+  );
+  
   // --- Session Management ---
   static Future<void> syncCustomTokens() => BackendClient.syncCustomTokens();
   static void clearSession() => BackendClient.clearSession();
@@ -322,14 +344,28 @@ class BackendClient {
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
-  Future<ApiResponse<String>> addComment(String postId, String text) async {
+  Future<ApiResponse<Map<String, dynamic>>> addComment(String postId, String text, {String? parentId}) async {
     try {
       final resp = await _sendRequest((token) async => await _client.post(
         Uri.parse('$_baseUrl/api/interactions/comment'),
         headers: await _getHeaders(token),
-        body: jsonEncode({'postId': postId, 'text': text}),
+        body: jsonEncode({
+          'postId': postId,
+          'text': text,
+          if (parentId != null) 'parentId': parentId,
+        }),
       ));
-      return _processResponse(resp, (d) => d['commentId'] as String);
+      return _processResponse(resp, (d) => d as Map<String, dynamic>);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> toggleCommentLike(String commentId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/interactions/comments/$commentId/like'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (_) => true);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
@@ -388,14 +424,17 @@ class BackendClient {
 
   Future<ApiResponse<List<dynamic>>> getPosts({
     String? authorId,
-    String? category, 
-    String? city, 
+    String? category,
+    String? city,
     String? country,
-    double? lat, 
+    double? lat,
     double? lng,
     String? feedType, // 'local' or 'global'
-    int limit = 20, 
-    String? afterId
+    int limit = 20,
+    String? afterId,
+    double? lastDistance,
+    String? lastPostId,
+    String? watchedIds,
   }) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/posts').replace(queryParameters: {
@@ -407,6 +446,9 @@ class BackendClient {
         if (lng != null) 'lng': lng.toString(),
         if (feedType != null) 'feedType': feedType,
         if (afterId != null) 'afterId': afterId,
+        if (lastDistance != null) 'lastDistance': lastDistance.toString(),
+        if (lastPostId != null) 'lastPostId': lastPostId,
+        if (watchedIds != null) 'watchedIds': watchedIds,
         'limit': limit.toString(),
       });
       final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));
@@ -414,12 +456,25 @@ class BackendClient {
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
-  Future<ApiResponse<List<dynamic>>> getComments(String postId) async {
+  Future<ApiResponse<List<dynamic>>> getComments(String postId, {String? afterId, int limit = 20, String sort = 'newest'}) async {
     try {
-      final resp = await _sendRequest((token) async => await _client.get(
-        Uri.parse('$_baseUrl/api/interactions/comments/$postId'),
-        headers: await _getHeaders(token),
-      ));
+      final uri = Uri.parse('$_baseUrl/api/interactions/comments/$postId').replace(queryParameters: {
+        'limit': limit.toString(),
+        if (afterId != null) 'afterId': afterId,
+        'sort': sort,
+      });
+      final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));
+      return _processResponse(resp, (d) => d as List<dynamic>);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<List<dynamic>>> getReplies(String commentId, {String? afterId, int limit = 10}) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/interactions/comments/$commentId/replies').replace(queryParameters: {
+        'limit': limit.toString(),
+        if (afterId != null) 'afterId': afterId,
+      });
+      final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));
       return _processResponse(resp, (d) => d as List<dynamic>);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
@@ -550,6 +605,27 @@ class BackendClient {
         body: jsonEncode({'reason': reason}),
       ));
       return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<List<dynamic>>> getNewPostsSince({
+    required double lat,
+    required double lng,
+    required int sinceTimestamp,
+    double? maxDistance,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/posts/new-since').replace(queryParameters: {
+        'lat': lat.toString(),
+        'lng': lng.toString(),
+        'sinceTimestamp': sinceTimestamp.toString(),
+        if (maxDistance != null) 'maxDistance': maxDistance.toString(),
+      });
+      final resp = await _sendRequest((token) async => await _client.get(
+        uri,
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (d) => d as List<dynamic>);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 }

@@ -7,6 +7,7 @@ import '../../models/paginated_response.dart';
 import '../../config/app_theme.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
+import '../../core/state/feed_session.dart';
 
 /// Feed list — owns its ScrollController, caches the stream,
 /// and uses AutomaticKeepAliveClientMixin to preserve scroll position.
@@ -160,8 +161,13 @@ class _HomeFeedListState extends State<HomeFeedList>
         feedType: widget.feedType,
         userCity: widget.userCity,
         userCountry: widget.userCountry,
+        watchedIds: FeedSession.instance.seenIdsParam,
         limit: 20, // Initial load limit
-      );
+      ).then((response) {
+        // Track seen posts for cross-feed deduplication
+        FeedSession.instance.markSeen(response.data.map((p) => p.id).toList());
+        return response;
+      });
     } else {
       debugPrint('📥 Using existing future for: ${widget.feedType}');
     }
@@ -172,6 +178,7 @@ class _HomeFeedListState extends State<HomeFeedList>
   void refreshFeed() {
     debugPrint('🔄 Refreshing feed: $_cacheKey');
     _postsCache.remove(_cacheKey); // Clear cache
+    FeedSession.instance.reset(); // Clear session deduplication on manual refresh
     setState(() {
       _feedFuture = null;
       // Don't clear temporary posts here - they should persist until real post arrives
@@ -221,10 +228,8 @@ class _HomeFeedListState extends State<HomeFeedList>
       );
     }
 
+    // Global feed doesn't need location for trending algorithm
     if (widget.feedType == 'local' && widget.userCity == null) {
-      return const Center(child: Text('Waiting for location...'));
-    }
-    if (widget.feedType == 'global' && widget.userCountry == null) {
       return const Center(child: Text('Waiting for location...'));
     }
 

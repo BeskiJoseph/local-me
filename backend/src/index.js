@@ -1,10 +1,21 @@
 import app from './app.js';
 import config from './config/env.js';
 import logger from './utils/logger.js';
+import http from 'http';
+import { initSocket } from './services/socketService.js';
+import { geoIndex } from './services/geoIndex.js';
 
-const server = app.listen(config.port, '0.0.0.0', () => {
+const httpServer = http.createServer(app);
+const io = initSocket(httpServer);
+
+const server = httpServer.listen(config.port, '0.0.0.0', () => {
     logger.info(`🚀 Server running on port ${config.port}`);
     logger.info(`🌐 Environment: ${config.nodeEnv}`);
+
+    // Build Geo Index on startup
+    geoIndex.build();
+    // Rebuild every 10 mins to catch missed updates
+    setInterval(() => geoIndex.build(), 10 * 60 * 1000);
 });
 
 /**

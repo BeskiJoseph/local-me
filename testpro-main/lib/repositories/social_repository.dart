@@ -1,6 +1,8 @@
+import 'dart:async';
 import '../models/post.dart';
 import '../models/user_profile.dart';
 import '../services/backend_service.dart';
+import '../services/post_service.dart';
 
 /// Repository for handling Social Interactions (Likes, Follows).
 class SocialRepository {
@@ -16,8 +18,14 @@ class SocialRepository {
   /// Consider caching the result in the widget layer.
   Stream<bool> isPostLikedStream(String postId, String userId) async* {
     final response = await BackendService.checkLikeState(postId);
-    if (response.success) {
-      yield response.data!['liked'] == true;
+    bool current = response.success && response.data!['liked'] == true;
+    yield current;
+    
+    await for (final event in PostService.events) {
+      if (event.type == FeedEventType.postLiked && event.data['postId'] == postId) {
+        current = event.data['isLiked'];
+        yield current;
+      }
     }
   }
   
@@ -40,8 +48,14 @@ class SocialRepository {
   /// Consider caching the result in the widget layer.
   Stream<bool> isUserFollowedStream(String userId, String targetUserId) async* {
     final response = await BackendService.checkFollowState(targetUserId);
-    if (response.success) {
-      yield response.data!;
+    bool current = response.success && response.data! == true;
+    yield current;
+    
+    await for (final event in PostService.events) {
+      if (event.type == FeedEventType.userFollowed && event.data['userId'] == targetUserId) {
+        current = event.data['isFollowing'];
+        yield current;
+      }
     }
   }
   

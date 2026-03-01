@@ -31,6 +31,7 @@ class Post {
   final double? distance; // Distance from user in km
   final double? trendingScore; // For global feed trending sort
   final int viewCount; // View count for posts
+  final bool isFollowing; // Whether current user follows author
 
   Post({
     required this.id,
@@ -63,6 +64,7 @@ class Post {
     this.distance,
     this.trendingScore,
     this.viewCount = 0,
+    this.isFollowing = false,
   });
 
   factory Post.fromJson(Map<String, dynamic> json) {
@@ -112,6 +114,7 @@ class Post {
       distance: (json['distance'] as num?)?.toDouble(),
       trendingScore: (json['trendingScore'] as num?)?.toDouble(),
       viewCount: json['viewCount'] as int? ?? 0,
+      isFollowing: json['isFollowing'] ?? false,
     );
   }
 
@@ -148,6 +151,75 @@ class Post {
       'attendeeCount': attendeeCount,
       'isLiked': isLiked,
       'viewCount': viewCount,
+      'isFollowing': isFollowing,
     };
+  }
+
+  Post copyWith({
+    String? id,
+    String? authorId,
+    String? authorName,
+    String? title,
+    String? body,
+    String? authorProfileImage,
+    String? scope,
+    String? mediaUrl,
+    String? mediaType,
+    DateTime? createdAt,
+    int? likeCount,
+    int? commentCount,
+    double? latitude,
+    double? longitude,
+    String? city,
+    String? country,
+    String? category,
+    String? thumbnailUrl,
+    bool? isEvent,
+    DateTime? eventStartDate,
+    DateTime? eventEndDate,
+    String? eventType,
+    String? computedStatus,
+    String? eventLocation,
+    bool? isFree,
+    int? attendeeCount,
+    bool? isLiked,
+    double? distance,
+    double? trendingScore,
+    int? viewCount,
+    bool? isFollowing,
+  }) {
+    return Post(
+      id: id ?? this.id,
+      authorId: authorId ?? this.authorId,
+      authorName: authorName ?? this.authorName,
+      title: title ?? this.title,
+      body: body ?? this.body,
+      authorProfileImage: authorProfileImage ?? this.authorProfileImage,
+      scope: scope ?? this.scope,
+      mediaUrl: mediaUrl ?? this.mediaUrl,
+      mediaType: mediaType ?? this.mediaType,
+      createdAt: createdAt ?? this.createdAt,
+      likeCount: likeCount ?? this.likeCount,
+      commentCount: commentCount ?? this.commentCount,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      city: city ?? this.city,
+      country: country ?? this.country,
+      category: category ?? this.category,
+      thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
+      isEvent: isEvent ?? this.isEvent,
+      eventStartDate: eventStartDate ?? this.eventStartDate,
+      eventEndDate: eventEndDate ?? this.eventEndDate,
+      eventType: eventType ?? this.eventType,
+      computedStatus: computedStatus ?? this.computedStatus,
+      eventLocation: eventLocation ?? this.eventLocation,
+      isFree: isFree ?? this.isFree,
+      attendeeCount: attendeeCount ?? this.attendeeCount,
+      isLiked: isLiked ?? this.isLiked,
+      distance: distance ?? this.distance,
+      trendingScore: trendingScore ?? this.trendingScore,
+      viewCount: viewCount ?? this.viewCount,
+      isFollowing: isFollowing ?? this.isFollowing,
+    );
   }
 }

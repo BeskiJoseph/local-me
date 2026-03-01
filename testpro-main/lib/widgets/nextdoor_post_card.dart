@@ -14,6 +14,8 @@ import '../core/utils/time_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
 import '../core/utils/navigation_utils.dart';
+import '../core/utils/haptic_service.dart';
+import '../shared/widgets/heart_pop_overlay.dart';
 import 'comments_bottom_sheet.dart';
 import 'package:intl/intl.dart';
 import 'dart:async';
@@ -45,12 +47,37 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
   bool _isTogglingLike = false;
+  StreamSubscription? _eventSub;
+  final List<Key> _activeHearts = [];
 
   @override
   void initState() {
     super.initState();
     _likeCount = widget.post.likeCount;
     _isLiked = widget.initialIsLiked ?? widget.post.isLiked;
+    
+    // Sync with global post events
+    _eventSub = PostService.events.listen((event) {
+      if (!mounted) return;
+      if (event.type == FeedEventType.postLiked) {
+        final data = event.data as Map<String, dynamic>;
+        if (data['postId'] == widget.post.id) {
+          setState(() {
+            _isLiked = data['isLiked'];
+            _likeCount = data['likeCount'];
+            // Reset optimistic states as they've been confirmed/synced
+            _optimisticLiked = null;
+            _optimisticLikeCount = null;
+          });
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _eventSub?.cancel();
+    super.dispose();
   }
 
 
@@ -64,6 +91,9 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     final currentLiked = _optimisticLiked ?? _isLiked;
     final newTarget = !currentLiked;
     final currentCount = _optimisticLikeCount ?? _likeCount;
+
+    // Feedback
+    if (newTarget) HapticService.medium();
 
     setState(() {
       _optimisticLiked = newTarget;
@@ -259,7 +289,22 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
           // ── Media ────────────────────────────────────────────
           // Show media section for posts with URLs or temporary posts
           if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
-            _PostMedia(post: post),
+            _PostMedia(
+              post: post, 
+              activeHearts: _activeHearts,
+              onDoubleTap: () {
+                // If not already liked, like it
+                if (!(_optimisticLiked ?? _isLiked)) {
+                  _handleLike();
+                }
+                // Always show heart pop
+                final heartKey = UniqueKey();
+                setState(() => _activeHearts.add(heartKey));
+                Future.delayed(const Duration(milliseconds: 800), () {
+                  if (mounted) setState(() => _activeHearts.remove(heartKey));
+                });
+              },
+            ),
             const SizedBox(height: 6),
           ],
 
@@ -326,7 +371,7 @@ class _PostHeaderState extends State<_PostHeader> {
   @override
   void initState() {
     super.initState();
-    _checkInitialFollowState();
+    _isFollowing = widget.post.isFollowing;
     _subscription = PostService.events.listen((event) {
       if (event.type == FeedEventType.userFollowed) {
         final data = event.data as Map<String, dynamic>;
@@ -343,15 +388,6 @@ class _PostHeaderState extends State<_PostHeader> {
     super.dispose();
   }
 
-  Future<void> _checkInitialFollowState() async {
-    if (widget.user == null || widget.post.authorId == widget.user.uid) return;
-    try {
-      final res = await BackendService.checkFollowState(widget.post.authorId);
-      if (res.success && mounted) {
-        setState(() => _isFollowing = res.data ?? false);
-      }
-    } catch (_) {}
-  }
 
   Future<void> _toggleFollow() async {
     if (_isBusy) return;
@@ -699,16 +735,22 @@ class _CategoryChip extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _PostMedia extends StatelessWidget {
   final Post post;
-  const _PostMedia({required this.post});
+  final List<Key> activeHearts;
+  final VoidCallback onDoubleTap;
+
+  const _PostMedia({
+    required this.post, 
+    required this.activeHearts,
+    required this.onDoubleTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final isVideo = post.mediaType == 'video';
-    // Instagram-style: 4:5 for images (compact), 9:16 for videos (vertical)
     final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
     
-    // For temporary posts without media URL, show loading state
     if (post.mediaUrl == null && post.id.startsWith('temp_')) {
+      // ... (rest of loading state remains same)
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: AspectRatio(
@@ -745,6 +787,7 @@ class _PostMedia extends StatelessWidget {
     }
     
     return GestureDetector(
+      onDoubleTap: onDoubleTap,
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => PostDetailScreen(post: post)),
@@ -778,6 +821,9 @@ class _PostMedia extends StatelessWidget {
                         color: Color(0xFF8A8A8A)),
                   ),
                 ),
+                // Dynamic Heart Pops
+                ...activeHearts.map((key) => HeartPopOverlay(key: key)),
+                
                 // Video play badge
                 if (post.mediaType == 'video')
                   Positioned(

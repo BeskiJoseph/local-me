@@ -29,6 +29,7 @@ dependencies:
   cloud_firestore: ^6.1.2
   geocoding: ^4.0.0
   http: ^1.6.0
+  socket_io_client: ^2.0.2
   cloud_functions: ^6.0.6
   timeago: ^3.7.0
   firebase_messaging: ^16.1.1

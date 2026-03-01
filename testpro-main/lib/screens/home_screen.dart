@@ -12,7 +12,7 @@ import 'activity_screen.dart';
 import 'personal_account.dart';
 import 'community_screen.dart';
 import 'post_type_selector_sheet.dart';
-import '../widgets/home/home_feed_list.dart';
+import '../widgets/feed/paginated_feed_list.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
 import '../core/session/user_session.dart';
@@ -209,25 +209,35 @@ class _HomeScreenState extends State<HomeScreen> {
           child: IndexedStack(
             index: _feedToggleIndex,
             children: [
-              HomeFeedList(
-                key: ValueKey('nearby_$_feedRevision'),
-                feedType: 'local',
-                userCity: _currentCity,
-                userCountry: _currentCountry,
-                isLoadingLocation: _isLoadingLocation,
-                locationError: _locationError,
-                onRetryLocation: _detectLocation,
-                searchQuery: '',
-              ),
-              HomeFeedList(
+              _isLoadingLocation
+                  ? const Center(child: CircularProgressIndicator(color: AppTheme.primary))
+                  : _locationError != null
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.location_off, size: 48, color: Colors.orange),
+                              const SizedBox(height: 16),
+                              Text(_locationError!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),
+                              ElevatedButton.icon(
+                                onPressed: _detectLocation,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry Location'),
+                              )
+                            ],
+                          ),
+                        )
+                      : PaginatedFeedList(
+                          key: ValueKey('nearby_$_feedRevision'),
+                          feedType: 'local',
+                          userCity: _currentCity,
+                          userCountry: _currentCountry,
+                        ),
+              PaginatedFeedList(
                 key: ValueKey('global_$_feedRevision'),
                 feedType: 'global',
-                userCity: _currentCity,
-                userCountry: _currentCountry,
-                isLoadingLocation: _isLoadingLocation,
-                locationError: _locationError,
-                onRetryLocation: _detectLocation,
-                searchQuery: '',
+                userCity: null,
+                userCountry: null,
               ),
             ],
           ),

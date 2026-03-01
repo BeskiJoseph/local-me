@@ -7,6 +7,9 @@ import { body, validationResult } from 'express-validator';
 import { cleanPayload } from '../utils/sanitizer.js';
 import { enforceLikeVelocity, enforceFollowVelocity } from '../middleware/interactionVelocity.js';
 import { buildDisplayName } from '../utils/userDisplayName.js';
+import { updateUserContextCache, invalidateFeedCache, getUserContext } from './posts.js';
+import { broadcastLikeUpdate } from '../services/socketService.js';
+import { filterContent } from '../utils/contentFilter.js';
 
 const router = express.Router();
 
@@ -44,6 +47,7 @@ router.post(
         const postRef = db.collection('posts').doc(postId);
 
         let notificationPayload = null;
+        let wasLiked = false;
         try {
             await db.runTransaction(async (transaction) => {
                 const [likeDoc, postDoc] = await Promise.all([
@@ -83,6 +87,13 @@ router.post(
                         };
                     }
                 }
+                wasLiked = likeDoc.exists;
+                // Calculate new count for real-time broadcast
+                const currentCount = postDoc.data().likeCount || 0;
+                const newCount = Math.max(0, currentCount + (wasLiked ? -1 : 1));
+
+                // Broadcast to other users via WebSocket (Batched 2s)
+                broadcastLikeUpdate(postId, newCount, userId);
             });
 
             // Trigger notification outside transaction for speed
@@ -90,6 +101,12 @@ router.post(
                 _sendNotificationInternal(notificationPayload)
                     .catch(err => logger.error('Like Notification Error', { err: err.message }));
             }
+
+            // Optimistically update the feed context for this user
+            updateUserContextCache(userId, postId, wasLiked ? 'unlike' : 'like');
+
+            // Invalidate the feed cache so everyone sees the updated count on refresh
+            invalidateFeedCache();
 
             // Log Audit Action after successful transaction
             // Log Audit Action in background (Async)
@@ -123,8 +140,16 @@ router.post(
         body('text').notEmpty(),
     ],
     async (req, res) => {
-        const cleanBody = cleanPayload(req.body, ['postId', 'text']);
-        const { postId, text } = cleanBody;
+        const cleanBody = cleanPayload(req.body, ['postId', 'text', 'parentId']);
+        const { postId, text, parentId } = cleanBody;
+
+        // 1. YouTube-style Spam Filter
+        if (!filterContent(text)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Your comment was flagged by our spam filter.'
+            });
+        }
         const userId = req.user.uid;
         const actorDisplayName = resolveActorDisplayName(req);
         const postRef = db.collection('posts').doc(postId);
@@ -136,15 +161,27 @@ router.post(
                 const postDoc = await transaction.get(postRef);
                 if (!postDoc.exists) throw new Error('Post not found');
 
-                transaction.set(commentRef, {
+                const commentData = {
                     postId,
                     userId,
-                    authorId: userId, // Immutable: Enforced to be the request user
+                    authorId: userId,
                     authorName: actorDisplayName,
                     authorProfileImage: req.user.photoURL,
-                    text,
-                    createdAt: admin.firestore.FieldValue.serverTimestamp()
-                });
+                    text: text.substring(0, 1000), // Max length
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    likeCount: 0,
+                    replyCount: 0,
+                    parentId: parentId || null // Explicit null for indexing
+                };
+
+                if (parentId) {
+                    const parentRef = db.collection('comments').doc(parentId);
+                    transaction.update(parentRef, {
+                        replyCount: admin.firestore.FieldValue.increment(1)
+                    });
+                }
+
+                transaction.set(commentRef, commentData);
 
                 transaction.update(postRef, {
                     commentCount: admin.firestore.FieldValue.increment(1)
@@ -164,6 +201,7 @@ router.post(
                     };
                 }
             });
+
 
             // Trigger notification outside transaction
             if (notificationPayload) {
@@ -200,7 +238,18 @@ router.post(
 
             return res.json({
                 success: true,
-                data: { commentId: commentRef.id },
+                data: {
+                    id: commentRef.id,
+                    text: text.substring(0, 1000),
+                    authorId: userId,
+                    authorName: actorDisplayName,
+                    authorProfileImage: req.user.photoURL,
+                    createdAt: new Date().toISOString(),
+                    postId,
+                    likeCount: 0,
+                    replyCount: 0,
+                    isLiked: false
+                },
                 error: null
             });
         } catch (error) {
@@ -233,6 +282,7 @@ router.post(
         const currentUserRef = db.collection('users').doc(userId);
         const targetUserRef = db.collection('users').doc(targetUserId);
 
+        let wasFollowing = false;
         try {
             await db.runTransaction(async (transaction) => {
                 const [followDoc, targetUserDoc] = await Promise.all([
@@ -273,7 +323,11 @@ router.post(
                         type: 'follow'
                     }).catch(err => logger.error('Notification Error', { err: err.message }));
                 }
+                wasFollowing = followDoc.exists;
             });
+            // Optimistically update the context for this user so they see the switch instantly
+            updateUserContextCache(userId, targetUserId, wasFollowing ? 'unfollow' : 'follow');
+
             return res.json({
                 success: true,
                 data: { status: 'active' },
@@ -429,26 +483,126 @@ async function _processMentions(text, currentUserId) {
 
 /**
  * @route   GET /api/interactions/comments/:postId
- * @desc    Get comments for a post
+ * @desc    Get comments for a post (Cursor-based Pagination)
  */
 router.get('/comments/:postId', authenticate, async (req, res, next) => {
     try {
-        const snapshot = await db.collection('comments')
+        const { limit = 20, afterId, sort = 'newest' } = req.query;
+        const userId = req.user.uid;
+
+        let query = db.collection('comments')
             .where('postId', '==', req.params.postId)
-            .orderBy('createdAt', 'desc')
-            .get();
+            .where('parentId', '==', null); // Top-level only
+
+        // Sorting: 'top' (likes) or 'newest' (timestamp)
+        if (sort === 'top') {
+            query = query.orderBy('likeCount', 'desc').orderBy('createdAt', 'desc');
+        } else {
+            query = query.orderBy('createdAt', 'desc');
+        }
+
+        if (afterId) {
+            const lastDoc = await db.collection('comments').doc(afterId).get();
+            if (lastDoc.exists) {
+                query = query.startAfter(lastDoc);
+            }
+        }
+
+        const snapshot = await query.limit(parseInt(limit)).get();
+
+        // Batch check which comments the user has liked
+        const commentIds = snapshot.docs.map(doc => doc.id);
+        const likedSet = new Set();
+        if (commentIds.length > 0) {
+            const likesSnapshot = await db.collection('comment_likes')
+                .where('userId', '==', userId)
+                .where('commentId', 'in', commentIds.slice(0, 30))
+                .get();
+            likesSnapshot.docs.forEach(doc => likedSet.add(doc.data().commentId));
+        }
 
         const comments = snapshot.docs.map(doc => ({
             id: doc.id,
             ...doc.data(),
-            createdAt: doc.data().createdAt?.toDate()?.toISOString()
+            isLiked: likedSet.has(doc.id),
+            createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
         }));
 
         return res.json({
             success: true,
             data: comments,
-            error: null
+            pagination: {
+                cursor: comments.length === parseInt(limit) ? comments[comments.length - 1].id : null,
+                hasMore: comments.length === parseInt(limit)
+            }
         });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   GET /api/interactions/comments/:commentId/replies
+ * @desc    Load replies for a specific top-level comment
+ */
+router.get('/comments/:commentId/replies', authenticate, async (req, res, next) => {
+    try {
+        const { limit = 10, afterId } = req.query;
+        let query = db.collection('comments')
+            .where('parentId', '==', req.params.commentId)
+            .orderBy('createdAt', 'asc');
+
+        if (afterId) {
+            const lastDoc = await db.collection('comments').doc(afterId).get();
+            if (lastDoc.exists) query = query.startAfter(lastDoc);
+        }
+
+        const snapshot = await query.limit(parseInt(limit)).get();
+        const replies = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+        }));
+
+        return res.json({
+            success: true,
+            data: replies,
+            pagination: {
+                cursor: replies.length === parseInt(limit) ? replies[replies.length - 1].id : null,
+                hasMore: replies.length === parseInt(limit)
+            }
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * @route   POST /api/interactions/comments/:commentId/like
+ * @desc    Toggle like on a comment
+ */
+router.post('/comments/:commentId/like', authenticate, async (req, res, next) => {
+    try {
+        const userId = req.user.uid;
+        const commentId = req.params.commentId;
+        const likeRef = db.collection('comment_likes').doc(`${commentId}_${userId}`);
+        const commentRef = db.collection('comments').doc(commentId);
+
+        let isLiked = false;
+        await db.runTransaction(async (transaction) => {
+            const likeDoc = await transaction.get(likeRef);
+            if (likeDoc.exists) {
+                transaction.delete(likeRef);
+                transaction.update(commentRef, { likeCount: admin.firestore.FieldValue.increment(-1) });
+                isLiked = false;
+            } else {
+                transaction.set(likeRef, { userId, commentId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+                transaction.update(commentRef, { likeCount: admin.firestore.FieldValue.increment(1) });
+                isLiked = true;
+            }
+        });
+
+        return res.json({ success: true, data: { isLiked } });
     } catch (err) {
         next(err);
     }
@@ -513,16 +667,18 @@ router.get('/likes/check', authenticate, async (req, res, next) => {
         if (!postId) return res.status(400).json({ error: 'postId query param required' });
 
         const userId = req.user.uid;
-        const likeId = `${postId}_${userId}`;
-        const [likeDoc, postDoc] = await Promise.all([
-            db.collection('likes').doc(likeId).get(),
-            db.collection('posts').doc(postId).get()
-        ]);
+
+        // Use cached/optimistic 'isLiked' state from memory
+        const { likedPostIds } = await getUserContext(userId, [postId]);
+        const liked = likedPostIds.has(postId);
+
+        // Fetch fresh likeCount from DB
+        const postDoc = await db.collection('posts').doc(postId).get();
 
         return res.json({
             success: true,
             data: {
-                liked: likeDoc.exists,
+                liked: liked,
                 likeCount: postDoc.exists ? (postDoc.data().likeCount || 0) : 0
             },
             error: null
@@ -542,12 +698,13 @@ router.get('/follows/check', authenticate, async (req, res, next) => {
         if (!targetUserId) return res.status(400).json({ error: 'targetUserId query param required' });
 
         const userId = req.user.uid;
-        const followId = `${userId}_${targetUserId}`;
-        const followDoc = await db.collection('follows').doc(followId).get();
+
+        // Use cached/optimistic user context for follows too
+        const { followedUserIds } = await getUserContext(userId);
 
         return res.json({
             success: true,
-            data: { followed: followDoc.exists },
+            data: followedUserIds.has(targetUserId), // Response is just bool in BackendClient
             error: null
         });
     } catch (err) {

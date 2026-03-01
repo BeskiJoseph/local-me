@@ -5,8 +5,34 @@
             "queryScope": "COLLECTION",
             "fields": [
                 {
+                    "fieldPath": "parentId",
+                    "order": "ASCENDING"
+                },
+                {
                     "fieldPath": "postId",
                     "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "createdAt",
+                    "order": "DESCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "comments",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "parentId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "postId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "likeCount",
+                    "order": "DESCENDING"
                 },
                 {
                     "fieldPath": "createdAt",

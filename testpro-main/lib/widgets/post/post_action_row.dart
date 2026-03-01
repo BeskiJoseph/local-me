@@ -3,7 +3,10 @@ import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
+import '../../services/post_service.dart';
+import '../../core/utils/haptic_service.dart';
 import '../comments_bottom_sheet.dart';
+import 'dart:async';
 
 class PostActionRow extends StatefulWidget {
   final Post post;
@@ -29,27 +32,41 @@ class _PostActionRowState extends State<PostActionRow> {
   bool _isLikeBusy = false;
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
+  StreamSubscription? _eventSub;
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
     _liked = widget.post.isLiked;
     _likeCount = widget.post.likeCount;
+    
+    // Sync with global post events for real-time consistency
+    _eventSub = PostService.events.listen((event) {
+      if (!mounted) return;
+      if (event.type == FeedEventType.postLiked) {
+        final data = event.data as Map<String, dynamic>;
+        if (data['postId'] == widget.post.id) {
+          setState(() {
+            _liked = data['isLiked'];
+            _likeCount = data['likeCount'];
+            _optimisticLiked = null;
+            _optimisticLikeCount = null;
+            _isLikeBusy = false;
+          });
+        }
+      }
+    });
   }
 
   void _toggleLike(String userId, bool streamLiked, int streamCount) {
-    if (_isLikeBusy) return;
-    final bool currentOptimistic = _optimisticLiked ?? streamLiked;
+    final bool currentOptimistic = _optimisticLiked ?? _liked;
     final bool newTarget = !currentOptimistic;
 
-    final int newCount;
-    if (newTarget == streamLiked) {
-      newCount = streamCount;
-    } else if (newTarget) {
-      newCount = streamCount + 1;
-    } else {
-      newCount = streamCount > 0 ? streamCount - 1 : 0;
-    }
+    final int newCount = _likeCount + (newTarget ? 1 : -1);
+
+    // Instagram-level feedback
+    if (newTarget) HapticService.medium();
 
     setState(() {
       _isLikeBusy = true;
@@ -57,43 +74,67 @@ class _PostActionRowState extends State<PostActionRow> {
       _optimisticLikeCount = newCount;
     });
 
-    final toggleFuture = widget.onLikeToggle != null
-        ? widget.onLikeToggle!(widget.post.id)
-        : BackendService.toggleLike(widget.post.id);
+    // YouTube-style Debounce (300ms)
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () async {
+      try {
+        final toggleFuture = widget.onLikeToggle != null
+            ? widget.onLikeToggle!(widget.post.id)
+            : BackendService.toggleLike(widget.post.id);
 
-    toggleFuture.then((response) {
-      final bool success = response is bool ? response : (response as dynamic).success;
-      if (!mounted) return;
-      if (success) {
-        setState(() {
-          _liked = newTarget;
-          _likeCount = _optimisticLikeCount ?? _likeCount;
-          _optimisticLiked = null;
-          _optimisticLikeCount = null;
-          _isLikeBusy = false;
-        });
-      } else {
-        setState(() {
-          _optimisticLiked = null;
-          _optimisticLikeCount = null;
-          _isLikeBusy = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Action failed. Check connection.")),
-        );
+        final response = await toggleFuture;
+        final bool success = response is bool ? response : (response as dynamic).success;
+
+        if (!mounted) return;
+
+        if (success) {
+          setState(() {
+            _liked = newTarget;
+            _likeCount = newCount;
+            _optimisticLiked = null;
+            _optimisticLikeCount = null;
+            _isLikeBusy = false;
+          });
+
+          // Emit global event to sync other widgets showing this post
+          PostService.emit(FeedEvent(FeedEventType.postLiked, {
+            'postId': widget.post.id,
+            'isLiked': _liked,
+            'likeCount': _likeCount,
+          }));
+        } else {
+          _rollback();
+          _showError("Action failed. Check connection.");
+        }
+      } catch (e) {
+        _rollback();
+        _showError("An error occurred.");
       }
-    }).catchError((_) {
-      if (!mounted) return;
-      setState(() {
-        _optimisticLiked = null;
-        _optimisticLikeCount = null;
-        _isLikeBusy = false;
-      });
     });
   }
 
+  void _rollback() {
+    if (!mounted) return;
+    setState(() {
+      _optimisticLiked = null;
+      _optimisticLikeCount = null;
+      _isLikeBusy = false;
+    });
+  }
+
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
+    );
+  }
+
   @override
-  void dispose() => super.dispose();
+  void dispose() {
+    _eventSub?.cancel();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
