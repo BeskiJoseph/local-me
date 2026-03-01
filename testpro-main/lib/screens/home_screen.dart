@@ -39,6 +39,9 @@ class _HomeScreenState extends State<HomeScreen> {
   // Bottom nav: 0=Home, 1=Explore, 2=Create, 3=Groups, 4=Me
   int _bottomNavIndex = 0;
 
+  final Set<int> _visitedNavIndexes = {0};
+  final Set<int> _visitedFeedIndexes = {0};
+
   // Incrementing forces HomeFeedList recreation → fresh feed fetch
   int _feedRevision = 0;
 
@@ -176,7 +179,10 @@ class _HomeScreenState extends State<HomeScreen> {
       });
       return;
     }
-    setState(() => _bottomNavIndex = index);
+    setState(() {
+      _bottomNavIndex = index;
+      _visitedNavIndexes.add(index);
+    });
   }
 
   void _refreshFeeds() {
@@ -198,7 +204,10 @@ class _HomeScreenState extends State<HomeScreen> {
         // ── AppBar ─────────────────────────────────────────
         _HomeAppBar(
           feedToggleIndex: _feedToggleIndex,
-          onToggleChanged: (i) => setState(() => _feedToggleIndex = i),
+          onToggleChanged: (i) => setState(() {
+            _feedToggleIndex = i;
+            _visitedFeedIndexes.add(i);
+          }),
           onNotificationTap: () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const ActivityScreen()),
@@ -233,12 +242,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           userCity: _currentCity,
                           userCountry: _currentCountry,
                         ),
-              PaginatedFeedList(
-                key: ValueKey('global_$_feedRevision'),
-                feedType: 'global',
-                userCity: null,
-                userCountry: null,
-              ),
+              _visitedFeedIndexes.contains(1)
+                  ? PaginatedFeedList(
+                      key: ValueKey('global_$_feedRevision'),
+                      feedType: 'global',
+                      userCity: null,
+                      userCountry: null,
+                    )
+                  : const SizedBox.shrink(),
             ],
           ),
         ),
@@ -255,11 +266,11 @@ class _HomeScreenState extends State<HomeScreen> {
         child: IndexedStack(
           index: _bottomNavIndex,
           children: [
-            _buildHomeTab(),           // Index 0: Home
-            const SearchScreen(),      // Index 1: Explore
+            _visitedNavIndexes.contains(0) ? _buildHomeTab() : const SizedBox.shrink(),           // Index 0: Home
+            _visitedNavIndexes.contains(1) ? const SearchScreen() : const SizedBox.shrink(),      // Index 1: Explore
             const SizedBox.shrink(),   // Index 2: Placeholder for Create (modal)
-            CommunityScreen(),         // Index 3: Groups
-            PersonalAccount(),         // Index 4: Me
+            _visitedNavIndexes.contains(3) ? CommunityScreen() : const SizedBox.shrink(),         // Index 3: Groups
+            _visitedNavIndexes.contains(4) ? PersonalAccount() : const SizedBox.shrink(),         // Index 4: Me
           ],
         ),
       ),

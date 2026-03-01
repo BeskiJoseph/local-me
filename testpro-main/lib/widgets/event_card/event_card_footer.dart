@@ -48,12 +48,8 @@ class _EventCardFooterState extends State<EventCardFooter> {
 
   void _initStreams() {
     final user = AuthService.currentUser;
-    _isLikedStream = user != null
-        ? SocialService.isPostLikedStream(widget.post.id, user.uid)
-        : Stream.value(false);
-    _isAttendingStream = user != null
-        ? PostService.isAttendingEventStream(widget.post.id, user.uid)
-        : Stream.value(false);
+    _isLikedStream = Stream.value(widget.post.isLiked);
+    _isAttendingStream = Stream.value(false);
   }
 
   void _navigateToUserProfile() {

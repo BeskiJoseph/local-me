@@ -629,6 +629,7 @@ router.post('/', authenticate, async (req, res, next) => {
 //    limit             — page size
 // ============================================================
 router.get('/', authenticate, async (req, res, next) => {
+    console.time('🔵 TOTAL feed request');
     try {
         const {
             authorId, category, city, lat, lng, country,
@@ -652,17 +653,20 @@ router.get('/', authenticate, async (req, res, next) => {
                 ? new Set(watchedIds.split(',').filter(Boolean))
                 : new Set();
 
-            const responseData = await fetchLocalFeedWithCursor(
-                lat, lng,
-                distanceCursor,
-                postIdCursor,
-                watchedSet,
-                pageSize
-            );
+            console.time('🟡 fetchGeoRings & getUserContext');
+            const [responseData, userContext] = await Promise.all([
+                fetchLocalFeedWithCursor(
+                    lat, lng,
+                    distanceCursor,
+                    postIdCursor,
+                    watchedSet,
+                    pageSize
+                ),
+                getUserContext(uid)
+            ]);
+            console.timeEnd('🟡 fetchGeoRings & getUserContext');
 
-            // Apply user context (likes, muted users)
-            const userContext = await getUserContext(uid);
-
+            console.time('🟡 embedLikeState');
             let finalPosts = (responseData.data || []).filter(
                 post => !userContext.mutedUserIds.has(post.authorId)
             );
@@ -676,7 +680,9 @@ router.get('/', authenticate, async (req, res, next) => {
                     likeCount: (post.likeCount || 0) + delta
                 };
             });
+            console.timeEnd('🟡 embedLikeState');
 
+            console.timeEnd('🔵 TOTAL feed request');
             return res.json({
                 ...responseData,
                 data: finalPosts
@@ -820,7 +826,12 @@ router.get('/', authenticate, async (req, res, next) => {
         }
 
         // ── Handle pagination for global trending (offset by afterId) ──
-        let resolvedData = await responseDataPromise;
+        console.time('🟡 fetchGeoRings & getUserContext');
+        let [resolvedData, userContext] = await Promise.all([
+            responseDataPromise,
+            getUserContext(uid)
+        ]);
+        console.timeEnd('🟡 fetchGeoRings & getUserContext');
 
         if (!isFilteredQuery && afterId && resolvedData._allPosts) {
             const allPosts = resolvedData._allPosts;
@@ -839,8 +850,7 @@ router.get('/', authenticate, async (req, res, next) => {
             };
         }
 
-        const userContext = await getUserContext(uid);
-
+        console.time('🟡 embedLikeState');
         let finalPosts = (resolvedData.data || []).filter(
             post => !userContext.mutedUserIds.has(post.authorId)
         );
@@ -854,7 +864,9 @@ router.get('/', authenticate, async (req, res, next) => {
                 likeCount: (post.likeCount || 0) + delta
             };
         });
+        console.timeEnd('🟡 embedLikeState');
 
+        console.timeEnd('🔵 TOTAL feed request');
         return res.json({
             success: resolvedData.success,
             data: finalPosts,
@@ -862,7 +874,10 @@ router.get('/', authenticate, async (req, res, next) => {
             error: null
         });
 
-    } catch (err) { return next(err); }
+    } catch (err) {
+        console.timeEnd('🔵 TOTAL feed request');
+        return next(err);
+    }
 });
 
 // ============================================================

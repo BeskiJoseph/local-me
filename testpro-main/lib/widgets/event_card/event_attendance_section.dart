@@ -47,11 +47,8 @@ class _EventAttendanceSectionState extends State<EventAttendanceSection> {
   void _initStreams() {
     final userId = widget.currentUserId ?? AuthService.currentUser?.uid;
     _attendeesCountResolvedStream =
-        widget.attendeesCountStream ?? PostService.eventAttendeesCountStream(widget.post.id);
-    _isAttendingResolvedStream = widget.isAttendingStream ??
-        (userId != null
-            ? PostService.isAttendingEventStream(widget.post.id, userId)
-            : Stream.value(false));
+        widget.attendeesCountStream ?? Stream.value(widget.post.attendeeCount);
+    _isAttendingResolvedStream = widget.isAttendingStream ?? Stream.value(false);
   }
 
   @override

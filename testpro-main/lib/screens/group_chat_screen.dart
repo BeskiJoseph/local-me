@@ -147,7 +147,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             child: StreamBuilder<List<ChatMessage>>(
               stream: _messagesStream,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting && _pendingMessages.isEmpty) {
+                if (snapshot.connectionState == ConnectionState.waiting && 
+                    _pendingMessages.isEmpty && 
+                    snapshot.data == null) {
                   return const Center(child: CircularProgressIndicator());
                 }
 

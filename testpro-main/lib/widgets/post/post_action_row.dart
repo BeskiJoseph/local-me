@@ -140,10 +140,7 @@ class _PostActionRowState extends State<PostActionRow> {
   Widget build(BuildContext context) {
     // Dependency Injection: Use provided props or fallback to global services
     final userId = widget.currentUserId ?? AuthService.currentUser?.uid;
-    final stream = widget.isLikedStream ??
-        (userId != null
-            ? SocialService.isPostLikedStream(widget.post.id, userId)
-            : Stream.value(widget.post.isLiked));
+    final stream = widget.isLikedStream ?? Stream.value(widget.post.isLiked);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
