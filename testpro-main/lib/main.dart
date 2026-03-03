@@ -15,70 +15,63 @@ import 'core/session/user_session.dart';
 import 'services/socket_service.dart';
 import 'core/state/feed_session.dart';
 
-void main() async {
+void main() {
   // ──────────────────────────────────────────────
-  // 1. Framework & Firebase Core (Must be first)
-  //    These MUST succeed before anything else.
-  //    If they fail, the app cannot start — no zone needed.
-  // ──────────────────────────────────────────────
-  WidgetsFlutterBinding.ensureInitialized();
-
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  // ──────────────────────────────────────────────
-  // 2. Crashlytics Error Routing
-  //    Three layers of crash capture:
-  //    Layer 1: FlutterError.onError    → Widget build errors
-  //    Layer 2: PlatformDispatcher      → Platform channel + native errors
-  //    Layer 3: runZonedGuarded         → Uncaught async errors
-  // ──────────────────────────────────────────────
-
-  // LAYER 1: Flutter framework errors (build, layout, paint)
-  if (!kDebugMode) {
-    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
-  } else {
-    FlutterError.onError = (FlutterErrorDetails details) {
-      FlutterError.presentError(details);
-      debugPrint('🔴 Flutter Error: ${details.exceptionAsString()}');
-    };
-  }
-
-  // LAYER 2: Platform channel and isolate errors
-  // This catches errors that bypass FlutterError entirely:
-  //   - Native plugin crashes
-  //   - Platform channel failures
-  //   - Isolate-level unhandled exceptions
-  PlatformDispatcher.instance.onError = (error, stack) {
-    if (kDebugMode) {
-      debugPrint('🚨 Platform Error: $error');
-      debugPrint('📍 Stack: $stack');
-    } else {
-      FirebaseCrashlytics.instance.recordError(
-        error,
-        stack,
-        fatal: true,
-        reason: 'PlatformDispatcher.onError',
-      );
-    }
-    return true; // Prevents the error from propagating to the framework
-  };
-
-  // ──────────────────────────────────────────────
-  // 3. Guarded App Entry (LAYER 3)
-  //    Everything from here runs inside a crash zone.
-  //    Service init + runApp are both guarded.
+  // LAYER 3: runZonedGuarded wraps EVERYTHING.
+  //   ensureInitialized + Firebase.initializeApp + runApp
+  //   must all be in the SAME ZONE to avoid zone mismatch.
   // ──────────────────────────────────────────────
   runZonedGuarded(
     () async {
-      // Lightweight service init (safe to run before widget tree)
+      // 1. Framework & Firebase Core (Must be first, same zone as runApp)
+      WidgetsFlutterBinding.ensureInitialized();
+
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+
+      // ────────────────────────────────────────────
+      // 2. Crashlytics Error Routing (set up after Firebase init)
+      //    Layer 1: FlutterError.onError    → Widget build errors
+      //    Layer 2: PlatformDispatcher      → Platform channel + native errors
+      //    Layer 3: runZonedGuarded (this zone) → Uncaught async errors
+      // ────────────────────────────────────────────
+
+      // LAYER 1: Flutter framework errors (build, layout, paint)
+      if (!kDebugMode) {
+        FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+      } else {
+        FlutterError.onError = (FlutterErrorDetails details) {
+          FlutterError.presentError(details);
+          debugPrint('🔴 Flutter Error: ${details.exceptionAsString()}');
+        };
+      }
+
+      // LAYER 2: Platform channel and isolate errors
+      PlatformDispatcher.instance.onError = (error, stack) {
+        if (kDebugMode) {
+          debugPrint('🚨 Platform Error: $error');
+          debugPrint('📍 Stack: $stack');
+        } else {
+          FirebaseCrashlytics.instance.recordError(
+            error,
+            stack,
+            fatal: true,
+            reason: 'PlatformDispatcher.onError',
+          );
+        }
+        return true;
+      };
+
+      // 3. Lightweight service init (safe to run before widget tree)
       await NotificationService.initialize();
       SocketService.init();
 
+      // 4. Launch app (same zone as ensureInitialized — no mismatch)
       runApp(const MyApp());
     },
     (error, stackTrace) {
+      // LAYER 3: Uncaught async errors
       if (kDebugMode) {
         debugPrint('🚨 Uncaught Async Error: $error');
         debugPrint('📍 Stack: $stackTrace');
