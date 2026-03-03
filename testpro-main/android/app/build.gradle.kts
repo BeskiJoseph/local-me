@@ -4,6 +4,7 @@ plugins {
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 android {
@@ -36,8 +37,18 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Code shrinking & obfuscation (R8)
+            // - Strips unused classes/methods → smaller APK
+            // - Obfuscates names → harder to reverse-engineer
+            // - Removes unused resources → smaller bundle
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+
+            // TODO: Replace with your own signing config for Play Store
             signingConfig = signingConfigs.getByName("debug")
         }
     }

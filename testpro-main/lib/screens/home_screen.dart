@@ -17,6 +17,7 @@ import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
 import '../core/session/user_session.dart';
 import 'package:testpro/services/backend_service.dart';
+import '../utils/safe_error.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -156,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() {
           _isLoadingLocation = false;
-          _locationError = 'Error: ${e.toString()}';
+          _locationError = safeErrorMessage(e, fallback: 'Could not detect your location.');
         });
       }
     }

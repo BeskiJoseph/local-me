@@ -10,7 +10,7 @@ class GeocodingService {
     try {
       final uri = Uri.parse('$_baseUrl?latitude=$lat&longitude=$lng&localityLanguage=en');
       
-      final response = await http.get(uri);
+      final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -30,7 +30,7 @@ class GeocodingService {
         };
       }
     } catch (e) {
-      debugPrint('Geocoding Error: $e');
+      if (kDebugMode) debugPrint('Geocoding Error: $e');
     }
     return {'city': null, 'country': null, 'full_location': null};
   }

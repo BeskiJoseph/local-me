@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../widgets/primary_button.dart';
 import '../../models/signup_data.dart';
 import '../../services/auth_service.dart';
+import '../../utils/safe_error.dart';
 import '../../services/media_upload_service.dart';
 import '../../services/user_service.dart';
 import '../../core/session/user_session.dart';
@@ -165,7 +166,7 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text('Error: ${e.toString()}')),
+           SnackBar(content: Text(safeErrorMessage(e, fallback: 'Account creation failed. Please try again.'))),
         );
       }
     } finally {

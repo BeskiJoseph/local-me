@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../utils/safe_error.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
@@ -93,7 +94,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
     } catch (e) {
        if (mounted) {
         setState(() {
-          _statusMessage = "Error: ${e.toString()}";
+          _statusMessage = safeErrorMessage(e, fallback: 'Failed to send verification email.');
           canResendEmail = true;
         });
       }

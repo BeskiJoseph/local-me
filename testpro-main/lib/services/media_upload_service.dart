@@ -48,6 +48,12 @@ class MediaUploadService {
     return _cachedBaseUrl!;
   }
 
+  // ──────────────────────────────────────────────
+  // Upload Size Limits
+  // ──────────────────────────────────────────────
+  static const int _maxImageBytes = 10 * 1024 * 1024;  // 10 MB
+  static const int _maxVideoBytes = 50 * 1024 * 1024;  // 50 MB
+
   static Future<String?> _upload({
     required Uint8List data,
     required String fileExtension,
@@ -56,6 +62,16 @@ class MediaUploadService {
     Map<String, String>? extraFields,
     bool isRetry = false,
   }) async {
+    // 0. Validate file size BEFORE network call
+    final maxBytes = mediaType == 'video' ? _maxVideoBytes : _maxImageBytes;
+    if (data.length > maxBytes) {
+      final sizeMB = (data.length / (1024 * 1024)).toStringAsFixed(1);
+      final limitMB = (maxBytes / (1024 * 1024)).toStringAsFixed(0);
+      throw Exception(
+        '${mediaType == 'video' ? 'Video' : 'Image'} is too large ($sizeMB MB). Maximum allowed: $limitMB MB.',
+      );
+    }
+
     // 1. Get current best token (Custom Access Token or Firebase ID Token fallback)
     final token = await BackendClient.getBestToken(forceRefresh: isRetry);
     if (token == null) {

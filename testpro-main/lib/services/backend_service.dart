@@ -144,12 +144,15 @@ class BackendClient {
   static String? _customAccessToken;
   static String? _customRefreshToken;
   static Future<void>? _syncFuture;
+  static Future<bool>? _refreshFuture; // Single-flight mutex for token refresh
   static bool _customSessionUnsupported = false;
+  static bool _sessionCleared = false; // Prevents ghost session restoration after logout
 
   /// Exchanges a Firebase ID Token for a custom Access/Refresh Token pair.
   /// Deduplicated to prevent concurrent sync calls.
   static Future<void> syncCustomTokens() async {
     if (_customSessionUnsupported) return;
+    _sessionCleared = false; // Fresh login resets the logout guard
 
     // If a sync is already in progress, return the existing future
     if (_syncFuture != null) return _syncFuture;
@@ -265,31 +268,63 @@ class BackendClient {
   }
 
   static void clearSession() {
+    _sessionCleared = true; // Signal in-flight refresh to abort
     _customAccessToken = null;
     _customRefreshToken = null;
     _syncFuture = null;
+    _refreshFuture = null;
     _customSessionUnsupported = false;
     debugPrint('🛡️ Custom session tokens cleared');
   }
 
+  /// Single-flight token refresh.
+  /// If 3 requests hit 401 simultaneously, only ONE refresh call is made.
+  /// All 3 callers await the same Future<bool>.
   Future<bool> _refreshCustomToken() async {
     if (_customRefreshToken == null) return false;
+
+    // If a refresh is already in-flight, piggyback on it
+    if (_refreshFuture != null) return _refreshFuture!;
+
+    _refreshFuture = _performRefresh();
+    try {
+      return await _refreshFuture!;
+    } finally {
+      _refreshFuture = null;
+    }
+  }
+
+  Future<bool> _performRefresh() async {
     try {
       final response = await http.post(
         Uri.parse('${MediaUploadService.baseUrl}/api/auth/refresh'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'refreshToken': _customRefreshToken}),
-      );
+      ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
+        // CRITICAL: If user logged out while this HTTP call was in-flight,
+        // do NOT write new tokens. That would resurrect a dead session.
+        if (_sessionCleared) {
+          debugPrint('⚠️ Refresh succeeded but session was cleared during flight. Discarding tokens.');
+          return false;
+        }
         final body = jsonDecode(response.body);
         _customAccessToken = body['data']['accessToken'];
         _customRefreshToken = body['data']['refreshToken'];
         debugPrint('🛡️ Custom session rotated successfully');
         return true;
       }
+
+      // Refresh token itself is invalid/expired → force full re-auth
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        debugPrint('🚨 Refresh token rejected by server. Clearing session.');
+        _customAccessToken = null;
+        _customRefreshToken = null;
+      }
       return false;
     } catch (e) {
+      debugPrint('🚨 Token refresh network error: $e');
       return false;
     }
   }
@@ -555,7 +590,7 @@ class BackendClient {
   Future<ApiResponse<bool>> checkUsername(String username) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/profiles/check-username').replace(queryParameters: {'username': username});
-      final resp = await _client.get(uri, headers: {'Content-Type': 'application/json'});
+      final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));
       return _processResponse(resp, (d) => d['available'] == true);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }

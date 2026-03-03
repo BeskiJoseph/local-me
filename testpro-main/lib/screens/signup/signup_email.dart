@@ -6,6 +6,7 @@ import '../../widgets/primary_button.dart';
 import 'signup_username.dart';
 import '../../services/otp_service.dart';
 import 'signup_otp.dart';
+import '../../utils/safe_error.dart';
 
 class SignupEmailScreen extends StatefulWidget {
   final SignupData data;
@@ -58,7 +59,7 @@ class _SignupEmailScreenState extends State<SignupEmailScreen> {
                   );
                 } catch (e) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(e.toString().replaceAll("Exception: ", ""))),
+                    SnackBar(content: Text(safeErrorMessage(e, fallback: 'Failed to send code. Please try again.'))),
                   );
                 } finally {
                   if (context.mounted) {

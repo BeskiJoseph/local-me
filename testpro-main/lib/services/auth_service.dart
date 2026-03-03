@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../core/state/feed_session.dart';
 import '../core/session/user_session.dart';
 import 'backend_service.dart';
+import 'socket_service.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -61,9 +62,6 @@ class AuthService {
       GoogleSignInAccount? googleUser;
       
       if (kIsWeb) {
-        // For web, suppress the deprecation warning
-        // The warning is about using signIn() on web, but it still works
-        // A future migration to google_identity_services with renderButton is recommended
         try {
           googleUser = await _googleSignIn.signInSilently();
         } catch (e) {
@@ -73,7 +71,6 @@ class AuthService {
           try {
             googleUser = await _googleSignIn.signIn();
           } catch (e) {
-            // popup_closed is expected when user cancels
             if (e.toString().contains('popup_closed')) {
               return null;
             }
@@ -81,7 +78,6 @@ class AuthService {
           }
         }
       } else {
-        // For mobile, use regular sign-in
         googleUser = await _googleSignIn.signIn();
       }
       
@@ -105,22 +101,32 @@ class AuthService {
     }
   }
 
-  // Sign out
+  // ──────────────────────────────────────────────
+  // SIGN OUT — Full Session Teardown
+  // Order matters:
+  //   1. Kill real-time connections (socket)
+  //   2. Clear in-memory session state
+  //   3. Sign out of identity providers
+  // ──────────────────────────────────────────────
   static Future<void> signOut() async {
     try {
-      // Clear security and feed session state BEFORE signing out
-      // This prevents the next user from inheriting "watchedIds" or stale JWTs
+      // 1. Disconnect real-time socket (prevents ghost events after logout)
+      SocketService.dispose();
+
+      // 2. Clear all in-memory session state
       UserSession.clear();
       BackendClient.clearSession();
       FeedSession.instance.reset();
 
+      // 3. Sign out of identity providers
       await _googleSignIn.signOut();
       await _auth.signOut();
+
+      if (kDebugMode) debugPrint('✅ Full logout complete');
     } catch (e) {
       if (kDebugMode) {
         debugPrint('Error during sign out: $e');
       }
-      // Rethrow to allow UI to handle the error
       rethrow;
     }
   }
@@ -142,7 +148,6 @@ class AuthService {
     try {
       await _auth.currentUser?.updateDisplayName(displayName);
       await _auth.currentUser?.updatePhotoURL(photoURL);
-      // Enterprise Polish: Ensure local currentUser object is reloaded with new metadata
       await _auth.currentUser?.reload();
     } on FirebaseAuthException catch (e) {
       if (kDebugMode) {
@@ -151,6 +156,7 @@ class AuthService {
       rethrow;
     }
   }
+
   // Reload user
   static Future<void> reloadUser() async {
     try {

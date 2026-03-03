@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/signup_data.dart';
 import '../../widgets/primary_button.dart';
 import '../../services/otp_service.dart';
+import '../../utils/safe_error.dart';
 import 'signup_password.dart';
 
 class SignupOtpScreen extends StatefulWidget {
@@ -111,7 +112,7 @@ class _SignupOtpScreenState extends State<SignupOtpScreen> {
                   );
                 } catch (e) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(e.toString().replaceAll("Exception: ", ""))),
+                    SnackBar(content: Text(safeErrorMessage(e, fallback: 'Verification failed. Please try again.'))),
                   );
                 } finally {
                   if (context.mounted) {
@@ -139,7 +140,7 @@ class _SignupOtpScreenState extends State<SignupOtpScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString())),
+          const SnackBar(content: Text('Failed to resend code. Please try again.')),
         );
       }
     }

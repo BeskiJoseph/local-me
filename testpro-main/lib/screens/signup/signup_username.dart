@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/signup_data.dart';
 import '../../services/backend_service.dart';
+import '../../utils/safe_error.dart';
 import 'signup_dob.dart';
 
 class SignupUsernameScreen extends StatefulWidget {
@@ -109,7 +110,7 @@ class _SignupUsernameScreenState extends State<SignupUsernameScreen> {
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Verification failed: ${e.toString()}')),
+        SnackBar(content: Text(safeErrorMessage(e, fallback: 'Username check failed. Please try again.'))),
       );
     } finally {
       if (mounted) {

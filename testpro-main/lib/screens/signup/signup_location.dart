@@ -5,6 +5,7 @@ import 'signup_profile.dart';
 
 import 'package:geolocator/geolocator.dart';
 import '../../services/geocoding_service.dart';
+import '../../utils/safe_error.dart';
 
 class SignupLocationScreen extends StatefulWidget {
   final SignupData data;
@@ -63,7 +64,7 @@ class _SignupLocationScreenState extends State<SignupLocationScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
+          SnackBar(content: Text(safeErrorMessage(e, fallback: 'Could not detect location.'))),
         );
       }
     } finally {
