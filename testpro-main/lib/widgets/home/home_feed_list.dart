@@ -8,6 +8,8 @@ import '../../config/app_theme.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
 import '../../core/state/feed_session.dart';
+import 'package:flutter/foundation.dart';
+import '../../utils/safe_error.dart';
 
 /// Feed list — owns its ScrollController, caches the stream,
 /// and uses AutomaticKeepAliveClientMixin to preserve scroll position.
@@ -290,7 +292,7 @@ class _HomeFeedListState extends State<HomeFeedList>
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('Error: ${snapshot.error}',
+              child: Text(safeErrorMessage(snapshot.error, fallback: 'Failed to load feed.'),
                   style: const TextStyle(color: Colors.red)),
             ),
           );
@@ -320,12 +322,14 @@ class _HomeFeedListState extends State<HomeFeedList>
 
         // Apply optimistic deletion filter (tombstones)
         allPosts.removeWhere((p) => _deletedPostIds.contains(p.id));
-        debugPrint('📊 Building feed display:');
-        debugPrint('📊  - Temp posts: ${_tempPosts.length}');
-        debugPrint('📊  - Real posts: ${posts.length}');
-        debugPrint('📊  - Total posts: ${allPosts.length}');
-        if (_tempPosts.isNotEmpty) {
-          debugPrint('📊  - Temp post IDs: ${_tempPosts.map((p) => p.id).toList()}');
+        if (kDebugMode) {
+          debugPrint('📊 Building feed display:');
+          debugPrint('📊  - Temp posts: ${_tempPosts.length}');
+          debugPrint('📊  - Real posts: ${posts.length}');
+          debugPrint('📊  - Total posts: ${allPosts.length}');
+          if (_tempPosts.isNotEmpty) {
+            debugPrint('📊  - Temp post IDs: ${_tempPosts.map((p) => p.id).toList()}');
+          }
         }
         
         final filteredPosts = widget.searchQuery.isEmpty

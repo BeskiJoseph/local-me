@@ -7,6 +7,7 @@ import '../../core/state/feed_session.dart';
 import '../../models/post.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
+import '../../utils/safe_error.dart';
 
 class PaginatedFeedList extends StatefulWidget {
   final String feedType;
@@ -354,7 +355,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         children: [
           const Icon(Icons.error_outline, size: 48, color: Colors.red),
           const SizedBox(height: 16),
-          Text('Error: $error'),
+          Text(safeErrorMessage(error, fallback: 'Failed to load posts.')),
           ElevatedButton(
             onPressed: () => _loadMorePosts(refresh: true),
             child: const Text('Retry'),

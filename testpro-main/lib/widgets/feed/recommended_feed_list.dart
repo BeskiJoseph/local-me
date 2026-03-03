@@ -7,6 +7,7 @@ import '../../services/auth_service.dart';
 import '../../core/state/feed_controller.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
+import '../../utils/safe_error.dart';
 import '../../services/backend_service.dart';
 import '../../screens/interest_picker_screen.dart';
 
@@ -214,7 +215,7 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
         children: [
           const Icon(Icons.error_outline, size: 48, color: Colors.red),
           const SizedBox(height: 16),
-          Text('Error: $error'),
+          Text(safeErrorMessage(error, fallback: 'Failed to load recommendations.')),
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: () => _loadMorePosts(refresh: true),
