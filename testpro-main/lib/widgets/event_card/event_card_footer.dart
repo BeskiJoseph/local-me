@@ -23,6 +23,7 @@ class _EventCardFooterState extends State<EventCardFooter> {
   int _likeCount = 0;
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
+  bool _isTogglingLike = false;
   Stream<bool>? _isLikedStream;
   Stream<bool>? _isAttendingStream;
 
@@ -43,6 +44,15 @@ class _EventCardFooterState extends State<EventCardFooter> {
       _optimisticLiked = null;
       _optimisticLikeCount = null;
       _initStreams();
+    } else if (!_isTogglingLike && _optimisticLiked == null && _optimisticLikeCount == null) {
+      final newLiked = widget.post.isLiked;
+      final newCount = widget.post.likeCount;
+      if (newLiked != _isLiked || newCount != _likeCount) {
+        setState(() {
+          _isLiked = newLiked;
+          _likeCount = newCount;
+        });
+      }
     }
   }
 
@@ -166,7 +176,9 @@ class _EventCardFooterState extends State<EventCardFooter> {
                     count: displayLikeCount,
                     isActive: effectiveLiked,
                     onTap: () async {
+                      if (_isTogglingLike) return;
                       if (user != null) {
+                        _isTogglingLike = true;
                         final bool currentLiked = _optimisticLiked ?? _isLiked;
                         final bool newTarget = !currentLiked;
                         
@@ -181,6 +193,14 @@ class _EventCardFooterState extends State<EventCardFooter> {
                         try {
                           final response = await BackendService.toggleLike(widget.post.id);
                           if (!response.success) throw response.error ?? "Toggle failed";
+                          
+                          // Emit event to sync other widgets
+                          PostService.emit(FeedEvent(FeedEventType.postLiked, {
+                            'postId': widget.post.id,
+                            'isLiked': newTarget,
+                            'likeCount': _optimisticLikeCount ?? _likeCount,
+                          }));
+
                           if (mounted) {
                             setState(() {
                               _isLiked = newTarget;
@@ -195,6 +215,10 @@ class _EventCardFooterState extends State<EventCardFooter> {
                               _optimisticLiked = null;
                               _optimisticLikeCount = null;
                             });
+                          }
+                        } finally {
+                          if (mounted) {
+                            setState(() => _isTogglingLike = false);
                           }
                         }
                       }

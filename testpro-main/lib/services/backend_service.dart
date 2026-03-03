@@ -115,6 +115,24 @@ class BackendClient {
     return null;
   }
 
+  /// Returns the current best authentication token.
+  /// Prioritizes Custom JWT for performance/longevity, falls back to Firebase.
+  static Future<String?> getBestToken({bool forceRefresh = false}) async {
+    // 1. If force refresh is requested (e.g. after a 401 retry), clear custom tokens
+    if (forceRefresh) {
+        debugPrint('🛡️ Force refresh requested: Clearing custom session');
+        _customAccessToken = null;
+        _customRefreshToken = null;
+        return await AuthService.getIdToken(forceRefresh: true);
+    }
+
+    // 2. Return custom token if we have one (optimized/persisted)
+    if (_customAccessToken != null) return _customAccessToken;
+    
+    // 3. Fallback to Firebase ID Token
+    return await AuthService.getIdToken();
+  }
+
   Future<Map<String, String>> _getHeaders([String? token]) async {
     final effectiveToken = token ?? await getIdToken();
     return {
@@ -232,10 +250,16 @@ class BackendClient {
     // Sync should be orchestrated by the AuthState listener or an explicit login call.
 
     if (response.statusCode == 401 && !retried) {
+      debugPrint('🔄 Auth 401: Attempting Firebase token forced refresh...');
       final newToken = await AuthService.getIdToken(forceRefresh: true);
       if (newToken != null) {
+        debugPrint('✅ Firebase token refreshed, retrying request...');
         return await _sendRequest(requestFn, retried: true);
+      } else {
+        debugPrint('❌ Firebase token refresh failed: User signed out?');
       }
+    } else if (response.statusCode == 401 && retried) {
+      debugPrint('🚨 Auth 401 persists after retry. Backend is rejecting fresh token.');
     }
     return response;
   }

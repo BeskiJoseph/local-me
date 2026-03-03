@@ -7,6 +7,7 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'auth_service.dart';
+import 'backend_service.dart';
 
 /// Client-side wrapper for uploading media to your backend,
 /// which then talks to Cloudflare R2 securely.
@@ -30,31 +31,20 @@ class MediaUploadService {
     }
     
     // 1. Prioritize build-time configuration (Production & CI/CD)
-    const apiUrl = String.fromEnvironment('API_URL');
-    if (apiUrl.isNotEmpty) {
-      _cachedBaseUrl = apiUrl;
-      if (kDebugMode) debugPrint('✅ Using production API: $_cachedBaseUrl');
-      return _cachedBaseUrl!;
+    // 1. Resolve base URL from environment variable or default
+    const String defaultBaseUrl = 'http://10.211.157.94:4000'; // Physical device IP
+    String url = const String.fromEnvironment('API_URL', defaultValue: defaultBaseUrl);
+    
+    // 2. Automatic Android emulator loopback detection (ONLY if using localhost)
+    if (!kIsWeb && 
+        defaultTargetPlatform == TargetPlatform.android && 
+        url.contains('localhost')) {
+      url = 'http://10.0.2.2:4000';
+      if (kDebugMode) debugPrint('🤖 Android Emulator detected, using 10.0.2.2:4000');
     }
 
-    // 2. Resolve default URL
-    String defaultUrl = 'http://10.211.157.94:4000';
-    
-    // Warn in release mode if using localhost (production misconfiguration)
-    if (!kDebugMode) {
-      debugPrint('⚠️ WARNING: API_URL not set! Falling back to localhost. This will NOT work in production.');
-    }
-    
-    // Auto-detect Android emulator loopback (disabled for prod config)
-    // if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-    //   defaultUrl = 'http://10.0.2.2:4000';
-    // }
-    
-    if (kDebugMode) {
-       debugPrint('ℹ️ Using API URL: $defaultUrl');
-    }
-    
-    _cachedBaseUrl = defaultUrl;
+    _cachedBaseUrl = url;
+    if (kDebugMode) debugPrint('🔗 Backend URL: $_cachedBaseUrl');
     return _cachedBaseUrl!;
   }
 
@@ -66,14 +56,14 @@ class MediaUploadService {
     Map<String, String>? extraFields,
     bool isRetry = false,
   }) async {
-    // 1. Get token (Refresh only on 401 retry)
-    final idToken = await AuthService.getIdToken(forceRefresh: isRetry);
-    if (idToken == null) {
+    // 1. Get current best token (Custom Access Token or Firebase ID Token fallback)
+    final token = await BackendClient.getBestToken(forceRefresh: isRetry);
+    if (token == null) {
       throw StateError('User must be signed in to upload media.');
     }
     
-    if (kDebugMode && idToken.length > 10) {
-      debugPrint('🔑 Upload Token (first 10): ${idToken.substring(0, 10)}...');
+    if (kDebugMode && token.length > 20) {
+      debugPrint('🔑 Auth Token: ${token.substring(0, 10)}...${token.substring(token.length - 10)}');
     }
 
     final uri = Uri.parse('$baseUrl$path');
@@ -81,7 +71,7 @@ class MediaUploadService {
 
     // 2. Build Multipart Request
     final request = http.MultipartRequest('POST', uri)
-      ..headers['Authorization'] = 'Bearer $idToken'
+      ..headers['Authorization'] = 'Bearer $token'
       ..fields['mediaType'] = mediaType
       ..fields['fileExtension'] = fileExtension;
 

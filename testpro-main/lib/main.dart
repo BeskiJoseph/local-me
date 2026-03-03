@@ -9,6 +9,7 @@ import 'services/notification_service.dart';
 import 'config/app_theme.dart';
 import 'core/session/user_session.dart';
 import 'services/socket_service.dart';
+import 'core/state/feed_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,10 +50,12 @@ class MyApp extends StatelessWidget {
                 name: user.displayName,
                 avatar: user.photoURL,
               );
+              FeedSession.instance.reset(); // Clear exclusion list for new user
               return const HomeScreen();
             } else {
               // Ensure we dump cache on sign out
               UserSession.clear();
+              FeedSession.instance.reset(); // Clear exclusion list on logout
             }
           }
           return const WelcomeScreen();

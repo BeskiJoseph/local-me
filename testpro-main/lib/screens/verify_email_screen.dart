@@ -118,6 +118,8 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
             icon: const Icon(Icons.logout),
             onPressed: () async {
               timer?.cancel();
+              // Secure logout: Clear custom backend session before Firebase
+              BackendService.clearSession();
               await AuthService.signOut();
               if (mounted) {
                  Navigator.of(context).pushAndRemoveUntil(

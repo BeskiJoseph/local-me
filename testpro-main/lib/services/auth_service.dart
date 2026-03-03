@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter/foundation.dart';
+import '../core/state/feed_session.dart';
+import '../core/session/user_session.dart';
+import 'backend_service.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -105,6 +108,12 @@ class AuthService {
   // Sign out
   static Future<void> signOut() async {
     try {
+      // Clear security and feed session state BEFORE signing out
+      // This prevents the next user from inheriting "watchedIds" or stale JWTs
+      UserSession.clear();
+      BackendClient.clearSession();
+      FeedSession.instance.reset();
+
       await _googleSignIn.signOut();
       await _auth.signOut();
     } catch (e) {

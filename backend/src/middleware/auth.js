@@ -2,6 +2,7 @@ import { auth, db } from '../config/firebase.js';
 import logger from '../utils/logger.js';
 import jwt from 'jsonwebtoken';
 import { buildDisplayName } from '../utils/userDisplayName.js';
+import { getUserContext } from '../services/userContextService.js';
 
 // In-memory cache for user profiles to reduce Firestore overhead (30s TTL)
 const USER_CACHE = new Map();
@@ -29,10 +30,19 @@ const authenticate = async (req, res, next) => {
 
         const token = authHeader.split('Bearer ')[1];
 
+
+
+
+
+
+
         // 1. Try Custom JWT First (Short-lived Access Token)
         if (process.env.JWT_ACCESS_SECRET) {
             try {
                 const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+
+                // Warming the user context (mutes/likes/follows) in background
+                getUserContext(decoded.uid).catch(() => { });
 
                 // Fetch user from cache or DB (Optimized)
                 const cacheKey = `profile_${decoded.uid}`;
@@ -93,6 +103,9 @@ const authenticate = async (req, res, next) => {
             // Re-enabled revocation check (Architectural Fix)
             // Note: Requires "Service Account Token Creator" IAM role
             const decodedToken = await auth.verifyIdToken(token, true);
+
+            // Warm the cache for Firebase auth too
+            getUserContext(decodedToken.uid).catch(() => { });
 
             // Fetch user from cache or DB (Standard fallback)
             const cacheKey = `profile_${decodedToken.uid}`;

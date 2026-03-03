@@ -3,8 +3,8 @@ import { logSecurityEvent } from '../utils/logger.js';
 
 // Centralized Routing Policy Map
 export const POLICIES = {
-    auth: { max: 5, window: 10 * 60 * 1000 },
-    otp: { max: 5, window: 10 * 60 * 1000 },
+    auth: { max: 10, window: 2 * 60 * 1000 },
+    otp: { max: 10, window: 2 * 60 * 1000 },
     feed: { max: 120, window: 60 * 1000 },
     create_post: { max: 5, window: 60 * 1000 },
     like: { max: 40, window: 60 * 1000 },

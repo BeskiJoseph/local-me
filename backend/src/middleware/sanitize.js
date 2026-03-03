@@ -116,7 +116,7 @@ export const validateTokenExpiration = (req, res, next) => {
     if (authTime === 0) return next();
 
     const tokenAge = Date.now() / 1000 - authTime;
-    const maxAge = 24 * 3600; // 24 hours in seconds (Relaxed from 1h for better UX)
+    const maxAge = 30 * 24 * 3600; // 30 days in seconds (Matches Custom Refresh Token lifespan for continuity)
 
     if (tokenAge > maxAge) {
         logSecurityEvent('EXPIRED_TOKEN_USED', {

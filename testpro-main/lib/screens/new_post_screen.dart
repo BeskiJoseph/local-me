@@ -248,39 +248,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
 
     setState(() => _isSubmitting = true);
     
-    // Create temporary post for optimistic UI update
     final position = await Geolocator.getCurrentPosition();
-    final tempPostId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
-    
-    // Create temporary post object
-    final tempPost = Post(
-      id: tempPostId,
-      authorId: user.uid,
-      authorName: user.displayName ?? user.email?.split('@')[0] ?? 'User',
-      title: _contentController.text.trim(),
-      body: _contentController.text.trim(),
-      scope: 'local',
-      mediaUrl: null, // Will be updated after upload
-      mediaType: _mediaType,
-      createdAt: DateTime.now(),
-      likeCount: 0,
-      commentCount: 0,
-      latitude: position.latitude,
-      longitude: position.longitude,
-      city: _currentLocation,
-      country: null,
-      category: 'General',
-      thumbnailUrl: null,
-      authorProfileImage: user.photoURL,
-      isEvent: false,
-      attendeeCount: 0,
-      isLiked: false,
-      viewCount: 0,
-    );
-    
-    // Emit event to show temporary post immediately
-    if (kDebugMode) debugPrint('📤 Emitting temporary post event: ${tempPost.id}');
-    PostService.emit(FeedEvent(FeedEventType.postCreated, tempPost));
     
     try {
       final String postId = '${user.uid}_${DateTime.now().millisecondsSinceEpoch}';
@@ -305,37 +273,6 @@ class _NewPostScreenState extends State<NewPostScreen> {
         }
       }
 
-      // Update temp post with media URLs
-      final updatedTempPost = Post(
-        id: tempPostId,
-        authorId: user.uid,
-        authorName: user.displayName ?? user.email?.split('@')[0] ?? 'User',
-        title: _contentController.text.trim(),
-        body: _contentController.text.trim(),
-        scope: 'local',
-        mediaUrl: mediaUrl,
-        mediaType: _mediaType,
-        createdAt: DateTime.now(),
-        likeCount: 0,
-        commentCount: 0,
-        latitude: position.latitude,
-        longitude: position.longitude,
-        city: _currentLocation,
-        country: null,
-        category: 'General',
-        thumbnailUrl: thumbnailUrl,
-        authorProfileImage: user.photoURL,
-        isEvent: false,
-        attendeeCount: 0,
-        isLiked: false,
-        viewCount: 0,
-      );
-      
-      // Emit updated temp post with media URL
-      if (kDebugMode) debugPrint('📤 Emitting updated temporary post event with media: ${updatedTempPost.id}');
-      if (kDebugMode) debugPrint('📤 Media URL: ${updatedTempPost.mediaUrl}');
-      PostService.emit(FeedEvent(FeedEventType.postCreated, updatedTempPost));
-
       // 2. Create post via PostService (handles backend call + event emission)
       final createdPostId = await PostService.createPost(
         title: _contentController.text.trim(),
@@ -358,14 +295,10 @@ class _NewPostScreenState extends State<NewPostScreen> {
         Navigator.pop(context, true);
       } else {
         if (kDebugMode) debugPrint('❌ Post creation failed');
-        // Remove temp post on failure
-        PostService.emit(FeedEvent(FeedEventType.postDeleted, tempPostId));
         throw Exception('Failed to create post');
       }
     } catch (e) {
       if (kDebugMode) debugPrint('Submit error: $e');
-      // Remove temp post on error
-      PostService.emit(FeedEvent(FeedEventType.postDeleted, tempPostId));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),

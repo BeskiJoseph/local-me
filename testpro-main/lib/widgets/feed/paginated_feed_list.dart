@@ -27,7 +27,7 @@ class PaginatedFeedList extends StatefulWidget {
 class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final FeedController _feedController = FeedController();
-  final Map<String, bool> _likedPostIds = {};
+  final Map<String, bool?> _likedPostIds = {};
   
   Timer? _debounce;
   Timer? _pollingTimer;

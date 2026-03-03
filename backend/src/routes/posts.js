@@ -9,6 +9,13 @@ import ngeohash from 'ngeohash';
 import { cleanPayload } from '../utils/sanitizer.js';
 import { buildDisplayName } from '../utils/userDisplayName.js';
 import { geoIndex } from '../services/geoIndex.js';
+import {
+    getUserContext,
+    updateUserContextCache,
+    invalidateUserContext,
+    USER_CONTEXT_CACHE,
+    INTERACTION_DELTAS
+} from '../services/userContextService.js';
 
 const router = express.Router();
 
@@ -74,9 +81,10 @@ const postSchema = Joi.object({
 //  IN-MEMORY CACHE (Global feed only — NOT used for local feed)
 // ============================================================
 export const FEED_CACHE = new Map();
-export const USER_CONTEXT_CACHE = new Map();
 const FETCH_LOCKS = new Map();
-const CACHE_TTL = 15 * 1000;        // 15s for local/author/category queries
+const LOCAL_POOL_CACHE = new Map(); // Cell-based cache for local document pools
+const CACHE_TTL = 60 * 1000;        // 60s for author/category queries
+const LOCAL_CACHE_TTL = 60 * 1000;   // 60s for cell-based local pool
 const GLOBAL_CACHE_TTL = 5 * 60 * 1000;  // 5 minutes for global trending feed
 
 // ============================================================
@@ -110,75 +118,7 @@ function computeTrendingScore(post, gravity = 1.4) {
     return engagement / Math.pow(age + 2, gravity);
 }
 
-// ============================================================
-//  INTERACTION DELTAS — Instagram-Level Consistency Layer
-//  Stores recent interactions before Firestore index syncs (up to 60s)
-// ============================================================
-const INTERACTION_DELTAS = {
-    likes: new Map(),
-    unlikes: new Map(),
-    counts: new Map(),
-    follows: new Map(),
-    unfollows: new Map()
-};
-
-const trackDelta = (map, key, value, add = true) => {
-    if (!map.has(key)) map.set(key, new Set());
-    const set = map.get(key);
-    if (add) set.add(value); else set.delete(value);
-    setTimeout(() => { if (set.has(value)) set.delete(value); }, 60000);
-};
-
-const trackCountDelta = (postId, delta) => {
-    const current = INTERACTION_DELTAS.counts.get(postId) || 0;
-    INTERACTION_DELTAS.counts.set(postId, current + delta);
-    setTimeout(() => {
-        const val = INTERACTION_DELTAS.counts.get(postId) || 0;
-        INTERACTION_DELTAS.counts.set(postId, val - delta);
-    }, 60000);
-};
-
-export const updateUserContextCache = (userId, targetId, action = 'invalidate') => {
-    const key = `user_context:${userId}`;
-
-    switch (action) {
-        case 'like':
-            trackDelta(INTERACTION_DELTAS.likes, userId, targetId, true);
-            trackDelta(INTERACTION_DELTAS.unlikes, userId, targetId, false);
-            trackCountDelta(targetId, 1);
-            break;
-        case 'unlike':
-            trackDelta(INTERACTION_DELTAS.unlikes, userId, targetId, true);
-            trackDelta(INTERACTION_DELTAS.likes, userId, targetId, false);
-            trackCountDelta(targetId, -1);
-            break;
-        case 'follow':
-            trackDelta(INTERACTION_DELTAS.follows, userId, targetId, true);
-            trackDelta(INTERACTION_DELTAS.unfollows, userId, targetId, false);
-            break;
-        case 'unfollow':
-            trackDelta(INTERACTION_DELTAS.unfollows, userId, targetId, true);
-            trackDelta(INTERACTION_DELTAS.follows, userId, targetId, false);
-            break;
-    }
-
-    if (!USER_CONTEXT_CACHE.has(key)) return;
-    const cached = USER_CONTEXT_CACHE.get(key);
-    if (!cached?.data) return;
-
-    const { likedIds, mutedIds, followedIds } = cached.data;
-    switch (action) {
-        case 'like': likedIds.add(targetId); break;
-        case 'unlike': likedIds.delete(targetId); break;
-        case 'mute': mutedIds.add(targetId); break;
-        case 'unmute': mutedIds.delete(targetId); break;
-        case 'follow': if (followedIds) followedIds.add(targetId); break;
-        case 'unfollow': if (followedIds) followedIds.delete(targetId); break;
-    }
-    USER_CONTEXT_CACHE.set(key, cached);
-};
-
-export const invalidateUserContext = (userId) => updateUserContextCache(userId, null, 'invalidate');
+// (Moved User Context logic to src/services/userContextService.js)
 export const invalidateFeedCache = () => { FEED_CACHE.clear(); };
 
 // ============================================================
@@ -243,59 +183,7 @@ const mapDocToPost = (doc) => {
     };
 };
 
-// ============================================================
-//  USER CONTEXT (Likes, Muted, Followed)
-// ============================================================
-export async function getUserContext(userId) {
-    const contextKey = `user_context:${userId}`;
-    const cachedContext = USER_CONTEXT_CACHE.get(contextKey);
-
-    let likedPostIds = new Set();
-    let mutedUserIds = new Set();
-    let followedUserIds = new Set();
-
-    if (cachedContext && (Date.now() - cachedContext.timestamp < CACHE_TTL)) {
-        likedPostIds = cachedContext.data.likedIds;
-        mutedUserIds = cachedContext.data.mutedIds;
-        followedUserIds = cachedContext.data.followedIds || new Set();
-    } else {
-        const [mutedRes, likesRes, followsRes] = await Promise.all([
-            db.collection('users').doc(userId).get()
-                .then(doc => new Set(doc.exists ? doc.data().mutedUsers || [] : []))
-                .catch(() => new Set()),
-            db.collection('likes').where('userId', '==', userId)
-                .orderBy('createdAt', 'desc').limit(500).get()
-                .then(snap => new Set(snap.docs.map(d => d.data().postId)))
-                .catch(() => new Set()),
-            db.collection('follows').where('followerId', '==', userId)
-                .limit(1000).get()
-                .then(snap => new Set(snap.docs.map(d => d.data().followingId)))
-                .catch(() => new Set())
-        ]);
-
-        likedPostIds = likesRes;
-        mutedUserIds = mutedRes;
-        followedUserIds = followsRes;
-
-        USER_CONTEXT_CACHE.set(contextKey, {
-            timestamp: Date.now(),
-            data: { likedIds: likedPostIds, mutedIds: mutedUserIds, followedIds: followedUserIds }
-        });
-    }
-
-    // Patch with in-flight deltas
-    const pendingLikes = INTERACTION_DELTAS.likes.get(userId);
-    const pendingUnlikes = INTERACTION_DELTAS.unlikes.get(userId);
-    const pendingFollows = INTERACTION_DELTAS.follows.get(userId);
-    const pendingUnfollows = INTERACTION_DELTAS.unfollows.get(userId);
-
-    if (pendingLikes) pendingLikes.forEach(id => likedPostIds.add(id));
-    if (pendingUnlikes) pendingUnlikes.forEach(id => likedPostIds.delete(id));
-    if (pendingFollows) pendingFollows.forEach(id => followedUserIds.add(id));
-    if (pendingUnfollows) pendingUnfollows.forEach(id => followedUserIds.delete(id));
-
-    return { likedPostIds, mutedUserIds, followedUserIds };
-}
+// (Moved getUserContext to src/services/userContextService.js)
 
 //  ⭐ CORE: IN-MEMORY DISTANCE FEED
 //  Queries the RAM index first, then fetches docs from Firestore
@@ -340,29 +228,53 @@ async function fetchLocalFeedWithCursor(
         };
     }
 
-    // STEP 4: Fetch full post data from Firestore in parallel
-    const firestoreStartTime = Date.now();
-    const pageResults = geoResults.slice(0, pageSize);
+    const roundedLat = Math.round(parseFloat(lat) * 100) / 100;
+    const roundedLng = Math.round(parseFloat(lng) * 100) / 100;
+    const cellKey = `local:${roundedLat}:${roundedLng}:${pageSize}:${lastDistance}:${lastPostId}`;
 
-    const postDocs = await Promise.all(
-        pageResults.map(({ postId }) =>
-            db.collection('posts').doc(postId).get()
-        )
-    );
-    const firestoreMs = Date.now() - firestoreStartTime;
+    let finalPosts = [];
+    const cached = LOCAL_POOL_CACHE.get(cellKey);
 
-    // STEP 5: Build final post objects
-    const finalPosts = [];
-    postDocs.forEach((doc, index) => {
-        if (doc.exists) {
-            const data = doc.data();
-            if (data.status === 'active' && data.visibility === 'public') {
-                const post = mapDocToPost(doc);
-                post.distance = pageResults[index].distance;
-                finalPosts.push(post);
-            }
+    let firestoreMs = 0;
+    if (cached && (Date.now() - cached.timestamp < LOCAL_CACHE_TTL)) {
+        logger.debug({ cellKey }, '[LOCAL FEED] Cache hit');
+        finalPosts = cached.data.map(post => ({
+            ...post,
+            distance: getDistance(parseFloat(lat), parseFloat(lng), post.latitude, post.longitude)
+        }));
+    } else {
+        const firestoreStartTime = Date.now();
+        const pageResults = geoResults.slice(0, pageSize);
+        const docRefs = pageResults.map(({ postId }) => db.collection('posts').doc(postId));
+
+        // STEP 4: Fetch full post data in chunks to respect 500 doc limit
+        const CHUNK_SIZE = 500;
+        const snapshots = [];
+        for (let i = 0; i < docRefs.length; i += CHUNK_SIZE) {
+            const chunk = docRefs.slice(i, i + CHUNK_SIZE);
+            snapshots.push(await db.getAll(...chunk));
         }
-    });
+        const postDocs = snapshots.flat();
+        firestoreMs = Date.now() - firestoreStartTime;
+
+        // STEP 5: Build final post objects
+        const pool = [];
+        postDocs.forEach((doc, index) => {
+            if (doc.exists) {
+                const data = doc.data();
+                if (data.status === 'active' && data.visibility === 'public') {
+                    const post = mapDocToPost(doc);
+                    pool.push(post);
+                    finalPosts.push({
+                        ...post,
+                        distance: getDistance(parseFloat(lat), parseFloat(lng), post.latitude, post.longitude)
+                    });
+                }
+            }
+        });
+
+        LOCAL_POOL_CACHE.set(cellKey, { timestamp: Date.now(), data: pool });
+    }
 
     finalPosts.sort((a, b) => a.distance - b.distance);
 
@@ -784,11 +696,19 @@ router.get('/', authenticate, async (req, res, next) => {
                     }
                 }
 
-                // Score every post with refined time-decay formula
-                let posts = snapshot.docs.map(mapDocToPost).map(post => ({
-                    ...post,
-                    trendingScore: computeTrendingScore(post, 1.4)
-                }));
+                // Non-blocking in-memory scoring
+                const rawPosts = snapshot.docs.map(mapDocToPost);
+                let posts = [];
+                for (let i = 0; i < rawPosts.length; i++) {
+                    const post = rawPosts[i];
+                    posts.push({
+                        ...post,
+                        trendingScore: computeTrendingScore(post, 1.4)
+                    });
+                    if (i > 0 && i % 50 === 0) {
+                        await new Promise(resolve => setImmediate(resolve));
+                    }
+                }
 
                 // Sort: Higher score first. 
                 // Tiebreaker: Most likes first.

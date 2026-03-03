@@ -14,6 +14,7 @@ import '../shared/widgets/user_avatar.dart';
 import '../widgets/post_card.dart';
 import '../widgets/nextdoor_post_card.dart';
 import 'event_post_card.dart';
+import '../services/post_service.dart';
 
 class PersonalAccount extends StatefulWidget {
   final String? userId;
@@ -39,6 +40,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   List<String> _myEventIds = [];
   bool _isFollowing = false;
   bool _isTogglingFollow = false;
+  StreamSubscription? _eventSub;
 
   String get profileUserId {
     final uid = widget.userId ?? AuthService.currentUser?.uid;
@@ -53,6 +55,14 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadData();
+    _eventSub = PostService.events.listen((event) {
+      if (event.type == FeedEventType.postLiked && mounted) {
+        final data = event.data as Map<String, dynamic>;
+        setState(() {
+          _likedPostIds[data['postId']] = data['isLiked'];
+        });
+      }
+    });
   }
 
   @override
@@ -61,6 +71,13 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     if (oldWidget.userId != widget.userId) {
       _loadData();
     }
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _eventSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -186,12 +203,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       if (kDebugMode) debugPrint('Error loading profile posts: $e');
       if (mounted) setState(() => _isLoadingPosts = false);
     }
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
   }
 
   @override
@@ -572,9 +583,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       itemCount: postOnlyItems.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index == postOnlyItems.length) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _loadPosts();
-          });
+          if (!_isLoadingPosts && _hasMore) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _loadPosts();
+            });
+          }
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(16.0),
@@ -638,9 +651,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       itemCount: mediaPosts.length + (_hasMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index == mediaPosts.length) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _loadPosts();
-          });
+          if (!_isLoadingPosts && _hasMore) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _loadPosts();
+            });
+          }
           return const Center(child: Padding(
             padding: EdgeInsets.all(16.0),
             child: CircularProgressIndicator(strokeWidth: 2),
@@ -744,5 +759,5 @@ class _SliverTabHeaderDelegate extends SliverPersistentHeaderDelegate {
   }
 
   @override
-  bool shouldRebuild(_SliverTabHeaderDelegate oldDelegate) => true;
+  bool shouldRebuild(_SliverTabHeaderDelegate oldDelegate) => false;
 }

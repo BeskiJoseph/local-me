@@ -7,7 +7,8 @@ import { body, validationResult } from 'express-validator';
 import { cleanPayload } from '../utils/sanitizer.js';
 import { enforceLikeVelocity, enforceFollowVelocity } from '../middleware/interactionVelocity.js';
 import { buildDisplayName } from '../utils/userDisplayName.js';
-import { updateUserContextCache, invalidateFeedCache, getUserContext } from './posts.js';
+import { updateUserContextCache, getUserContext } from '../services/userContextService.js';
+import { invalidateFeedCache } from './posts.js';
 import { broadcastLikeUpdate } from '../services/socketService.js';
 import { filterContent } from '../utils/contentFilter.js';
 
@@ -104,9 +105,6 @@ router.post(
 
             // Optimistically update the feed context for this user
             updateUserContextCache(userId, postId, wasLiked ? 'unlike' : 'like');
-
-            // Invalidate the feed cache so everyone sees the updated count on refresh
-            invalidateFeedCache();
 
             // Log Audit Action after successful transaction
             // Log Audit Action in background (Async)

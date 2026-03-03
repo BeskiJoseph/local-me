@@ -63,7 +63,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
         final data = event.data as Map<String, dynamic>;
         if (data['postId'] == widget.post.id) {
           setState(() {
-            _isLiked = data['isLiked'];
+            if (data['isLiked'] != null) _isLiked = data['isLiked'];
             _likeCount = data['likeCount'];
             // Reset optimistic states as they've been confirmed/synced
             _optimisticLiked = null;
@@ -72,6 +72,22 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
         }
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(NextdoorStylePostCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only sync from outside if we're NOT in the middle of a user interaction
+    if (!_isTogglingLike && _optimisticLiked == null && _optimisticLikeCount == null) {
+      final newLiked = widget.initialIsLiked ?? widget.post.isLiked;
+      final newCount = widget.post.likeCount;
+      if (newLiked != _isLiked || newCount != _likeCount) {
+        setState(() {
+          _isLiked = newLiked;
+          _likeCount = newCount;
+        });
+      }
+    }
   }
 
   @override

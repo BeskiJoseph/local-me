@@ -3,6 +3,8 @@ import { db } from '../config/firebase.js';
 import authenticate from '../middleware/auth.js';
 
 const router = express.Router();
+const _searchCache = new Map();
+const SEARCH_CACHE_TTL = 60 * 1000; // 60 seconds
 
 /**
  * @route   GET /api/search
@@ -15,6 +17,18 @@ router.get('/', authenticate, async (req, res, next) => {
 
         const searchTerm = q.trim().toLowerCase();
         const pageSize = Math.min(parseInt(limit), 50);
+
+        // Check Cache
+        const cacheKey = `search:${type}:${searchTerm}:${pageSize}`;
+        const cached = _searchCache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp < SEARCH_CACHE_TTL)) {
+            return res.json({
+                success: true,
+                data: cached.data,
+                error: null
+            });
+        }
+
         let results = [];
 
         if (type === 'users') {
@@ -47,7 +61,7 @@ router.get('/', authenticate, async (req, res, next) => {
             results = Array.from(userMap.values()).slice(0, pageSize);
         } else {
             // Search posts by title or body prefix (case-insensitive)
-            // Simplified queries to avoid composite index requirements on localhost
+            // Restore simplified queries to avoid composite index requirements
             const titleQuery = db.collection('posts')
                 .where('title_lowercase', '>=', searchTerm)
                 .where('title_lowercase', '<=', searchTerm + '\uf8ff')
@@ -76,6 +90,9 @@ router.get('/', authenticate, async (req, res, next) => {
 
             results = Array.from(postMap.values()).slice(0, pageSize);
         }
+
+        // Store in Cache
+        _searchCache.set(cacheKey, { timestamp: Date.now(), data: results });
 
         return res.json({
             success: true,

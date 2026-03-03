@@ -17,6 +17,7 @@ import '../core/utils/navigation_utils.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
 import '../services/socket_service.dart';
+import '../models/api_response.dart';
 
 class PostDetailScreen extends StatefulWidget {
   final Post? post;
@@ -44,9 +45,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   int _likeCount = 0;
   bool _isFollowed = false;
   List<Comment> _comments = [];
-  List<Post> _recommendedPosts = [];
   bool _isLoadingComments = false;
-  bool _isLoadingRecommended = false;
   bool _isTogglingLike = false;
   bool _isTogglingFollow = false;
   StreamSubscription? _postEventSubscription;
@@ -90,77 +89,42 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
   Future<void> _loadAllStatus() async {
     if (_post == null) return;
-    // Essential UI states first
-    await Future.wait([
-      _loadLikeState(),
-      _loadFollowState(),
-    ]);
     
-    // Background load secondary content
-    _loadComments();
-  }
-
-  Future<void> _loadLikeState() async {
-    final response = await BackendService.checkLikeState(_post!.id);
-    if (!mounted) return;
-    if (response.success && response.data != null) {
-      setState(() {
-        _isLiked = response.data!['liked'] == true;
-        _likeCount = (response.data!['likeCount'] as num?)?.toInt() ?? _post!.likeCount;
-      });
-    }
-  }
-
-  Future<void> _loadFollowState() async {
-    final user = AuthService.currentUser;
-    if (user == null || user.uid == _post!.authorId) return;
-    final response = await BackendService.checkFollowState(_post!.authorId);
-    if (!mounted) return;
-    if (response.success) {
-      setState(() => _isFollowed = response.data ?? false);
-    }
-  }
-
-  Future<void> _loadComments() async {
-    if (!mounted) return;
     setState(() => _isLoadingComments = true);
+    
+    final user = AuthService.currentUser;
+    final shouldCheckFollow = user != null && user.uid != _post!.authorId;
+
     try {
-      final response = await BackendService.getComments(_post!.id, limit: 10); // Show top 10 initially
+      final results = await Future.wait([
+        BackendService.checkLikeState(_post!.id),
+        shouldCheckFollow ? BackendService.checkFollowState(_post!.authorId) : Future.value(null),
+        BackendService.getComments(_post!.id, limit: 10),
+      ]);
+
       if (!mounted) return;
-      if (response.success && response.data != null) {
-        setState(() {
-          _comments = response.data!.map<Comment>((json) => Comment.fromJson(json)).toList();
-          _isLoadingComments = false;
-        });
-      } else {
-        setState(() => _isLoadingComments = false);
-      }
+
+      final likeResp = results[0] as ApiResponse<Map<String, dynamic>>;
+      final followResult = results[1];
+      final followResp = followResult is ApiResponse<bool> ? followResult : null;
+      final commentsResp = results[2] as ApiResponse<List<dynamic>>;
+
+      setState(() {
+        if (likeResp.success && likeResp.data != null) {
+          final data = likeResp.data!;
+          _isLiked = data['liked'] == true;
+          _likeCount = (data['likeCount'] as num?)?.toInt() ?? _post!.likeCount;
+        }
+        if (followResp != null && followResp.success) {
+          _isFollowed = followResp.data ?? false;
+        }
+        if (commentsResp.success && commentsResp.data != null) {
+          _comments = commentsResp.data!.map<Comment>((json) => Comment.fromJson(json)).toList();
+        }
+        _isLoadingComments = false;
+      });
     } catch (e) {
       if (mounted) setState(() => _isLoadingComments = false);
-    }
-  }
-
-  Future<void> _loadRecommended() async {
-    setState(() => _isLoadingRecommended = true);
-    try {
-      final response = await BackendService.getPosts(
-        category: _post!.category,
-        limit: 5,
-      );
-      if (!mounted) return;
-      if (response.success && response.data != null) {
-        setState(() {
-          _recommendedPosts = response.data!
-              .map<Post>((json) => Post.fromJson(json as Map<String, dynamic>))
-              .where((p) => p.id != _post!.id)
-              .toList();
-          _isLoadingRecommended = false;
-        });
-      } else {
-        setState(() => _isLoadingRecommended = false);
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isLoadingRecommended = false);
     }
   }
 

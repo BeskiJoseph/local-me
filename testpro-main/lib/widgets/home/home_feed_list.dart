@@ -39,6 +39,7 @@ class _HomeFeedListState extends State<HomeFeedList>
     with AutomaticKeepAliveClientMixin {
   late final ScrollController _scrollController;
   StreamSubscription<FeedEvent>? _eventSubscription;
+  static final Map<String, bool?> _likedPostIds = {};
 
   Future<PaginatedResponse<Post>>? _feedFuture;
   String? _futureFeedType;
@@ -109,6 +110,42 @@ class _HomeFeedListState extends State<HomeFeedList>
           });
           debugPrint('➖ Temporary post removed and tombstoned. Current count: ${_tempPosts.length}');
         }
+      } else if (event.type == FeedEventType.postLiked) {
+        debugPrint('📬 Post liked event received');
+        final data = event.data as Map<String, dynamic>;
+        final String postId = data['postId'];
+        final bool? isLiked = data['isLiked'];
+        final int likeCount = data['likeCount'];
+
+        if (mounted) {
+          setState(() {
+            if (isLiked != null) {
+              _likedPostIds[postId] = isLiked;
+            }
+            
+            // Update the count in the cache as well so it doesn't revert on rebuild
+            for (var cacheKey in _postsCache.keys) {
+              final cachedResponse = _postsCache[cacheKey]!;
+              final posts = cachedResponse.data;
+              final index = posts.indexWhere((p) => p.id == postId);
+              if (index != -1) {
+                posts[index] = posts[index].copyWith(
+                  isLiked: isLiked ?? posts[index].isLiked,
+                  likeCount: likeCount,
+                );
+              }
+            }
+            
+            // Also update temporary posts
+            final tempIndex = _tempPosts.indexWhere((p) => p.id == postId);
+            if (tempIndex != -1) {
+              _tempPosts[tempIndex] = _tempPosts[tempIndex].copyWith(
+                isLiked: isLiked ?? _tempPosts[tempIndex].isLiked,
+                likeCount: likeCount,
+              );
+            }
+          });
+        }
       }
     });
 
@@ -140,6 +177,7 @@ class _HomeFeedListState extends State<HomeFeedList>
       debugPrint('➕ Adding new temporary post to feed: ${postData.id}');
       // Add new temporary post to the top of the feed
       setState(() {
+        _likedPostIds[postData.id] = postData.isLiked;
         _tempPosts.insert(0, postData);
       });
     }
@@ -166,6 +204,12 @@ class _HomeFeedListState extends State<HomeFeedList>
       ).then((response) {
         // Track seen posts for cross-feed deduplication
         FeedSession.instance.markSeen(response.data.map((p) => p.id).toList());
+        
+        // Populate liked posts map
+        for (var p in response.data) {
+          _likedPostIds[p.id] = p.isLiked;
+        }
+        
         return response;
       });
     } else {
@@ -175,7 +219,7 @@ class _HomeFeedListState extends State<HomeFeedList>
   }
 
   /// Public method to force feed refresh (called after post creation)
-  void refreshFeed() {
+  Future<PaginatedResponse<Post>> refreshFeed() {
     debugPrint('🔄 Refreshing feed: $_cacheKey');
     _postsCache.remove(_cacheKey); // Clear cache
     FeedSession.instance.reset(); // Clear session deduplication on manual refresh
@@ -185,6 +229,7 @@ class _HomeFeedListState extends State<HomeFeedList>
       debugPrint('🔄 Feed future reset, will fetch fresh data');
       debugPrint('🔄 Temp posts preserved during refresh: ${_tempPosts.length}');
     });
+    return _getFuture();
   }
   
   /// Static method to clear all temporary posts
@@ -301,7 +346,7 @@ class _HomeFeedListState extends State<HomeFeedList>
 
         if (filteredPosts.isEmpty) {
           return RefreshIndicator(
-            onRefresh: () async { refreshFeed(); },
+            onRefresh: refreshFeed,
             color: AppTheme.primary,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -340,7 +385,7 @@ class _HomeFeedListState extends State<HomeFeedList>
         }
 
         return RefreshIndicator(
-          onRefresh: () async { refreshFeed(); },
+          onRefresh: refreshFeed,
           color: AppTheme.primary,
           child: ListView.separated(
             controller: _scrollController,
@@ -361,6 +406,7 @@ class _HomeFeedListState extends State<HomeFeedList>
               return NextdoorStylePostCard(
                 post: post,
                 currentCity: widget.userCity,
+                initialIsLiked: _likedPostIds[post.id],
               );
             },
           ),

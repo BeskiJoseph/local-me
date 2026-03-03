@@ -65,7 +65,7 @@ class FeedController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updatePostLike(String postId, bool isLiked, int likeCount) {
+  void updatePostLike(String postId, bool? isLiked, int likeCount) {
     final index = _posts.indexWhere((p) => p.id == postId);
     if (index != -1) {
       _posts[index] = _posts[index].copyWith(

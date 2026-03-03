@@ -10,6 +10,7 @@ import '../models/post.dart';
 import '../utils/proxy_helper.dart';
 import '../models/api_response.dart';
 import 'post_detail_screen.dart';
+import '../services/post_service.dart';
 
 /// Simple search screen with user and content search
 class SearchScreen extends StatefulWidget {
@@ -28,11 +29,21 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   List<dynamic> _userResults = [];
   List<dynamic> _postResults = [];
   bool _isSearching = false;
+  final Map<String, bool> _likedPostIds = {};
+  StreamSubscription? _eventSub;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _eventSub = PostService.events.listen((event) {
+      if (event.type == FeedEventType.postLiked && mounted) {
+        final data = event.data as Map<String, dynamic>;
+        setState(() {
+          _likedPostIds[data['postId']] = data['isLiked'];
+        });
+      }
+    });
   }
 
   @override
@@ -40,6 +51,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     _searchController.dispose();
     _tabController.dispose();
     _debounce?.cancel();
+    _eventSub?.cancel();
     super.dispose();
   }
 
@@ -72,6 +84,11 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
           setState(() {
             _userResults = users;
             _postResults = posts;
+            for (var p in posts) {
+              if (p is Map<String, dynamic>) {
+                _likedPostIds[p['id'] ?? p['postId'] ?? ''] = p['isLiked'] == true;
+              }
+            }
             _isSearching = false;
           });
         }
@@ -250,7 +267,10 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       itemBuilder: (context, index) {
         final json = _postResults[index] as Map<String, dynamic>;
         final post = Post.fromJson(json);
-        return NextdoorStylePostCard(post: post);
+        return NextdoorStylePostCard(
+          post: post,
+          initialIsLiked: _likedPostIds[post.id],
+        );
       },
     );
   }

@@ -22,7 +22,7 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
   final ScrollController _scrollController = ScrollController();
   final FeedController _feedController = FeedController();
   final String _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
-  final Map<String, bool> _likedPostIds = {};
+  final Map<String, bool?> _likedPostIds = {};
   
   Timer? _debounce;
   StreamSubscription? _eventSubscription;

@@ -16,6 +16,7 @@ import '../widgets/feed/paginated_feed_list.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
 import '../core/session/user_session.dart';
+import 'package:testpro/services/backend_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -48,6 +49,8 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    // Activate custom backend session layer (bridging Firebase Auth)
+    BackendService.syncCustomTokens();
     _detectLocation();
   }
 
@@ -168,12 +171,9 @@ class _HomeScreenState extends State<HomeScreen> {
       ).then((result) async {
         if (result == true) {
           if (kDebugMode) debugPrint('📝 Post creation confirmed, triggering feed refresh');
-          // Force a more aggressive refresh
           await Future.delayed(const Duration(milliseconds: 200));
           if (mounted) {
             _refreshFeeds();
-            // Also trigger a hot reload to ensure UI updates
-            setState(() {});
           }
         }
       });
@@ -188,12 +188,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _refreshFeeds() {
     if (kDebugMode) debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
     setState(() => _feedRevision++);
-    // Also force a rebuild of the entire widget tree
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        setState(() {});
-      }
-    });
   }
 
 
