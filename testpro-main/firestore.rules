@@ -22,13 +22,19 @@ service cloud.firestore {
       allow read: if request.auth != null;
 
       // Write: Authenticated users can only create messages (not update/delete)
-      // with strict field validation to prevent injection
+      // Enterprise hardening:
+      //   - hasOnly: prevents hidden/extra field injection
+      //   - senderId == auth.uid: prevents impersonation
+      //   - timestamp == request.time: prevents client-spoofed timestamps
+      //   - text size cap: prevents payload abuse
       allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['senderId', 'senderName', 'senderProfileImage', 'text', 'timestamp'])
         && request.resource.data.keys().hasAll(['senderId', 'text', 'timestamp'])
-        && request.resource.data.senderId == request.auth.uid  // Can only send as yourself
+        && request.resource.data.senderId == request.auth.uid
         && request.resource.data.text is string
         && request.resource.data.text.size() > 0
-        && request.resource.data.text.size() <= 2000;          // Max message length
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.timestamp == request.time;
 
       // No update or delete from client — only backend/admin can moderate
       allow update, delete: if false;
