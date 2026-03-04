@@ -7,8 +7,9 @@ import '../widgets/event_card/event_card_footer.dart';
 
 class EventPostCard extends StatefulWidget {
   final Post post;
+  final VoidCallback? onTap;
 
-  const EventPostCard({super.key, required this.post});
+  const EventPostCard({super.key, required this.post, this.onTap});
 
   @override
   State<EventPostCard> createState() => _EventPostCardState();
@@ -17,7 +18,9 @@ class EventPostCard extends StatefulWidget {
 class _EventPostCardState extends State<EventPostCard> {
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -47,6 +50,7 @@ class _EventPostCardState extends State<EventPostCard> {
           EventCardFooter(post: widget.post),
         ],
       ),
+    ),
     );
   }
 }

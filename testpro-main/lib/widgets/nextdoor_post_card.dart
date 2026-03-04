@@ -30,12 +30,14 @@ class NextdoorStylePostCard extends StatefulWidget {
   final Post post;
   final String? currentCity;
   final bool? initialIsLiked;
+  final VoidCallback? onTap;
 
   const NextdoorStylePostCard({
     super.key,
     required this.post,
     this.currentCity,
     this.initialIsLiked,
+    this.onTap,
   });
 
   @override
@@ -193,8 +195,10 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     final post = widget.post;
     final user = AuthService.currentUser;
 
-    return ColoredBox(
-      color: Colors.white,
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: ColoredBox(
+        color: Colors.white,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -370,6 +374,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
           ),
         ],
       ),
+    ),
     );
   }
 

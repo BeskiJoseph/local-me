@@ -9,6 +9,7 @@ import '../../config/app_theme.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
 import '../../screens/new_post_screen.dart';
+import '../../screens/post_reels_view.dart';
 import '../../utils/safe_error.dart';
 import 'feed_shimmer.dart';
 
@@ -296,11 +297,25 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
                     return const SizedBox.shrink();
                   }
                   if (post.isEvent || post.category.toLowerCase() == 'events') {
-                    return EventPostCard(post: post);
+                    return EventPostCard(
+                      post: post,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => PostReelsView(posts: posts, startIndex: adjustedIndex),
+                        ),
+                      ),
+                    );
                   }
                   return NextdoorStylePostCard(
                     post: post,
                     initialIsLiked: _likedPostIds[post.id],
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => PostReelsView(posts: posts, startIndex: adjustedIndex),
+                      ),
+                    ),
                   );
                 },
               ),
