@@ -1,27 +1,47 @@
+import 'package:flutter/foundation.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import '../models/notification.dart';
 import 'backend_service.dart';
 
 class NotificationDataService {
-  /// Polls every 5 minutes — notifications don't need near-real-time updates.
-  /// Previous 15s polling was contributing to the request storm.
-  static Stream<List<ActivityNotification>> notificationsStream(String userId) async* {
-    yield await _fetch(userId);
-    await for (final _ in Stream.periodic(const Duration(seconds: 30))) {
-      yield await _fetch(userId);
-    }
+  /// Global unread badge count — any widget can listen with ValueListenableBuilder.
+  /// Incremented by FCM push (zero polling), reset when user reads all.
+  static final ValueNotifier<int> unreadCount = ValueNotifier(0);
+
+  /// Call once from main.dart after NotificationService.initialize().
+  /// Hooks into FCM onMessage so badge increments instantly on push arrival.
+  static void initialize() {
+    FirebaseMessaging.onMessage.listen((message) {
+      unreadCount.value += 1;
+    });
   }
 
-  static Future<List<ActivityNotification>> _fetch(String userId) async {
+  /// Fetch full notification list from backend (called once on ActivityScreen open).
+  static Future<List<ActivityNotification>> fetchNotifications() async {
     final response = await BackendService.getNotifications();
-    if (response.success) {
-      return response.data!.map((json) => ActivityNotification.fromJson(json)).toList();
+    if (response.success && response.data != null) {
+      final items = response.data!
+          .map((json) => ActivityNotification.fromJson(json))
+          .toList();
+      // Sync badge to actual unread count from server
+      unreadCount.value = items.where((n) => !n.isRead).length;
+      return items;
     }
     return [];
   }
 
+  /// Mark a single notification as read, decrement badge.
   static Future<void> markNotificationAsRead(String notificationId) async {
     final response = await BackendService.markNotificationAsRead(notificationId);
-    if (!response.success) throw response.error ?? "Failed to mark as read";
+    if (!response.success) throw response.error ?? 'Failed to mark as read';
+    if (unreadCount.value > 0) unreadCount.value -= 1;
+  }
+
+  /// Mark all as read — resets badge to zero immediately.
+  static Future<void> markAllAsRead() async {
+    final response = await BackendService.markAllNotificationsAsRead();
+    if (!response.success) throw response.error ?? 'Failed to mark all as read';
+    unreadCount.value = 0;
   }
 
   static Future<void> sendNotification({
@@ -37,3 +57,4 @@ class NotificationDataService {
     // Notifications are sent server-side — no client action needed.
   }
 }
+

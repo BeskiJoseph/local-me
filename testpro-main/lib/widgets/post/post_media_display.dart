@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../models/post.dart';
 import '../../utils/proxy_helper.dart';
 import '../../screens/video_player_screen.dart';
@@ -40,9 +41,15 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
                   color: Colors.black87,
                   child: Center(
                     child: InteractiveViewer(
-                      child: Image.network(
-                        ProxyHelper.getUrl(widget.post.mediaUrl!),
+                      child: CachedNetworkImage(
+                        imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
                         fit: BoxFit.contain,
+                        placeholder: (context, url) => const Center(
+                          child: CircularProgressIndicator(color: Colors.white),
+                        ),
+                        errorWidget: (context, url, error) => const Center(
+                          child: Icon(Icons.broken_image, color: Colors.white, size: 50),
+                        ),
                       ),
                     ),
                   ),
@@ -93,44 +100,32 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
                         _ShimmerEffect(),
                       
                       // Actual Image
-                      Image.network(
-                        ProxyHelper.getUrl(mediaUrl),
+                      CachedNetworkImage(
+                        imageUrl: ProxyHelper.getUrl(mediaUrl),
                         fit: BoxFit.cover,
-                        cacheWidth: 800, // Optimize memory usage
-                        loadingBuilder: (context, child, loadingProgress) {
-                          if (loadingProgress == null) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (mounted && _imageLoading) {
-                                setState(() => _imageLoading = false);
-                              }
-                            });
-                            return child;
-                          }
-                          return const SizedBox.shrink();
-                        },
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            color: Colors.grey.shade100,
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.broken_image_rounded,
-                                  color: Colors.grey.shade400,
-                                  size: 48,
+                        memCacheWidth: 800,
+                        placeholder: (context, url) => _ShimmerEffect(),
+                        errorWidget: (context, url, error) => Container(
+                          color: Colors.grey.shade100,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.broken_image_rounded,
+                                color: Colors.grey.shade400,
+                                size: 48,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Failed to load media',
+                                style: TextStyle(
+                                  color: Colors.grey.shade500,
+                                  fontSize: 12,
                                 ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Failed to load media',
-                                  style: TextStyle(
-                                    color: Colors.grey.shade500,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ],
                   ),

@@ -11,6 +11,7 @@ import '../core/utils/navigation_utils.dart';
 import '../core/session/user_session.dart';
 import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
+import '../shared/widgets/empty_state.dart';
 import '../widgets/post_card.dart';
 import '../widgets/nextdoor_post_card.dart';
 import 'event_post_card.dart';
@@ -575,7 +576,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     }).toList();
 
     if (postOnlyItems.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No photo/video posts yet'));
+      return const EmptyStateWidget(
+        icon: Icons.photo_library_outlined,
+        title: 'No photo/video posts yet',
+        subtitle: 'Posts with images or videos will appear here.',
+      );
     }
 
     return ListView.builder(
@@ -644,7 +649,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       return category == 'article' || category == 'artizone';
     }).toList();
     if (mediaPosts.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No article posts yet'));
+      return const EmptyStateWidget(
+        icon: Icons.article_outlined,
+        title: 'No articles yet',
+        subtitle: 'Articles and stories you write will appear here.',
+      );
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -674,7 +683,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         .where((p) => p.isEvent || p.category.toLowerCase() == 'events')
         .toList();
     if (eventPosts.isEmpty && !_isLoadingPosts) {
-      return const Center(child: Text('No events yet'));
+      return const EmptyStateWidget(
+        icon: Icons.event_available_outlined,
+        title: 'No events joined or created',
+        subtitle: 'Events you are interested in will show up here.',
+      );
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 12),

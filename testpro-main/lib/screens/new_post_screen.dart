@@ -1,6 +1,4 @@
 import 'package:flutter/foundation.dart';
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -10,12 +8,10 @@ import 'create_event_screen.dart';
 import 'write_article_screen.dart';
 import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
-import '../services/backend_service.dart';
 import '../services/location_service.dart';
 import '../services/user_service.dart';
 import '../services/geocoding_service.dart';
 import '../services/post_service.dart';
-import '../models/post.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:geolocator/geolocator.dart';
@@ -23,6 +19,8 @@ import 'dart:io';
 
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
+import '../core/utils/haptic_service.dart';
+import '../utils/safe_error.dart';
 
 class NewPostScreen extends StatefulWidget {
   const NewPostScreen({super.key});
@@ -33,8 +31,10 @@ class NewPostScreen extends StatefulWidget {
 
 class _NewPostScreenState extends State<NewPostScreen> {
   final TextEditingController _contentController = TextEditingController();
+  final FocusNode _captionFocus = FocusNode();
   String? _currentLocation = 'Detecting location...';
   bool _isSubmitting = false;
+  bool _cancelUpload = false;
 
   // Media state
   Uint8List? _mediaBytes;
@@ -44,10 +44,42 @@ class _NewPostScreenState extends State<NewPostScreen> {
   bool _isGeneratingThumbnail = false;
   final ImagePicker _picker = ImagePicker();
 
+  // Upload progress state
+  String _uploadStep = '';
+  double _uploadProgress = 0.0;
+
+  // Character limit
+  static const int _maxChars = 500;
+
+  // track if user has made any edits (for draft protection)
+  bool get _hasDraft =>
+      _contentController.text.isNotEmpty || _mediaBytes != null;
+
+  // Post button enabled only when form is valid
+  bool get _canPost =>
+      !_isSubmitting &&
+      _mediaBytes != null &&
+      _contentController.text.trim().isNotEmpty &&
+      _contentController.text.length <= _maxChars;
+
   @override
   void initState() {
     super.initState();
     _currentLocation = LocationService.getLocationString();
+    _contentController.addListener(() => setState(() {}));
+    // Enrich location from profile if available
+    _detectLocation();
+    // Auto-focus caption field after build
+    Future.microtask(() {
+      if (mounted) _captionFocus.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _contentController.dispose();
+    _captionFocus.dispose();
+    super.dispose();
   }
 
   Future<void> _detectLocation() async {
@@ -82,6 +114,37 @@ class _NewPostScreenState extends State<NewPostScreen> {
     }
   }
 
+  // ── Draft Protection ─────────────────────────────────────────
+  Future<bool> _onWillPop() async {
+    if (!_hasDraft || _isSubmitting) return true;
+    final shouldDiscard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Discard Post?',
+          style: TextStyle(fontFamily: AppTheme.fontFamily, fontWeight: FontWeight.w700),
+        ),
+        content: const Text(
+          'You have unsaved changes. Are you sure you want to go back?',
+          style: TextStyle(fontFamily: AppTheme.fontFamily, color: Color(0xFF6E6E73)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep Editing', style: TextStyle(color: Color(0xFF8A8A8A))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Discard', style: TextStyle(color: Color(0xFFEA4335), fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    return shouldDiscard ?? false;
+  }
+
+  // ── Media Picker ─────────────────────────────────────────────
   Future<void> _pickMedia() async {
     showModalBottomSheet(
       context: context,
@@ -124,7 +187,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
                 onTap: () async {
                   Navigator.pop(context);
                   final file = await _picker.pickImage(source: ImageSource.camera);
-                  _processMedia(file, 'image', 'jpg');
+                  _processMedia(file, 'image');
                 },
               ),
               ListTile(
@@ -133,7 +196,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
                 onTap: () async {
                   Navigator.pop(context);
                   final file = await _picker.pickImage(source: ImageSource.gallery);
-                  _processMedia(file, 'image', 'jpg');
+                  _processMedia(file, 'image');
                 },
               ),
               const Divider(),
@@ -146,7 +209,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
                     source: ImageSource.camera,
                     maxDuration: const Duration(seconds: 60),
                   );
-                  _processMedia(file, 'video', 'mp4');
+                  _processMedia(file, 'video');
                 },
               ),
               ListTile(
@@ -158,7 +221,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
                     source: ImageSource.gallery,
                     maxDuration: const Duration(seconds: 60),
                   );
-                  _processMedia(file, 'video', 'mp4');
+                  _processMedia(file, 'video');
                 },
               ),
               // Camera and Gallery options available
@@ -170,21 +233,41 @@ class _NewPostScreenState extends State<NewPostScreen> {
     );
   }
 
-  Future<void> _processMedia(XFile? file, String type, String extension) async {
+  // ── Resolve real file extension from path ────────────────────
+  String _resolveExtension(String path, String fallback) {
+    final segments = path.split('.');
+    if (segments.length > 1) {
+      final ext = segments.last.toLowerCase();
+      const validImage = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'gif'];
+      const validVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm'];
+      if (validImage.contains(ext) || validVideo.contains(ext)) return ext;
+    }
+    return fallback;
+  }
+
+  Future<void> _processMedia(XFile? file, String type) async {
     if (file == null) return;
+
+    // Resolve real extension from file path
+    final extension = _resolveExtension(file.path, type == 'image' ? 'jpg' : 'mp4');
 
     // Check file size before proceeding (100MB limit)
     final fileLength = await file.length();
     const maxSizeBytes = 100 * 1024 * 1024; // 100MB
     if (fileLength > maxSizeBytes) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'File too large (${(fileLength / 1024 / 1024).toStringAsFixed(1)}MB). Max allowed: 100MB.',
-            ),
-            backgroundColor: Colors.red,
-          ),
+        _showErrorSnackBar(
+          'File too large (${(fileLength / 1024 / 1024).toStringAsFixed(1)}MB). Maximum: 100MB.',
+        );
+      }
+      return;
+    }
+
+    // Additional video validation: reject videos that are too large for upload
+    if (type == 'video' && fileLength > 50 * 1024 * 1024) {
+      if (mounted) {
+        _showErrorSnackBar(
+          'Video is ${(fileLength / 1024 / 1024).toStringAsFixed(1)}MB. Maximum video size: 50MB.',
         );
       }
       return;
@@ -220,50 +303,87 @@ class _NewPostScreenState extends State<NewPostScreen> {
     });
   }
 
+  // ── User-friendly error SnackBar ─────────────────────────────
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(message, style: const TextStyle(fontFamily: AppTheme.fontFamily))),
+          ],
+        ),
+        backgroundColor: const Color(0xFFEA4335),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+
+  // ── Submit with Progress ─────────────────────────────────────
   Future<void> _submit() async {
+    // Double-post guard
+    if (_isSubmitting) return;
+
     final user = AuthService.currentUser;
     if (user == null) return;
 
     // Normal posts REQUIRE image or video - text only not allowed
     if (_mediaBytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please add an image or video to post')),
-      );
+      _showErrorSnackBar('Please add an image or video to post');
       return;
     }
 
     if (_contentController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please add a caption')),
-      );
+      _showErrorSnackBar('Please add a caption');
       return;
     }
 
-    if (_contentController.text.length > 500) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Content cannot exceed 500 characters.')),
-      );
+    if (_contentController.text.length > _maxChars) {
+      _showErrorSnackBar('Caption cannot exceed $_maxChars characters.');
       return;
     }
 
-    setState(() => _isSubmitting = true);
-    
-    final position = await Geolocator.getCurrentPosition();
-    
+    setState(() {
+      _isSubmitting = true;
+      _cancelUpload = false;
+      _uploadStep = 'Preparing...';
+      _uploadProgress = 0.0;
+    });
+
     try {
+      // Step 1: Get position
+      setState(() {
+        _uploadStep = 'Getting location...';
+        _uploadProgress = 0.1;
+      });
+      final position = await Geolocator.getCurrentPosition();
+      if (_cancelUpload) throw _UploadCancelled();
+
       final String postId = '${user.uid}_${DateTime.now().millisecondsSinceEpoch}';
 
-      // 1. Upload media
+      // Step 2: Upload media
       String? mediaUrl;
       String? thumbnailUrl;
       if (_mediaBytes != null) {
+        setState(() {
+          _uploadStep = 'Uploading ${_mediaType == "video" ? "video" : "photo"}...';
+          _uploadProgress = 0.3;
+        });
+        if (_cancelUpload) throw _UploadCancelled();
         mediaUrl = await MediaUploadService.uploadPostMedia(
           postId: postId,
           data: _mediaBytes!,
           fileExtension: _mediaExtension ?? 'jpg',
           mediaType: _mediaType,
         );
+        setState(() => _uploadProgress = 0.6);
+
         if (_mediaType == 'video' && _thumbnailBytes != null) {
+          setState(() => _uploadStep = 'Uploading thumbnail...');
           thumbnailUrl = await MediaUploadService.uploadPostMedia(
             postId: postId,
             data: _thumbnailBytes!,
@@ -271,9 +391,16 @@ class _NewPostScreenState extends State<NewPostScreen> {
             mediaType: 'image',
           );
         }
+        setState(() => _uploadProgress = 0.75);
       }
 
-      // 2. Create post via PostService (handles backend call + event emission)
+      if (_cancelUpload) throw _UploadCancelled();
+
+      // Step 3: Create post
+      setState(() {
+        _uploadStep = 'Publishing...';
+        _uploadProgress = 0.85;
+      });
       final createdPostId = await PostService.createPost(
         title: _contentController.text.trim(),
         body: _contentController.text.trim(),
@@ -287,25 +414,39 @@ class _NewPostScreenState extends State<NewPostScreen> {
       );
 
       if (!mounted) return;
-      
+
       if (createdPostId.isNotEmpty) {
         if (kDebugMode) debugPrint('✅ Post created successfully with ID: $createdPostId');
-        // Emit final post to replace temp post
-        // The backend service will emit the real post event
-        Navigator.pop(context, true);
+        setState(() {
+          _uploadStep = 'Done!';
+          _uploadProgress = 1.0;
+        });
+        HapticService.success();
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (mounted) Navigator.pop(context, true);
       } else {
         if (kDebugMode) debugPrint('❌ Post creation failed');
         throw Exception('Failed to create post');
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('Submit error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+      if (e is _UploadCancelled) {
+        // User cancelled — silent cleanup
+        if (kDebugMode) debugPrint('⚠️ Upload cancelled by user');
+      } else {
+        if (kDebugMode) debugPrint('Submit error: $e');
+        if (mounted) {
+          _showErrorSnackBar(safeErrorMessage(e));
+        }
       }
     } finally {
-      if (mounted) setState(() => _isSubmitting = false);
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+          _cancelUpload = false;
+          _uploadStep = '';
+          _uploadProgress = 0.0;
+        });
+      }
     }
   }
 
@@ -314,210 +455,430 @@ class _NewPostScreenState extends State<NewPostScreen> {
     final user = AuthService.currentUser;
     final String username = user?.displayName ?? user?.email?.split('@')[0] ?? 'User';
     final String? profileImg = user?.photoURL;
+    final int charCount = _contentController.text.length;
+    final bool isOverLimit = charCount > _maxChars;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF1A1A1A)),
-          onPressed: () => Navigator.pop(context),
-        ),
-        centerTitle: true,
-        title: const Text(
-          'Create Post',
-          style: TextStyle(
-            color: Color(0xFF1A1A1A),
-            fontWeight: FontWeight.w700,
-            fontSize: 18,
-            fontFamily: AppTheme.fontFamily,
+    return PopScope(
+      canPop: !_hasDraft || _isSubmitting,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final shouldLeave = await _onWillPop();
+        if (shouldLeave && mounted) Navigator.pop(context);
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF7F8FA),
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Color(0xFF1A1A1A)),
+            onPressed: () async {
+              if (_hasDraft && !_isSubmitting) {
+                final shouldLeave = await _onWillPop();
+                if (shouldLeave && mounted) Navigator.pop(context);
+              } else {
+                Navigator.pop(context);
+              }
+            },
           ),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16, top: 10, bottom: 10),
-            child: _PostBtn(onTap: _isSubmitting ? null : _submit),
+          centerTitle: true,
+          title: const Text(
+            'Create Post',
+            style: TextStyle(
+              color: Color(0xFF1A1A1A),
+              fontWeight: FontWeight.w700,
+              fontSize: 18,
+              fontFamily: AppTheme.fontFamily,
+            ),
           ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 16, top: 10, bottom: 10),
+              child: _PostBtn(onTap: _canPost ? _submit : null),
+            ),
+          ],
+        ),
+        body: Column(
           children: [
-            // ── User Header ───────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  ValueListenableBuilder(
-                    valueListenable: UserSession.current,
-                    builder: (context, sessionData, _) {
-                      final displayAvatar = sessionData?.avatarUrl ?? profileImg;
-                      final displayName = sessionData?.displayName ?? username;
-                      return UserAvatar(imageUrl: displayAvatar, name: displayName, radius: 24);
-                    }
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "What's on your mind?",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF8A8A8A),
-                          fontFamily: AppTheme.fontFamily,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          const Icon(Icons.location_on, size: 14, color: Color(0xFF8A8A8A)),
-                          const SizedBox(width: 4),
-                          Text(
-                            _currentLocation ?? '',
-                            style: const TextStyle(fontSize: 13, color: Color(0xFF8A8A8A)),
-                          ),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.public, size: 14, color: Color(0xFF8A8A8A)),
-                          const SizedBox(width: 4),
-                          const Text(
-                            'Public',
-                            style: TextStyle(fontSize: 13, color: Color(0xFF8A8A8A)),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
+            // ── Upload Progress Bar ────────────────────────────
+            if (_isSubmitting)
+              _UploadProgressBar(
+                step: _uploadStep,
+                progress: _uploadProgress,
+                onCancel: () {
+                  setState(() => _cancelUpload = true);
+                },
               ),
-            ),
 
-            // ── Minimalist Caption Input ──────────────────────
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: TextField(
-                controller: _contentController,
-                maxLines: null, // Auto-expand
-                minLines: 1,
-                style: const TextStyle(
-                  fontSize: 18,
-                  height: 1.4,
-                  fontWeight: FontWeight.w400,
-                  color: Color(0xFF1A1A1A),
-                  fontFamily: AppTheme.fontFamily,
-                ),
-                decoration: const InputDecoration(
-                  hintText: 'Add a caption...',
-                  hintStyle: TextStyle(
-                    fontSize: 18,
-                    color: Color(0xFFBCBCBC),
-                    fontFamily: AppTheme.fontFamily,
-                  ),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.zero,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // ── Action Pills ──────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  _CompactActionPill(
-                    icon: Icons.camera_alt,
-                    label: 'Photo/Video',
-                    iconColor: const Color(0xFF2E7D6A),
-                    onTap: _pickMedia,
-                  ),
-                  const SizedBox(width: 8),
-                  _CompactActionPill(
-                    icon: Icons.article_outlined,
-                    label: 'Article',
-                    iconColor: const Color(0xFF4285F4),
-                    onTap: () async {
-                      final result = await Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const WriteArticleScreen()),
-                      );
-                      if (result == true && mounted) {
-                        Navigator.pop(context, true); // Return to Home with refresh signal
-                      }
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  _CompactActionPill(
-                    icon: Icons.calendar_today,
-                    label: 'Event',
-                    iconColor: const Color(0xFFEA4335),
-                    onTap: () async {
-                      final result = await Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const CreateEventScreen()),
-                      );
-                      if (result == true && mounted) {
-                        Navigator.pop(context, true); // Return to Home with refresh signal
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            if (_mediaBytes != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+            Expanded(
+              child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        const Text(
-                          'Media Preview',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF8A8A8A),
+                    // ── User Header ───────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Row(
+                        children: [
+                          ValueListenableBuilder(
+                            valueListenable: UserSession.current,
+                            builder: (context, sessionData, _) {
+                              final displayAvatar = sessionData?.avatarUrl ?? profileImg;
+                              final displayName = sessionData?.displayName ?? username;
+                              return UserAvatar(imageUrl: displayAvatar, name: displayName, radius: 24);
+                            }
                           ),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                "What's on your mind?",
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                  color: Color(0xFF8A8A8A),
+                                  fontFamily: AppTheme.fontFamily,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  const Icon(Icons.location_on, size: 14, color: Color(0xFF8A8A8A)),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _currentLocation ?? '',
+                                    style: const TextStyle(fontSize: 13, color: Color(0xFF8A8A8A)),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Icon(Icons.public, size: 14, color: Color(0xFF8A8A8A)),
+                                  const SizedBox(width: 4),
+                                  const Text(
+                                    'Public',
+                                    style: TextStyle(fontSize: 13, color: Color(0xFF8A8A8A)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // ── Caption Input ──────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: TextField(
+                        controller: _contentController,
+                        focusNode: _captionFocus,
+                        maxLines: null, // Auto-expand
+                        minLines: 1,
+                        enabled: !_isSubmitting,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          height: 1.4,
+                          fontWeight: FontWeight.w400,
+                          color: Color(0xFF1A1A1A),
+                          fontFamily: AppTheme.fontFamily,
                         ),
-                        const Spacer(),
-                        GestureDetector(
-                          onTap: () => setState(() => _mediaBytes = null),
-                          child: const Text(
-                            'Remove',
+                        decoration: const InputDecoration(
+                          hintText: 'Add a caption...',
+                          hintStyle: TextStyle(
+                            fontSize: 18,
+                            color: Color(0xFFBCBCBC),
+                            fontFamily: AppTheme.fontFamily,
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                    ),
+
+                    // ── Character Counter ──────────────────────────────
+                    if (charCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                            '$charCount / $_maxChars',
                             style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFFEA4335),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              fontFamily: AppTheme.fontFamily,
+                              color: isOverLimit
+                                  ? const Color(0xFFEA4335)
+                                  : charCount > _maxChars * 0.8
+                                      ? const Color(0xFFFFA000)
+                                      : const Color(0xFFBCBCBC),
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(20),
-                      child: Image.memory(
-                        (_mediaType == 'video' ? (_thumbnailBytes ?? _mediaBytes!) : _mediaBytes!),
-                        height: 320, // Even more prominent
-                        width: double.infinity,
-                        fit: BoxFit.cover,
+                      ),
+
+                    const SizedBox(height: 16),
+
+                    // ── Action Pills ──────────────────────────────────
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        children: [
+                          _CompactActionPill(
+                            icon: Icons.camera_alt,
+                            label: 'Photo/Video',
+                            iconColor: const Color(0xFF2E7D6A),
+                            onTap: _isSubmitting ? () {} : _pickMedia,
+                          ),
+                          const SizedBox(width: 8),
+                          _CompactActionPill(
+                            icon: Icons.article_outlined,
+                            label: 'Article',
+                            iconColor: const Color(0xFF4285F4),
+                            onTap: _isSubmitting
+                                ? () {}
+                                : () async {
+                                    final result = await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const WriteArticleScreen()),
+                                    );
+                                    if (result == true && mounted) {
+                                      Navigator.pop(context, true); // Return to Home with refresh signal
+                                    }
+                                  },
+                          ),
+                          const SizedBox(width: 8),
+                          _CompactActionPill(
+                            icon: Icons.calendar_today,
+                            label: 'Event',
+                            iconColor: const Color(0xFFEA4335),
+                            onTap: _isSubmitting
+                                ? () {}
+                                : () async {
+                                    final result = await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (_) => const CreateEventScreen()),
+                                    );
+                                    if (result == true && mounted) {
+                                      Navigator.pop(context, true); // Return to Home with refresh signal
+                                    }
+                                  },
+                          ),
+                        ],
                       ),
                     ),
+
+                    // ── Media Preview ─────────────────────────────────
+                    if (_isGeneratingThumbnail)
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(20, 24, 20, 0),
+                        child: Center(
+                          child: Column(
+                            children: [
+                              SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF2E7D6A)),
+                              ),
+                              SizedBox(height: 8),
+                              Text('Generating thumbnail...', style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8A))),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                    if (_mediaBytes != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  '${_mediaType == "video" ? "Video" : "Photo"} Preview',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF8A8A8A),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                // File size badge
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF0F0F0),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    _formatFileSize(_mediaBytes!.length),
+                                    style: const TextStyle(fontSize: 11, color: Color(0xFF8A8A8A), fontWeight: FontWeight.w500),
+                                  ),
+                                ),
+                                const Spacer(),
+                                // Remove button (red icon)
+                                GestureDetector(
+                                  onTap: _isSubmitting ? null : () => setState(() {
+                                    _mediaBytes = null;
+                                    _thumbnailBytes = null;
+                                    _mediaExtension = null;
+                                    _mediaType = 'image';
+                                  }),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFEE2E2),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.close, size: 14, color: Color(0xFFEA4335)),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'Remove',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFFEA4335),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            // Media preview with play overlay for video
+                            Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: Image.memory(
+                                    (_mediaType == 'video' ? (_thumbnailBytes ?? _mediaBytes!) : _mediaBytes!),
+                                    height: 320,
+                                    width: double.infinity,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                                // Play icon overlay for video
+                                if (_mediaType == 'video')
+                                  Container(
+                                    width: 56,
+                                    height: 56,
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withValues(alpha: 0.5),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 36),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 40),
+                    // Keyboard-safe padding
+                    SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
                   ],
                 ),
               ),
-
-            const SizedBox(height: 40),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '${bytes}B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)}KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Upload Progress Bar
+// ─────────────────────────────────────────────────────────────
+class _UploadProgressBar extends StatelessWidget {
+  final String step;
+  final double progress;
+  final VoidCallback? onCancel;
+
+  const _UploadProgressBar({required this.step, required this.progress, this.onCancel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF2E7D6A),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  step,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF6E6E73),
+                    fontFamily: AppTheme.fontFamily,
+                  ),
+                ),
+              ),
+              Text(
+                '${(progress * 100).toInt()}%',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF2E7D6A),
+                  fontFamily: AppTheme.fontFamily,
+                ),
+              ),
+              if (onCancel != null) ...[
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: onCancel,
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFEA4335),
+                      fontFamily: AppTheme.fontFamily,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 4,
+              backgroundColor: const Color(0xFFE8E8E8),
+              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF2E7D6A)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -606,54 +967,6 @@ class _PostBtn extends StatelessWidget {
   }
 }
 
-class _ActionPill extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color iconColor;
-  final Widget? trailing;
-  final VoidCallback onTap;
 
-  const _ActionPill({
-    required this.icon,
-    required this.label,
-    required this.iconColor,
-    this.trailing,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFEEEEEE)),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: iconColor, size: 20),
-            const SizedBox(width: 10),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF1A1A1A),
-                fontFamily: AppTheme.fontFamily,
-              ),
-            ),
-            if (trailing != null) ...[
-              const Spacer(),
-              trailing!,
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-
+/// Sentinel exception for user-cancelled uploads
+class _UploadCancelled implements Exception {}

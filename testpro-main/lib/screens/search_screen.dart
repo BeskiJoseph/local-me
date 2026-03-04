@@ -329,6 +329,19 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
                     CachedNetworkImage(
                       imageUrl: ProxyHelper.getUrl(post.thumbnailUrl ?? post.mediaUrl!),
                       fit: BoxFit.cover,
+                      memCacheWidth: 400,
+                      placeholder: (context, url) => Container(
+                        color: Colors.grey.shade100,
+                        child: const Center(
+                          child: CircularProgressIndicator(strokeWidth: 1, color: Colors.grey),
+                        ),
+                      ),
+                      errorWidget: (context, url, error) => Container(
+                        color: Colors.grey.shade100,
+                        child: const Center(
+                          child: Icon(Icons.error_outline, color: Colors.grey, size: 20),
+                        ),
+                      ),
                     )
                   else
                     Container(

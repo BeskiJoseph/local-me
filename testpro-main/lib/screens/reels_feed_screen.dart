@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:video_player/video_player.dart';
 import '../models/post.dart';
 import '../models/comment.dart';
 import '../services/social_service.dart';
 import '../services/comment_service.dart';
 import '../services/backend_service.dart';
+import '../utils/safe_error.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
 import '../core/utils/navigation_utils.dart';
@@ -58,7 +60,7 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
     } else if (mounted) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: ${result.error}')),
+        SnackBar(content: Text(safeErrorMessage(result.error))),
       );
     }
   }
@@ -535,17 +537,22 @@ class _ReelPostItemState extends State<ReelPostItem> {
               ),
             );
     } else if (widget.post.mediaUrl != null) {
-      return Image.network(
-        ProxyHelper.getUrl(widget.post.mediaUrl!),
+      return CachedNetworkImage(
+        imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          return Container(
-            color: Colors.grey[900],
-            child: const Center(
-              child: Icon(Icons.broken_image, color: Colors.white, size: 50),
-            ),
-          );
-        },
+        memCacheWidth: 1080,
+        placeholder: (context, url) => Container(
+          color: Colors.grey[900],
+          child: const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          ),
+        ),
+        errorWidget: (context, url, error) => Container(
+          color: Colors.grey[900],
+          child: const Center(
+            child: Icon(Icons.broken_image, color: Colors.white, size: 50),
+          ),
+        ),
       );
     } else {
       return Container(

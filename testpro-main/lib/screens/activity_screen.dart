@@ -10,6 +10,7 @@ import '../config/app_theme.dart';
 import 'post_detail_screen.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
+import '../services/notification_data_service.dart';
 
 class ActivityScreen extends StatefulWidget {
   const ActivityScreen({super.key});
@@ -36,38 +37,44 @@ class _ActivityScreenState extends State<ActivityScreen>
 
   Future<void> _loadNotifications({bool refresh = false}) async {
     if (!mounted) return;
-    if (refresh) {
-      setState(() {
-        _isLoading = true;
-        _notifications.clear();
-      });
-    }
+    if (refresh) setState(() { _isLoading = true; _notifications.clear(); });
 
     try {
-      final response = await BackendService.getNotifications();
+      final items = await NotificationDataService.fetchNotifications();
       if (!mounted) return;
-
-      if (response.success && response.data != null) {
-        setState(() {
-          final List<ActivityNotification> items = response.data!
-              .map((e) => ActivityNotification.fromJson(e))
-              .toList();
-              
-          if (refresh) {
-            _notifications = items;
-          } else {
-            _notifications.addAll(items);
-          }
-          
-          _isLoading = false;
-          _hasMore = false; // Backend currently returns all, so we stop here
-        });
-      } else {
-        setState(() => _isLoading = false);
-      }
+      setState(() {
+        _notifications = items;
+        _isLoading = false;
+        _hasMore = false;
+      });
     } catch (e) {
       if (kDebugMode) debugPrint('Error loading notifications: $e');
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _markAllAsRead() async {
+    // Optimistic — mark all unread locally first
+    setState(() {
+      _notifications = _notifications.map((n) => ActivityNotification(
+        id: n.id,
+        fromUserId: n.fromUserId,
+        fromUserName: n.fromUserName,
+        fromUserProfileImage: n.fromUserProfileImage,
+        toUserId: n.toUserId,
+        type: n.type,
+        postId: n.postId,
+        postThumbnail: n.postThumbnail,
+        commentText: n.commentText,
+        timestamp: n.timestamp,
+        isRead: true,
+      )).toList();
+    });
+
+    try {
+      await NotificationDataService.markAllAsRead(); // also resets ValueNotifier badge
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error marking all as read: $e');
     }
   }
 
@@ -152,7 +159,7 @@ class _ActivityScreenState extends State<ActivityScreen>
                 ),
                 const Spacer(),
                 GestureDetector(
-                  onTap: () {},
+                  onTap: _markAllAsRead,
                   child: const Text(
                     'Mark all as read',
                     style: TextStyle(

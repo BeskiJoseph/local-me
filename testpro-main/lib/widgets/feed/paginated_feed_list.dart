@@ -5,9 +5,12 @@ import '../../services/backend_service.dart';
 import '../../core/state/feed_controller.dart';
 import '../../core/state/feed_session.dart';
 import '../../models/post.dart';
+import '../../config/app_theme.dart';
 import '../nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
+import '../../screens/new_post_screen.dart';
 import '../../utils/safe_error.dart';
+import 'feed_shimmer.dart';
 
 class PaginatedFeedList extends StatefulWidget {
   final String feedType;
@@ -29,6 +32,9 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
   final ScrollController _scrollController = ScrollController();
   final FeedController _feedController = FeedController();
   final Map<String, bool?> _likedPostIds = {};
+  
+  /// Local cache of hidden post IDs — survives feed refreshes within the session
+  static final Set<String> _hiddenPosts = {};
   
   Timer? _debounce;
   Timer? _pollingTimer;
@@ -98,6 +104,8 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         }
         break;
       case FeedEventType.postDeleted:
+        final postId = event.data is String ? event.data as String : event.data.toString();
+        _hiddenPosts.add(postId); // Cache so it stays hidden after refresh
         _feedController.deletePost(event.data);
         break;
       case FeedEventType.postLiked:
@@ -217,7 +225,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         final hasMore = _feedController.hasMore;
 
         if (posts.isEmpty && isLoading) {
-          return const Center(child: CircularProgressIndicator());
+          return const FeedShimmer(itemCount: 3);
         }
         
         if (error != null && posts.isEmpty) {
@@ -243,7 +251,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
                     return Container(
                       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                       margin: const EdgeInsets.only(bottom: 8),
-                      color: Colors.blue.withOpacity(0.05),
+                      color: Colors.blue.withValues(alpha: 0.05),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -283,6 +291,10 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
                   }
                   
                   final post = posts[adjustedIndex];
+                  // Skip posts the user has hidden (persisted across refreshes)
+                  if (_hiddenPosts.contains(post.id)) {
+                    return const SizedBox.shrink();
+                  }
                   if (post.isEvent || post.category.toLowerCase() == 'events') {
                     return EventPostCard(post: post);
                   }
@@ -294,38 +306,14 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
               ),
             ),
             if (_newPostsCount > 0)
-              Positioned(
-                top: 16,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: GestureDetector(
-                    onTap: () {
-                      _scrollController.animateTo(0,
-                          duration: const Duration(milliseconds: 500),
-                          curve: Curves.easeOut);
-                      setState(() => _newPostsCount = 0);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.black87,
-                        borderRadius: BorderRadius.circular(20),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
-                            blurRadius: 4,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        '↑ $_newPostsCount new posts nearby',
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-                ),
+              _NewPostsBanner(
+                count: _newPostsCount,
+                onTap: () {
+                  _scrollController.animateTo(0,
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeOut);
+                  setState(() => _newPostsCount = 0);
+                },
               ),
           ],
         );
@@ -338,10 +326,22 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
       padding: const EdgeInsets.all(16.0),
       child: Column(
         children: [
-          const Text('Failed to load more posts'),
-          TextButton(
+          const Icon(Icons.wifi_off_rounded, size: 20, color: Color(0xFF8A8A8A)),
+          const SizedBox(height: 8),
+          const Text(
+            'Unable to load more posts',
+            style: TextStyle(
+              fontFamily: AppTheme.fontFamily,
+              fontSize: 14,
+              color: Color(0xFF8A8A8A),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
             onPressed: () => _loadMorePosts(),
-            child: const Text('Try Again'),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Retry'),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.primary),
           ),
         ],
       ),
@@ -350,33 +350,228 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
 
   Widget _buildErrorState(String error) {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.error_outline, size: 48, color: Colors.red),
-          const SizedBox(height: 16),
-          Text(safeErrorMessage(error, fallback: 'Failed to load posts.')),
-          ElevatedButton(
-            onPressed: () => _loadMorePosts(refresh: true),
-            child: const Text('Retry'),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: const BoxDecoration(
+                color: Color(0xFFFFEBEE),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.error_outline_rounded, size: 36, color: Color(0xFFE53935)),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Something went wrong',
+              style: TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              safeErrorMessage(error, fallback: 'Failed to load posts.'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 14,
+                color: Color(0xFF8A8A8A),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () => _loadMorePosts(refresh: true),
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+                label: const Text('Try Again'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildEmptyState(String feedType) {
+    final isLocal = feedType == 'local';
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.post_add, size: 64, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text(
-            'No $feedType posts available',
-            style: const TextStyle(fontSize: 18, color: Colors.grey),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isLocal ? Icons.near_me_rounded : Icons.public_rounded,
+                size: 40,
+                color: AppTheme.primary,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              isLocal ? 'No posts near you yet' : 'No global posts yet',
+              style: const TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isLocal
+                ? 'Be the first to share something with your neighborhood!'
+                : 'Be the first to share something with the world!',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 14,
+                color: Color(0xFF8A8A8A),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const NewPostScreen()),
+                  );
+                },
+                icon: const Icon(Icons.edit_rounded, size: 20),
+                label: const Text('Create Post'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  textStyle: const TextStyle(
+                    fontFamily: AppTheme.fontFamily,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Animated "New Posts" floating banner
+// ─────────────────────────────────────────────────────────────
+class _NewPostsBanner extends StatefulWidget {
+  final int count;
+  final VoidCallback onTap;
+
+  const _NewPostsBanner({required this.count, required this.onTap});
+
+  @override
+  State<_NewPostsBanner> createState() => _NewPostsBannerState();
+}
+
+class _NewPostsBannerState extends State<_NewPostsBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0, -1.5),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutBack,
+    ));
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 12,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: SlideTransition(
+          position: _slideAnimation,
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.primary,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.primary.withValues(alpha: 0.35),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.arrow_upward_rounded, color: Colors.white, size: 16),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${widget.count} new post${widget.count == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: AppTheme.fontFamily,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-        ],
+        ),
       ),
     );
   }

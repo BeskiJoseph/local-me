@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../../models/post.dart';
 import '../../utils/proxy_helper.dart';
 
@@ -21,18 +22,22 @@ class EventCardImage extends StatelessWidget {
           AspectRatio(
             // Instagram-style compact for events: 4:5
             aspectRatio: 4 / 5,
-            child: Image.network(
-              ProxyHelper.getUrl(post.mediaUrl!),
+            child: CachedNetworkImage(
+              imageUrl: ProxyHelper.getUrl(post.mediaUrl!),
               fit: BoxFit.cover,
-              cacheWidth: 800, // Optimize memory usage
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: Colors.grey.shade200,
-                  child: const Center(
-                    child: Icon(Icons.event, size: 48, color: Colors.grey),
-                  ),
-                );
-              },
+              memCacheWidth: 800,
+              placeholder: (context, url) => Container(
+                color: Colors.grey.shade100,
+                child: const Center(
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.grey),
+                ),
+              ),
+              errorWidget: (context, url, error) => Container(
+                color: Colors.grey.shade200,
+                child: const Center(
+                  child: Icon(Icons.event, size: 48, color: Colors.grey),
+                ),
+              ),
             ),
           ),
           // Event Type Badge

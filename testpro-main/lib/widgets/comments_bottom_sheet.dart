@@ -4,9 +4,9 @@ import '../models/post.dart';
 import '../models/comment.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
-import '../services/comment_service.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/utils/time_utils.dart';
+import '../utils/safe_error.dart';
 import 'dart:async';
 
 /// YouTube-style advanced comments bottom sheet
@@ -41,6 +41,7 @@ class CommentsBottomSheet extends StatefulWidget {
 
 class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   final TextEditingController _commentController = TextEditingController();
+  final FocusNode _commentFocus = FocusNode();
   final ScrollController _scrollController = ScrollController();
   
   List<Comment> _comments = [];
@@ -58,8 +59,12 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   @override
   void initState() {
     super.initState();
+    _commentController.addListener(() => setState(() {}));
     _loadComments(refresh: true);
     _scrollController.addListener(_scrollListener);
+    Future.microtask(() {
+      if (mounted) _commentFocus.requestFocus();
+    });
   }
 
   void _scrollListener() {
@@ -72,6 +77,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   @override
   void dispose() {
     _commentController.dispose();
+    _commentFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -118,7 +124,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             _isLoadingMore = false;
           });
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error loading comments: ${response.error}')),
+            SnackBar(content: Text(safeErrorMessage(response.error))),
           );
         }
       }
@@ -132,7 +138,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     }
   }
 
-  Future<void> _sendComment({String? parentId, String? replyAuthorName}) async {
+  Future<void> _sendComment({String? parentId}) async {
     final text = _commentController.text.trim();
     final user = AuthService.currentUser;
 
@@ -143,6 +149,13 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     if (spamKeywords.any((k) => text.toLowerCase().contains(k))) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Your comment contains prohibited content.')),
+      );
+      return;
+    }
+
+    if (text.length > 300) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Comment is too long. Maximum 300 characters.')),
       );
       return;
     }
@@ -162,6 +175,15 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     setState(() {
       if (parentId == null) {
         _comments.insert(0, optimisticComment); // Newest comments first
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted && _scrollController.hasClients) {
+            _scrollController.animateTo(
+              0.0,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+            );
+          }
+        });
       } else {
         _repliesMap[parentId] ??= [];
         _repliesMap[parentId]!.add(optimisticComment);
@@ -201,12 +223,16 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             _repliesMap[parentId]!.removeWhere((c) => c.id == optimisticComment.id);
           }
         });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(safeErrorMessage(e))),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
   }
+
+  bool get _canSend => _commentController.text.trim().isNotEmpty && !_isSending;
 
   Future<void> _loadReplies(String commentId) async {
     if (_loadingReplies.contains(commentId)) return;
@@ -337,7 +363,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: isActive ? const Color(0xFF006D6D).withOpacity(0.1) : Colors.transparent,
+          color: isActive ? const Color(0xFF006D6D).withValues(alpha: 0.1) : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: isActive ? const Color(0xFF006D6D) : Colors.grey.shade300),
         ),
@@ -352,7 +378,11 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('No comments yet.'),
+            Icon(Icons.chat_bubble_outline_rounded, size: 40, color: Colors.grey.shade300),
+            const SizedBox(height: 12),
+            Text('No comments yet', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey.shade500)),
+            const SizedBox(height: 4),
+            Text('Be the first to share your thoughts', style: TextStyle(fontSize: 13, color: Colors.grey.shade400)),
             const SizedBox(height: 12),
             TextButton(onPressed: () => _loadComments(refresh: true), child: const Text('Refresh')),
           ],
@@ -394,14 +424,18 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
           Expanded(
             child: TextField(
               controller: _commentController,
-              decoration: const InputDecoration(hintText: 'Add a comment...', border: InputBorder.none, hintStyle: TextStyle(fontSize: 14)),
+              focusNode: _commentFocus,
+              decoration: const InputDecoration(hintText: 'Add a comment...', border: InputBorder.none, hintStyle: TextStyle(fontSize: 14), counterText: ''),
               style: const TextStyle(fontSize: 14),
               maxLines: null,
+              maxLength: 300,
             ),
           ),
           IconButton(
-            icon: _isSending ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.send_rounded, color: Color(0xFF006D6D)),
-            onPressed: () => _isSending ? null : _sendComment(),
+            icon: _isSending 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) 
+                : Icon(Icons.send_rounded, color: _canSend ? const Color(0xFF006D6D) : Colors.grey.shade400),
+            onPressed: _canSend ? _sendComment : null,
           ),
         ],
       ),
@@ -556,7 +590,7 @@ class _ViewRepliesButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(width: 30, height: 1, color: const Color(0xFF006D6D).withOpacity(0.3)),
+              Container(width: 30, height: 1, color: const Color(0xFF006D6D).withValues(alpha: 0.3)),
               const SizedBox(width: 12),
               Text(
                 'View $count replies', 

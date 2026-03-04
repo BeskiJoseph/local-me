@@ -11,21 +11,27 @@ const router = express.Router();
  */
 router.get('/', authenticate, async (req, res, next) => {
     try {
-        logger.info({ userId: req.user.uid }, 'Fetching notifications');
+        const { type } = req.query;
+        logger.info({ userId: req.user.uid, type }, 'Fetching notifications');
+
+        let query = db.collection('notifications')
+            .where('toUserId', '==', req.user.uid);
+
+        if (type) {
+            query = query.where('type', '==', type);
+        }
 
         let snapshot;
         try {
             // Primary query: orderBy timestamp (requires composite index)
-            snapshot = await db.collection('notifications')
-                .where('toUserId', '==', req.user.uid)
+            snapshot = await query
                 .orderBy('timestamp', 'desc')
                 .limit(50)
                 .get();
         } catch (indexError) {
             // Fallback: if composite index doesn't exist, query without orderBy
             logger.warn({ error: indexError.message }, 'Notifications index error, falling back to unordered query');
-            snapshot = await db.collection('notifications')
-                .where('toUserId', '==', req.user.uid)
+            snapshot = await query
                 .limit(50)
                 .get();
         }
@@ -51,6 +57,33 @@ router.get('/', authenticate, async (req, res, next) => {
         return res.json({ success: true, data: notifications });
     } catch (err) {
         logger.error({ error: err.message, stack: err.stack }, 'Notifications fetch error');
+        next(err);
+    }
+});
+
+/**
+ * @route   PATCH /api/notifications/read-all
+ * @desc    Mark all unread notifications as read
+ */
+router.patch('/read-all', authenticate, async (req, res, next) => {
+    try {
+        const snapshot = await db.collection('notifications')
+            .where('toUserId', '==', req.user.uid)
+            .where('isRead', '==', false)
+            .limit(500)
+            .get();
+
+        if (snapshot.empty) return res.json({ success: true, count: 0 });
+
+        const batch = db.batch();
+        snapshot.docs.forEach(doc => {
+            batch.update(doc.ref, { isRead: true });
+        });
+
+        await batch.commit();
+
+        return res.json({ success: true, count: snapshot.size });
+    } catch (err) {
         next(err);
     }
 });

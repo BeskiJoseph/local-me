@@ -4,6 +4,7 @@ import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/utils/navigation_utils.dart';
+import '../utils/safe_error.dart';
 
 /// User search card for search results
 class UserSearchCard extends StatefulWidget {
@@ -62,11 +63,15 @@ class _UserSearchCardState extends State<UserSearchCard> {
 
     try {
       final response = await BackendService.toggleFollow(widget.userId);
-      // Trust the toggle response, no need for second API call
       if (mounted && response.success) {
         setState(() {
           _isFollowing = response.data ?? !_isFollowing;
         });
+      } else if (mounted && !response.success) {
+        setState(() => _isFollowing = !_isFollowing);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(safeErrorMessage(response.error))),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -74,7 +79,7 @@ class _UserSearchCardState extends State<UserSearchCard> {
           _isFollowing = !_isFollowing; // Revert on error
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text(safeErrorMessage(e))),
         );
       }
     } finally {

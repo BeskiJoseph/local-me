@@ -6,12 +6,10 @@ import '../services/geocoding_service.dart';
 import '../services/user_service.dart';
 import '../services/notification_data_service.dart';
 import '../services/auth_service.dart';
-import '../models/notification.dart';
 import 'search_screen.dart';
 import 'activity_screen.dart';
 import 'personal_account.dart';
 import 'community_screen.dart';
-import 'post_type_selector_sheet.dart';
 import '../widgets/feed/paginated_feed_list.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
@@ -214,35 +212,36 @@ class _HomeScreenState extends State<HomeScreen> {
             index: _feedToggleIndex,
             children: [
               _isLoadingLocation
-                  ? const Center(child: CircularProgressIndicator(color: AppTheme.primary))
+                  ? const _LocationLoadingState()
                   : _locationError != null
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.location_off, size: 48, color: Colors.orange),
-                              const SizedBox(height: 16),
-                              Text(_locationError!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),
-                              ElevatedButton.icon(
-                                onPressed: _detectLocation,
-                                icon: const Icon(Icons.refresh),
-                                label: const Text('Retry Location'),
-                              )
-                            ],
-                          ),
+                      ? _LocationErrorState(
+                          error: _locationError!,
+                          onRetry: _detectLocation,
                         )
-                      : PaginatedFeedList(
-                          key: ValueKey('nearby_$_feedRevision'),
-                          feedType: 'local',
-                          userCity: _currentCity,
-                          userCountry: _currentCountry,
+                      : RefreshIndicator(
+                          onRefresh: () async {
+                            setState(() => _feedRevision++);
+                          },
+                          color: AppTheme.primary,
+                          child: PaginatedFeedList(
+                            key: ValueKey('nearby_$_feedRevision'),
+                            feedType: 'local',
+                            userCity: _currentCity,
+                            userCountry: _currentCountry,
+                          ),
                         ),
               _visitedFeedIndexes.contains(1)
-                  ? PaginatedFeedList(
-                      key: ValueKey('global_$_feedRevision'),
-                      feedType: 'global',
-                      userCity: null,
-                      userCountry: null,
+                  ? RefreshIndicator(
+                      onRefresh: () async {
+                        setState(() => _feedRevision++);
+                      },
+                      color: AppTheme.primary,
+                      child: PaginatedFeedList(
+                        key: ValueKey('global_$_feedRevision'),
+                        feedType: 'global',
+                        userCity: null,
+                        userCountry: null,
+                      ),
                     )
                   : const SizedBox.shrink(),
             ],
@@ -405,30 +404,14 @@ class _ToggleItem extends StatelessWidget {
 }
 
 // Extracted widget to prevent stream recreation on parent rebuild
-class _NotificationBadge extends StatefulWidget {
+class _NotificationBadge extends StatelessWidget {
   const _NotificationBadge();
 
   @override
-  State<_NotificationBadge> createState() => _NotificationBadgeState();
-}
-
-class _NotificationBadgeState extends State<_NotificationBadge> {
-  late final Stream<List<ActivityNotification>> _notificationsStream;
-
-  @override
-  void initState() {
-    super.initState();
-    final userId = AuthService.currentUser?.uid ?? '';
-    _notificationsStream = NotificationDataService.notificationsStream(userId);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<ActivityNotification>>(
-      stream: _notificationsStream,
-      builder: (context, snapshot) {
-        final notifications = snapshot.data ?? [];
-        final unreadCount = notifications.where((n) => !n.isRead).length;
+    return ValueListenableBuilder<int>(
+      valueListenable: NotificationDataService.unreadCount,
+      builder: (context, unreadCount, child) {
         if (unreadCount == 0) return const SizedBox.shrink();
         return Positioned(
           top: 4,
@@ -446,14 +429,181 @@ class _NotificationBadgeState extends State<_NotificationBadge> {
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  fontFamily: AppTheme.fontFamily,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ),
           ),
         );
       },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Location Loading State — branded, polished
+// ─────────────────────────────────────────────────────────────
+class _LocationLoadingState extends StatefulWidget {
+  const _LocationLoadingState();
+
+  @override
+  State<_LocationLoadingState> createState() => _LocationLoadingStateState();
+}
+
+class _LocationLoadingStateState extends State<_LocationLoadingState>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.6, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: FadeTransition(
+        opacity: _pulseAnimation,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.location_on_rounded,
+                size: 36,
+                color: AppTheme.primary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Finding posts near you...',
+              style: TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF4A4A4A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Discovering your neighborhood',
+              style: TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 13,
+                color: Color(0xFF8A8A8A),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: AppTheme.primary,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Location Error State — cleaner UX
+// ─────────────────────────────────────────────────────────────
+class _LocationErrorState extends StatelessWidget {
+  final String error;
+  final VoidCallback onRetry;
+
+  const _LocationErrorState({
+    required this.error,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.location_off_rounded,
+                size: 36,
+                color: Color(0xFFFF9800),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Can\'t find your location',
+              style: TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF1A1A1A),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: AppTheme.fontFamily,
+                fontSize: 14,
+                color: Color(0xFF8A8A8A),
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+                label: const Text('Try Again'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

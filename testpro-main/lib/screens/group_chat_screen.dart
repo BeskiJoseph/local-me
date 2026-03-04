@@ -1,11 +1,12 @@
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/post.dart';
 import '../models/chat_message.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';
 import 'package:intl/intl.dart';
 import '../shared/widgets/user_avatar.dart';
+import '../utils/safe_error.dart';
 
 class GroupChatScreen extends StatefulWidget {
   final Post event;
@@ -18,6 +19,7 @@ class GroupChatScreen extends StatefulWidget {
 
 class _GroupChatScreenState extends State<GroupChatScreen> {
   final TextEditingController _messageController = TextEditingController();
+  final FocusNode _messageFocus = FocusNode();
   final ScrollController _scrollController = ScrollController();
   late final Stream<List<ChatMessage>> _messagesStream;
   
@@ -26,36 +28,65 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   final Set<String> _sendingMessageIds = {};
   final Set<String> _confirmedMessageIds = {};
 
+  bool get _canSend => _messageController.text.trim().isNotEmpty;
+
   @override
   void initState() {
     super.initState();
+    _messageController.addListener(() => setState(() {}));
     _messagesStream = ChatService.messagesStream(widget.event.id);
+    Future.microtask(() => _messageFocus.requestFocus());
   }
 
-  void _sendMessage() async {
+  @override
+  void dispose() {
+    _messageController.dispose();
+    _messageFocus.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _sendMessage({ChatMessage? retryMessage}) async {
     final user = AuthService.currentUser;
-    if (user == null || _messageController.text.trim().isEmpty) return;
+    if (user == null || (!_canSend && retryMessage == null)) return;
 
-    final text = _messageController.text.trim();
-    _messageController.clear();
+    ChatMessage optimisticMessage;
+    String tempId;
 
-    // Create optimistic message with temporary ID
-    final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
-    final optimisticMessage = ChatMessage(
-      id: tempId,
-      senderId: user.uid,
-      senderName: user.displayName ?? 'User',
-      senderProfileImage: user.photoURL,
-      text: text,
-      timestamp: DateTime.now(),
-    );
+    if (retryMessage != null) {
+      optimisticMessage = retryMessage;
+      tempId = retryMessage.id;
+      if (!_pendingMessages.any((m) => m.id == tempId)) {
+        setState(() {
+          _pendingMessages.add(optimisticMessage);
+        });
+      }
+    } else {
+      final text = _messageController.text.trim();
+      _messageController.clear();
 
-    // Show immediately (optimistic UI)
+      // Create optimistic message with temporary ID
+      tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
+      optimisticMessage = ChatMessage(
+        id: tempId,
+        senderId: user.uid,
+        senderName: user.displayName ?? 'User',
+        senderProfileImage: user.photoURL,
+        text: text,
+        timestamp: DateTime.now(),
+      );
+
+      // Show immediately (optimistic UI)
+      setState(() {
+        _pendingMessages.add(optimisticMessage);
+      });
+    }
+
     setState(() {
-      _pendingMessages.add(optimisticMessage);
       _sendingMessageIds.add(tempId);
     });
     
+    HapticFeedback.lightImpact();
     // Scroll to bottom immediately
     _scrollToBottom();
 
@@ -76,12 +107,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Failed to send message. Tap to retry.'),
+            content: Text(safeErrorMessage(e)),
             action: SnackBarAction(
               label: 'Retry',
               onPressed: () {
-                _messageController.text = text;
-                _sendMessage();
+                _sendMessage(retryMessage: optimisticMessage);
               },
             ),
           ),
@@ -94,11 +124,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
   
   void _scrollToBottom() {
+    if (!_scrollController.hasClients) return;
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           0.0,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
       }
@@ -188,10 +219,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   !matchedPendingIds.contains(m.id)
                 ).toList();
                 
-                // Combine server messages with pending optimistic messages
                 final allMessages = [...pendingToShow, ...serverMessages];
                 // Sort by timestamp (newest first for reverse list)
                 allMessages.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+                if (allMessages.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.chat_bubble_outline_rounded, size: 64, color: Colors.grey.shade300),
+                        const SizedBox(height: 16),
+                        Text(
+                          "Start the conversation",
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey.shade400, fontFamily: 'Inter'),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          "Send the first message.",
+                          style: TextStyle(fontSize: 14, color: Colors.grey.shade500, fontFamily: 'Inter'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
 
                 return ListView.builder(
                   controller: _scrollController,
@@ -202,6 +253,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     final message = allMessages[index];
                     final isMe = message.senderId == user?.uid;
                     final isPending = _sendingMessageIds.contains(message.id);
+
+                    if (index == 0 && !isMe && !isPending) {
+                      // Call safe scroll if we are very close to bottom and new message arrives
+                      if (_scrollController.hasClients && _scrollController.offset < 50) {
+                        _scrollToBottom();
+                      }
+                    }
 
                     return _buildMessageBubble(message, isMe, isPending: isPending);
                   },
@@ -310,12 +368,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 ),
                 if (isPending && isMe) ...[
                   const SizedBox(width: 4),
+                  Icon(Icons.schedule, size: 10, color: Colors.grey.shade400),
+                  const SizedBox(width: 3),
                   Text(
-                    'Sending...',
+                    'sending',
                     style: TextStyle(
                       fontSize: 10,
                       color: Colors.grey.shade400,
-                      fontStyle: FontStyle.italic,
                     ),
                   ),
                 ],
@@ -336,6 +395,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       ),
       child: SafeArea(
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             Expanded(
               child: Container(
@@ -346,22 +406,28 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 ),
                 child: TextField(
                   controller: _messageController,
+                  focusNode: _messageFocus,
+                  maxLength: 1000,
+                  maxLines: null,
+                  minLines: 1,
+                  textInputAction: TextInputAction.newline,
                   decoration: const InputDecoration(
                     hintText: 'Type a message...',
                     border: InputBorder.none,
                     hintStyle: TextStyle(fontSize: 14),
+                    counterText: '',
                   ),
-                  onSubmitted: (_) => _sendMessage(),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             GestureDetector(
-              onTap: _sendMessage,
+              onTap: _canSend ? () => _sendMessage() : null,
               child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: const BoxDecoration(
-                  color: Color(0xFF00B87C),
+                margin: const EdgeInsets.only(bottom: 4),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _canSend ? const Color(0xFF00B87C) : Colors.grey.shade300,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.send, color: Colors.white, size: 20),

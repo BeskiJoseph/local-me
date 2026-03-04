@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'media_upload_service.dart';
 import 'auth_service.dart';
 import '../models/api_response.dart';
+import '../core/auth/auth_event_stream.dart';
 
 /// Facade for Backend functionality.
 /// Uses a singleton [BackendClient] to perform actual requests.
@@ -66,8 +68,9 @@ class BackendService {
       _instance.addComment(postId, text, parentId: parentId);
   static Future<ApiResponse<List<dynamic>>> search({required String query, String type = 'posts', int limit = 20}) => 
       _instance.search(query: query, type: type, limit: limit);
-  static Future<ApiResponse<List<dynamic>>> getNotifications() => _instance.getNotifications();
+  static Future<ApiResponse<List<dynamic>>> getNotifications({String? type}) => _instance.getNotifications(type: type);
   static Future<ApiResponse<bool>> markNotificationAsRead(String id) => _instance.markNotificationAsRead(id);
+  static Future<ApiResponse<int>> markAllNotificationsAsRead() => _instance.markAllNotificationsAsRead();
   static Future<ApiResponse<Map<String, dynamic>>> checkLikeState(String postId) => _instance.checkLikeState(postId);
   static Future<ApiResponse<bool>> checkFollowState(String targetUserId) => _instance.checkFollowState(targetUserId);
   static Future<ApiResponse<bool>> checkUsername(String username) => _instance.checkUsername(username);
@@ -78,6 +81,9 @@ class BackendService {
   static Future<ApiResponse<bool>> muteUser(String userId) => _instance.muteUser(userId);
   static Future<ApiResponse<bool>> unmuteUser(String userId) => _instance.unmuteUser(userId);
   static Future<ApiResponse<bool>> reportPost(String postId, String reason) => _instance.reportPost(postId, reason);
+  static Future<ApiResponse<bool>> savePost(String postId) => _instance.savePost(postId);
+  static Future<ApiResponse<bool>> unsavePost(String postId) => _instance.unsavePost(postId);
+  static Future<ApiResponse<bool>> hidePost(String postId) => _instance.hidePost(postId);
   static Future<ApiResponse<List<dynamic>>> getNewPostsSince({
     required double lat,
     required double lng,
@@ -93,6 +99,10 @@ class BackendService {
   // --- Session Management ---
   static Future<void> syncCustomTokens() => BackendClient.syncCustomTokens();
   static void clearSession() => BackendClient.clearSession();
+  static Future<void> validateServer() => _instance.validateServer();
+
+  /// Stream of authentication failures. Listen to this to trigger global logout.
+  static Stream<void> get onAuthFailure => BackendClient.authFailureController.stream;
 }
 
 
@@ -147,6 +157,9 @@ class BackendClient {
   static Future<bool>? _refreshFuture; // Single-flight mutex for token refresh
   static bool _customSessionUnsupported = false;
   static bool _sessionCleared = false; // Prevents ghost session restoration after logout
+  
+  /// Controller for global authentication failures (e.g. persistent 401s)
+  static final StreamController<void> authFailureController = StreamController<void>.broadcast();
 
   /// Exchanges a Firebase ID Token for a custom Access/Refresh Token pair.
   /// Deduplicated to prevent concurrent sync calls.
@@ -260,9 +273,14 @@ class BackendClient {
         return await _sendRequest(requestFn, retried: true);
       } else {
         debugPrint('❌ Firebase token refresh failed: User signed out?');
+        authFailureController.add(null);
       }
     } else if (response.statusCode == 401 && retried) {
       debugPrint('🚨 Auth 401 persists after retry. Backend is rejecting fresh token.');
+      authFailureController.add(null);
+    } else if (response.statusCode == 403) {
+      debugPrint('🚫 Auth 403: Forbidden. Local session might be corrupt.');
+      authFailureController.add(null);
     }
     return response;
   }
@@ -331,13 +349,27 @@ class BackendClient {
 
   ApiResponse<T> _processResponse<T>(http.Response response, T Function(dynamic data) mapper) {
     try {
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        if (kDebugMode) debugPrint('🚨 GLOBAL AUTH FAILURE: ${response.statusCode}');
+        AuthEventStream.emitSessionExpired();
+      }
       final Map<String, dynamic> body = jsonDecode(response.body);
-      return ApiResponse<T>.fromJson(body, mapper);
+      final apiResponse = ApiResponse<T>.fromJson(body, mapper);
+      
+      // If backend explicitly says success=false but ApiResponse didn't catch a nice message
+      if (!apiResponse.success && (apiResponse.error == null || apiResponse.error!.isEmpty)) {
+         return ApiResponse<T>(
+           success: false,
+           error: 'Something went wrong. Please try again.',
+           errorCode: 'SERVER_ERROR',
+         );
+      }
+      return apiResponse;
     } catch (e) {
       debugPrint('API Error: ${response.statusCode} - ${response.body}');
       return ApiResponse<T>(
         success: false,
-        error: 'Network or Parsing Error: $e',
+        error: 'Unable to connect. Please check your internet connection.',
         errorCode: 'NETWORK_ERROR',
       );
     }
@@ -550,10 +582,11 @@ class BackendClient {
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
-  Future<ApiResponse<List<dynamic>>> getNotifications() async {
+  Future<ApiResponse<List<dynamic>>> getNotifications({String? type}) async {
     try {
+      final queryParams = type != null ? '?type=$type' : '';
       final resp = await _sendRequest((token) async => await _client.get(
-        Uri.parse('$_baseUrl/api/notifications'),
+        Uri.parse('$_baseUrl/api/notifications$queryParams'),
         headers: await _getHeaders(token),
       ));
       return _processResponse(resp, (d) => d as List<dynamic>);
@@ -567,6 +600,16 @@ class BackendClient {
         headers: await _getHeaders(token),
       ));
       return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<int>> markAllNotificationsAsRead() async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.patch(
+        Uri.parse('$_baseUrl/api/notifications/read-all'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (d) => d['count'] as int? ?? 0);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
@@ -686,6 +729,48 @@ class BackendClient {
       ));
       return _processResponse(resp, (d) => d as List<dynamic>);
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> savePost(String postId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/interactions/save'),
+        headers: await _getHeaders(token),
+        body: jsonEncode({'postId': postId}),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> unsavePost(String postId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.delete(
+        Uri.parse('$_baseUrl/api/interactions/save/$postId'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<ApiResponse<bool>> hidePost(String postId) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.post(
+        Uri.parse('$_baseUrl/api/posts/$postId/hide'),
+        headers: await _getHeaders(token),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
+  Future<void> validateServer() async {
+    try {
+      final resp = await _client.get(Uri.parse('$_baseUrl/health')).timeout(const Duration(seconds: 5));
+      if (resp.statusCode != 200) {
+        debugPrint('⚠️ Backend health check failed: ${resp.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('🚨 Backend health check error: $e');
+    }
   }
 }
 

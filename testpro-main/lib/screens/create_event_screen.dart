@@ -10,6 +10,7 @@ import '../services/backend_service.dart';
 import '../models/post.dart';
 import 'package:geolocator/geolocator.dart';
 import 'group_chat_screen.dart';
+import '../utils/safe_error.dart';
 
 class CreateEventScreen extends StatefulWidget {
   const CreateEventScreen({super.key});
@@ -200,7 +201,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       if (kDebugMode) debugPrint('Error creating event: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text(safeErrorMessage(e))),
         );
       }
     } finally {

@@ -2,16 +2,15 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
-import 'personal_account.dart';
 
 import '../models/post.dart';
 import '../models/comment.dart';
 import '../services/backend_service.dart';
 import '../services/post_service.dart';
-import '../config/app_theme.dart';
 import '../core/utils/time_utils.dart';
 import '../core/utils/navigation_utils.dart';
 import '../shared/widgets/user_avatar.dart';
@@ -144,6 +143,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         // Track post view
         BackendService.trackPostView(widget.postId!).catchError((e) {
           if (kDebugMode) debugPrint('Error tracking view: $e');
+          return ApiResponse<bool>(success: false, error: 'Failed to track view');
         });
       } else {
         setState(() => _isLoading = false);
@@ -160,7 +160,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         _post!.mediaUrl != null &&
         _post!.mediaUrl!.isNotEmpty;
     if (_isVideo) {
-      _videoController = VideoPlayerController.network(ProxyHelper.getUrl(_post!.mediaUrl!))
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(ProxyHelper.getUrl(_post!.mediaUrl!)))
         ..initialize().then((_) {
           if (mounted) setState(() {});
         })
@@ -183,15 +183,50 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   Widget build(BuildContext context) {
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(),
-        body: const Center(child: CircularProgressIndicator()),
+        backgroundColor: const Color(0xFFF6F7FB),
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF1C1C1E), size: 20),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: const Text('Loading...', style: TextStyle(color: Color(0xFF1C1C1E), fontWeight: FontWeight.w700, fontSize: 17, fontFamily: 'Inter')),
+          centerTitle: true,
+        ),
+        body: const _PostDetailShimmer(),
       );
     }
 
     if (_post == null) {
       return Scaffold(
-        appBar: AppBar(),
-        body: const Center(child: Text("Post not found")),
+        backgroundColor: const Color(0xFFF6F7FB),
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF1C1C1E), size: 20),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.article_outlined, size: 64, color: Colors.grey.shade300),
+              const SizedBox(height: 16),
+              Text('Post not found', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.grey.shade600, fontFamily: 'Inter')),
+              const SizedBox(height: 8),
+              Text('It may have been removed.', style: TextStyle(fontSize: 14, color: Colors.grey.shade400, fontFamily: 'Inter')),
+              const SizedBox(height: 24),
+              TextButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back, size: 16),
+                label: const Text('Go Back'),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
@@ -360,15 +395,23 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                     ),
                                   ],
                                 )
-                              : Image.network(
-                                  ProxyHelper.getUrl(post.mediaUrl!),
+                              : CachedNetworkImage(
+                                  imageUrl: ProxyHelper.getUrl(post.mediaUrl!),
                                   fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return Container(
-                                      color: Colors.grey.shade100,
-                                      child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.grey, size: 40)),
-                                    );
-                                  },
+                                  placeholder: (context, url) => Container(
+                                    color: const Color(0xFFF0F0F0),
+                                    child: const Center(
+                                      child: SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8E8E93)),
+                                      ),
+                                    ),
+                                  ),
+                                  errorWidget: (context, url, error) => Container(
+                                    color: Colors.grey.shade100,
+                                    child: const Center(child: Icon(Icons.broken_image_rounded, color: Colors.grey, size: 40)),
+                                  ),
                                 ),
                         ),
                       ),
@@ -397,7 +440,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                           children: [
                             _buildModernLikeButton(),
                             const SizedBox(width: 16),
-                            _modernActionButton(Icons.ios_share_rounded, 'Share', () {}),
+                            _modernActionButton(Icons.ios_share_rounded, 'Share', () {
+                              final url = 'https://sopper.app/post/${post.id}';
+                              Share.share('Check out this post on Sopper: $url');
+                            }),
                             const Spacer(),
                             _modernActionButton(Icons.outlined_flag_rounded, 'Report', () {}),
                           ],
@@ -457,15 +503,28 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   Widget _buildCommentsList() {
     if (_post == null) return const SizedBox.shrink();
     if (_isLoadingComments) {
-      return const Padding(
-        padding: EdgeInsets.all(20),
-        child: Center(child: CircularProgressIndicator()),
-      );
+      return const _CommentShimmer();
     }
     if (_comments.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(16),
-        child: Center(child: Text("No comments yet. Be the first!")),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(Icons.chat_bubble_outline_rounded, size: 48, color: Colors.grey.shade300),
+              const SizedBox(height: 12),
+              Text(
+                'No replies yet',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey.shade500, fontFamily: 'Inter'),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Be the first to join the conversation',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade400, fontFamily: 'Inter'),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
@@ -474,7 +533,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       physics: const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: _comments.length,
-      separatorBuilder: (_, __) => const Divider(),
+      separatorBuilder: (context, index) => const Divider(),
       itemBuilder: (context, index) {
         final comment = _comments[index];
         return ValueListenableBuilder(
@@ -626,7 +685,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                      setState(() {
                        _comments.removeWhere((c) => c.id == optimistic.id);
                      });
-                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Comment failed: $e')));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to post comment. Please try again.')));
                    }
                  }
               }
@@ -839,18 +898,16 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                     if (confirm == true) {
                       try {
                         await PostService.deletePost(_post!.id);
-                        if (mounted) {
-                          Navigator.pop(context, true); // Pop Detail Screen with refresh signal
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Post deleted')),
-                          );
-                        }
+                        if (!context.mounted) return;
+                        Navigator.pop(context, true); // Pop Detail Screen with refresh signal
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Post deleted')),
+                        );
                       } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Error: $e')),
-                          );
-                        }
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Failed to delete post. Please try again.')),
+                        );
                       }
                     }
                   },
@@ -870,6 +927,186 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Post Detail Shimmer (branded loading skeleton)
+// ─────────────────────────────────────────────────────────────
+class _PostDetailShimmer extends StatelessWidget {
+  const _PostDetailShimmer();
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Author skeleton
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                _shimmerCircle(44),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _shimmerBox(120, 14),
+                    const SizedBox(height: 6),
+                    _shimmerBox(60, 10),
+                  ],
+                ),
+                const Spacer(),
+                _shimmerBox(70, 32, radius: 20),
+              ],
+            ),
+          ),
+          // Media skeleton
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                height: 320,
+                width: double.infinity,
+                color: const Color(0xFFF0F0F0),
+              ),
+            ),
+          ),
+          // Actions skeleton
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                _shimmerBox(80, 28, radius: 14),
+                const SizedBox(width: 16),
+                _shimmerBox(70, 28, radius: 14),
+                const Spacer(),
+                _shimmerBox(70, 28, radius: 14),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Comment skeletons
+          const _CommentShimmer(),
+        ],
+      ),
+    );
+  }
+
+  static Widget _shimmerCircle(double size) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        color: Color(0xFFEEEEEE),
+        shape: BoxShape.circle,
+      ),
+    );
+  }
+
+  static Widget _shimmerBox(double width, double height, {double radius = 6}) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEEEEE),
+        borderRadius: BorderRadius.circular(radius),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Comment Shimmer (loading skeleton for comments)
+// ─────────────────────────────────────────────────────────────
+class _CommentShimmer extends StatelessWidget {
+  const _CommentShimmer();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        children: List.generate(3, (index) => _commentRow(index)),
+      ),
+    );
+  }
+
+  Widget _commentRow(int index) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: const BoxDecoration(
+              color: Color(0xFFEEEEEE),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 80 + (index * 10).toDouble(),
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEEEEEE),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      width: 30,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F5F5),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F0F0),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  width: 180 - (index * 20).toDouble(),
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

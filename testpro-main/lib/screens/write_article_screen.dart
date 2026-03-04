@@ -6,6 +6,7 @@ import '../services/backend_service.dart';
 import '../services/location_service.dart';
 import '../services/auth_service.dart';
 import '../models/post.dart';
+import '../utils/safe_error.dart';
 
 /// A custom controller that styles Markdown-like syntax visually in the editor
 class MarkdownEditingController extends TextEditingController {
@@ -186,7 +187,7 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
       if (kDebugMode) debugPrint('Error posting article: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text(safeErrorMessage(e))),
         );
       }
     } finally {

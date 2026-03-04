@@ -1,7 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
+import '../screens/post_detail_screen.dart';
+import '../main.dart';
 import 'backend_service.dart';
+import 'notification_data_service.dart';
 
 /// Top-level background message handler for FCM.
 /// Must be top-level to work in release mode.
@@ -44,8 +48,21 @@ class NotificationService {
 
     // Handle incoming messages (Foreground)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      // Increment local badge without fetching backend
+      NotificationDataService.unreadCount.value++;
       _showLocalNotification(message);
     });
+
+    // Handle push tapped in background
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      _handleNotificationTap(message);
+    });
+
+    // Handle push tapped from killed state
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      _handleNotificationTap(initialMessage);
+    }
 
     // Handle token refresh (Critical for production stability)
     FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
@@ -54,6 +71,18 @@ class NotificationService {
 
     // Register Background Handler
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
+
+  static void _handleNotificationTap(RemoteMessage message) {
+    final data = message.data;
+    final postId = data['postId'] as String?;
+    
+    if (postId != null && navigatorKey.currentContext != null) {
+      Navigator.push(
+        navigatorKey.currentContext!,
+        MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId)),
+      );
+    }
   }
 
   static void _showLocalNotification(RemoteMessage message) async {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../config/app_theme.dart';
 import '../services/backend_service.dart';
 import '../services/post_service.dart';
@@ -465,26 +466,23 @@ class _EventLogo extends StatelessWidget {
       );
     }
 
-    return Image.network(
-      ProxyHelper.getUrl(rawUrl),
+    return CachedNetworkImage(
+      imageUrl: ProxyHelper.getUrl(rawUrl),
       fit: BoxFit.cover,
-      errorBuilder: (_, error, stackTrace) => Container(
+      placeholder: (context, url) => Container(
+        color: Colors.grey.shade100,
+        child: const Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      errorWidget: (context, url, error) => Container(
         color: AppTheme.primary.withValues(alpha: 0.1),
         child: const Icon(Icons.groups_rounded, color: AppTheme.primary, size: 28),
       ),
-      loadingBuilder: (context, child, progress) {
-        if (progress == null) return child;
-        return Container(
-          color: Colors.grey.shade100,
-          child: const Center(
-            child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
-        );
-      },
     );
   }
 }

@@ -53,16 +53,19 @@ class UserAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final avatar = CircleAvatar(
-      radius: showGradientBorder ? radius - borderWidth : radius,
-      backgroundColor: backgroundColor ?? Colors.grey[200],
-      backgroundImage: imageUrl != null
-          ? CachedNetworkImageProvider(
-              ProxyHelper.getUrl(imageUrl!),
-              maxWidth: (radius * 4).toInt(),
-            )
-          : null,
-      child: imageUrl == null ? _buildInitials() : null,
+    final avatar = Semantics(
+      label: 'Avatar of $name',
+      child: CircleAvatar(
+        radius: showGradientBorder ? radius - borderWidth : radius,
+        backgroundColor: backgroundColor ?? Colors.grey[200],
+        backgroundImage: imageUrl != null
+            ? CachedNetworkImageProvider(
+                ProxyHelper.getUrl(imageUrl!),
+                maxWidth: (radius * 4).toInt(),
+              )
+            : null,
+        child: imageUrl == null ? _buildInitials() : null,
+      ),
     );
 
     if (!showGradientBorder) return avatar;

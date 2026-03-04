@@ -11,6 +11,7 @@ import '../config/app_theme.dart';
 import '../services/location_service.dart';
 import '../utils/proxy_helper.dart';
 import '../core/session/user_session.dart';
+import '../utils/safe_error.dart';
 
 class EditProfileScreen extends StatefulWidget {
   final UserProfile? profile;
@@ -165,7 +166,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(content: Text(safeErrorMessage(e))),
         );
       }
     } finally {

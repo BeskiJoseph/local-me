@@ -7,6 +7,7 @@ import '../services/auth_service.dart';
 import '../services/backend_service.dart';
 import '../services/post_service.dart';
 import '../utils/proxy_helper.dart';
+import '../utils/safe_error.dart';
 
 import '../screens/post_detail_screen.dart';
 import '../screens/post_insights_screen.dart';
@@ -47,6 +48,8 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
   bool _isTogglingLike = false;
+  bool _isBookmarked = false;
+  bool _bookmarkLoading = false;
   StreamSubscription? _eventSub;
   final List<Key> _activeHearts = [];
 
@@ -178,7 +181,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to delete post: $e')),
+            SnackBar(content: Text(safeErrorMessage(e))),
           );
         }
       }
@@ -331,8 +334,38 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
               post: post,
               isLiked: _optimisticLiked ?? _isLiked,
               likeCount: _optimisticLikeCount ?? _likeCount,
+              isBookmarked: _isBookmarked,
               onLike: user != null ? _handleLike : null,
               onComment: () => CommentsBottomSheet.show(context, post),
+              onBookmark: () {
+                if (_bookmarkLoading) return; // Debounce rapid taps
+                HapticService.light();
+                final newState = !_isBookmarked;
+                setState(() => _isBookmarked = newState);
+                _bookmarkLoading = true;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(newState ? 'Post saved' : 'Post unsaved'),
+                    duration: const Duration(milliseconds: 1500),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                // Persist to backend (fire-and-forget with silent rollback)
+                () async {
+                  try {
+                    final resp = newState
+                        ? await BackendService.savePost(post.id)
+                        : await BackendService.unsavePost(post.id);
+                    if (!resp.success && mounted) {
+                      setState(() => _isBookmarked = !newState);
+                    }
+                  } catch (_) {
+                    if (mounted) setState(() => _isBookmarked = !newState);
+                  } finally {
+                    _bookmarkLoading = false;
+                  }
+                }();
+              },
             ),
           ),
         ],
@@ -566,7 +599,7 @@ class _PostHeaderState extends State<_PostHeader> {
           } catch (e) {
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error sharing: $e')),
+                SnackBar(content: Text(safeErrorMessage(e))),
               );
             }
           }
@@ -616,14 +649,14 @@ class _PostHeaderState extends State<_PostHeader> {
                     );
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error: ${response.error}')),
+                      SnackBar(content: Text(safeErrorMessage(response.error))),
                     );
                   }
                 }
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Error muting user: $e')),
+                    SnackBar(content: Text(safeErrorMessage(e))),
                   );
                 }
               }
@@ -698,14 +731,14 @@ class _PostHeaderState extends State<_PostHeader> {
                             );
                           } else {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Error: ${response.error}')),
+                              SnackBar(content: Text(safeErrorMessage(response.error))),
                             );
                           }
                         }
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Error reporting post: $e')),
+                            SnackBar(content: Text(safeErrorMessage(e))),
                           );
                         }
                       }
@@ -823,11 +856,22 @@ class _PostMedia extends StatelessWidget {
                   fit: BoxFit.cover,
                   memCacheWidth: 600,
                   placeholder: (context, url) => Container(
-                    color: const Color(0xFFECECEC),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Color(0xFFEBEBF4),
+                          Color(0xFFF7F7FA),
+                          Color(0xFFEBEBF4),
+                        ],
+                        begin: Alignment(-1, 0),
+                        end: Alignment(1, 0),
+                      ),
+                    ),
                     child: const Center(
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppTheme.primary,
+                      child: Icon(
+                        Icons.image_outlined,
+                        color: Color(0xFFCCCCCC),
+                        size: 32,
                       ),
                     ),
                   ),
@@ -875,15 +919,19 @@ class _ReactionRow extends StatelessWidget {
   final Post post;
   final bool isLiked;
   final int likeCount;
+  final bool isBookmarked;
   final VoidCallback? onLike;
   final VoidCallback onComment;
+  final VoidCallback? onBookmark;
 
   const _ReactionRow({
     required this.post,
     required this.isLiked,
     required this.likeCount,
+    required this.isBookmarked,
     required this.onLike,
     required this.onComment,
+    this.onBookmark,
   });
 
   @override
@@ -933,7 +981,16 @@ class _ReactionRow extends StatelessWidget {
 
         const Spacer(),
 
-        // View count removed bookmark
+        // Bookmark / Save
+        _ActionBtn(
+          icon: isBookmarked
+              ? Icons.bookmark_rounded
+              : Icons.bookmark_border_rounded,
+          color: isBookmarked
+              ? AppTheme.primary
+              : const Color(0xFF6E6E73),
+          onTap: onBookmark,
+        ),
       ],
     );
   }
@@ -1065,9 +1122,24 @@ class _OptionsSheet extends StatelessWidget {
               onTap: onShare ?? () => Navigator.pop(context),
             ),
             _Tile(
+              icon: Icons.visibility_off_outlined,
+              label: 'Hide Post',
+              onTap: () {
+                Navigator.pop(context);
+                // Persist hide to backend (fire-and-forget)
+                BackendService.hidePost(post.id).then((_) {}).catchError((_) => null);
+                PostService.emit(FeedEvent(FeedEventType.postDeleted, post.id));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Post hidden from your feed'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+            ),
+            _Tile(
               icon: Icons.notifications_off_outlined,
               label: 'Mute @${post.authorName.replaceAll(' ', '')}',
-              labelColor: const Color(0xFFE53935), // reddish muted color
               iconColor: const Color(0xFF8A8A8A),
               onTap: onMute ?? () => Navigator.pop(context),
             ),
