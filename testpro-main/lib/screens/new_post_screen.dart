@@ -208,6 +208,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
                   final file = await _picker.pickVideo(
                     source: ImageSource.camera,
                     maxDuration: const Duration(seconds: 60),
+                    videoQuality: VideoQuality.high,
                   );
                   _processMedia(file, 'video');
                 },
@@ -220,6 +221,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
                   final file = await _picker.pickVideo(
                     source: ImageSource.gallery,
                     maxDuration: const Duration(seconds: 60),
+                    videoQuality: VideoQuality.high,
                   );
                   _processMedia(file, 'video');
                 },
@@ -494,7 +496,10 @@ class _NewPostScreenState extends State<NewPostScreen> {
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 16, top: 10, bottom: 10),
-              child: _PostBtn(onTap: _canPost ? _submit : null),
+              child: _PostBtn(
+                onTap: _canPost ? _submit : null,
+                isLoading: _isSubmitting,
+              ),
             ),
           ],
         ),
@@ -934,17 +939,18 @@ class _CompactActionPill extends StatelessWidget {
 
 class _PostBtn extends StatelessWidget {
   final VoidCallback? onTap;
-  const _PostBtn({this.onTap});
+  final bool isLoading;
+  const _PostBtn({this.onTap, this.isLoading = false});
 
   @override
   Widget build(BuildContext context) {
-    final bool isLoading = onTap == null;
+    final bool isDisabled = onTap == null && !isLoading;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFF2E7D6A).withValues(alpha: isLoading ? 0.6 : 1.0),
+          color: const Color(0xFF2E7D6A).withValues(alpha: isDisabled ? 0.4 : 1.0),
           borderRadius: BorderRadius.circular(20),
         ),
         child: isLoading
@@ -953,10 +959,10 @@ class _PostBtn extends StatelessWidget {
                 height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
               )
-            : const Text(
+            : Text(
                 'Post',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Colors.white.withValues(alpha: isDisabled ? 0.7 : 1.0),
                   fontWeight: FontWeight.w700,
                   fontSize: 15,
                   fontFamily: AppTheme.fontFamily,

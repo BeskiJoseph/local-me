@@ -7,7 +7,7 @@ import '../services/auth_service.dart';
 import '../services/backend_service.dart';
 import '../utils/proxy_helper.dart';
 import '../config/app_theme.dart';
-import 'post_detail_screen.dart';
+import 'post_reels_view.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
 import '../services/notification_data_service.dart';
@@ -279,7 +279,7 @@ class _ActivityScreenState extends State<ActivityScreen>
     if (notification.postId != null) {
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => PostDetailScreen(postId: notification.postId!)),
+        MaterialPageRoute(builder: (_) => PostReelsView(postId: notification.postId!)),
       );
     }
   }

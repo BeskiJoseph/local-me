@@ -9,7 +9,7 @@ import '../widgets/nextdoor_post_card.dart';
 import '../models/post.dart';
 import '../utils/proxy_helper.dart';
 import '../models/api_response.dart';
-import 'post_detail_screen.dart';
+import 'post_reels_view.dart';
 import '../services/post_service.dart';
 
 /// Simple search screen with user and content search
@@ -318,7 +318,12 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => PostDetailScreen(post: post),
+                    builder: (context) => PostReelsView(
+                      posts: posts, 
+                      startIndex: index,
+                      // For search results, we don't have a specific feedType that supports pagination yet
+                      // but we can at least scroll through currently loaded results.
+                    ),
                   ),
                 );
               },

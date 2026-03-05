@@ -302,7 +302,17 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => PostReelsView(posts: posts, startIndex: adjustedIndex),
+                          builder: (_) => PostReelsView(
+                            posts: posts, 
+                            startIndex: adjustedIndex,
+                            feedType: widget.feedType,
+                            userCity: widget.userCity,
+                            userCountry: widget.userCountry,
+                            initialAfterId: _feedController.cursor,
+                            initialLastDistance: _feedController.lastDistance,
+                            initialLastPostId: _feedController.lastPostId,
+                            initialHasMore: _feedController.hasMore,
+                          ),
                         ),
                       ),
                     );
@@ -313,7 +323,17 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => PostReelsView(posts: posts, startIndex: adjustedIndex),
+                        builder: (_) => PostReelsView(
+                          posts: posts, 
+                          startIndex: adjustedIndex,
+                          feedType: widget.feedType,
+                          userCity: widget.userCity,
+                          userCountry: widget.userCountry,
+                          initialAfterId: _feedController.cursor,
+                          initialLastDistance: _feedController.lastDistance,
+                          initialLastPostId: _feedController.lastPostId,
+                          initialHasMore: _feedController.hasMore,
+                        ),
                       ),
                     ),
                   );

@@ -12,10 +12,10 @@ import '../core/session/user_session.dart';
 import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
-import '../widgets/post_card.dart';
 import '../widgets/nextdoor_post_card.dart';
 import 'event_post_card.dart';
 import '../services/post_service.dart';
+import 'post_reels_view.dart';
 
 class PersonalAccount extends StatefulWidget {
   final String? userId;
@@ -604,6 +604,18 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         return NextdoorStylePostCard(
           post: post,
           initialIsLiked: _likedPostIds[post.id],
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PostReelsView(
+                posts: postOnlyItems,
+                startIndex: index,
+                authorId: profileUserId,
+                initialAfterId: _cursor,
+                initialHasMore: _hasMore,
+              ),
+            ),
+          ),
         );
       },
     );
@@ -670,9 +682,23 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
             child: CircularProgressIndicator(strokeWidth: 2),
           ));
         }
+        final post = mediaPosts[index];
         return NextdoorStylePostCard(
-          post: mediaPosts[index],
-          initialIsLiked: _likedPostIds[mediaPosts[index].id],
+          post: post,
+          initialIsLiked: _likedPostIds[post.id],
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PostReelsView(
+                posts: mediaPosts,
+                startIndex: index,
+                authorId: profileUserId,
+                category: 'article', // ArtiZone/Article
+                initialAfterId: _cursor,
+                initialHasMore: _hasMore,
+              ),
+            ),
+          ),
         );
       },
     );
@@ -693,7 +719,22 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       padding: const EdgeInsets.symmetric(vertical: 12),
       itemCount: eventPosts.length,
       itemBuilder: (context, index) {
-        return EventPostCard(post: eventPosts[index]);
+        return EventPostCard(
+          post: eventPosts[index],
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PostReelsView(
+                posts: eventPosts,
+                startIndex: index,
+                authorId: profileUserId,
+                category: 'events',
+                initialAfterId: _cursor,
+                initialHasMore: _hasMore,
+              ),
+            ),
+          ),
+        );
       },
     );
   }

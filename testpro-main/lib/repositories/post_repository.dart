@@ -64,6 +64,8 @@ class PostRepository {
     double? lastDistance,
     String? lastPostId,
     String? watchedIds,
+    String? authorId,
+    String? category,
     int limit = 20,
   }) async {
     var pos = LocationService.currentPosition;
@@ -84,6 +86,8 @@ class PostRepository {
       lastDistance: lastDistance,
       lastPostId: lastPostId,
       watchedIds: watchedIds,
+      authorId: authorId,
+      category: category,
     );
 
     if (!response.success) throw response.error ?? 'Failed to fetch feed';

@@ -7,6 +7,7 @@ import '../models/post.dart';
 import '../models/comment.dart';
 import '../services/social_service.dart';
 import '../services/comment_service.dart';
+import '../services/post_service.dart';
 import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
@@ -16,16 +17,40 @@ import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/heart_pop_overlay.dart';
 import '../core/utils/haptic_service.dart';
 import 'package:intl/intl.dart';
+import '../widgets/comments_bottom_sheet.dart';
 
 class PostReelsView extends StatefulWidget {
   final List<Post> posts;
   final int startIndex;
+  final String? postId;
 
   const PostReelsView({
     super.key,
-    required this.posts,
-    required this.startIndex,
+    this.posts = const [],
+    this.startIndex = 0,
+    this.postId,
+    // Context for pagination
+    this.feedType,
+    this.authorId,
+    this.category,
+    this.userCity,
+    this.userCountry,
+    // Initial pagination state
+    this.initialAfterId,
+    this.initialLastDistance,
+    this.initialLastPostId,
+    this.initialHasMore = true,
   });
+
+  final String? feedType;
+  final String? authorId;
+  final String? category;
+  final String? userCity;
+  final String? userCountry;
+  final String? initialAfterId;
+  final double? initialLastDistance;
+  final String? initialLastPostId;
+  final bool initialHasMore;
 
   @override
   State<PostReelsView> createState() => _PostReelsViewState();
@@ -34,13 +59,119 @@ class PostReelsView extends StatefulWidget {
 class _PostReelsViewState extends State<PostReelsView> {
   late PageController _pageController;
   late int _currentIndex;
+  List<Post> _currentPosts = [];
+  bool _isLoading = false;
+  String? _error;
+
+  // Pagination state
+  bool _hasMore = true;
+  String? _afterId;
+  double? _lastDistance;
+  String? _lastPostId;
+  bool _isFetchingMore = false;
 
   @override
   void initState() {
     super.initState();
+    _currentPosts = List.from(widget.posts);
     _currentIndex = widget.startIndex;
     _pageController = PageController(initialPage: widget.startIndex);
+    
+    // Initialize pagination state
+    _afterId = widget.initialAfterId;
+    _lastDistance = widget.initialLastDistance;
+    _lastPostId = widget.initialLastPostId;
+    _hasMore = widget.initialHasMore;
+
+    _pageController.addListener(_onPageScroll);
+
+    if (_currentPosts.isEmpty && widget.postId != null) {
+      _fetchSinglePost();
+    }
+    
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  void _onPageScroll() {
+    if (!_pageController.hasClients) return;
+    
+    // Pre-fetch when we're 2 pages from the end
+    if (_pageController.page! >= _currentPosts.length - 2 && 
+        _hasMore && 
+        !_isFetchingMore && 
+        !_isLoading) {
+      _loadMorePosts();
+    }
+  }
+
+  Future<void> _loadMorePosts() async {
+    if (!_hasMore || _isFetchingMore || widget.feedType == null) return;
+
+    setState(() => _isFetchingMore = true);
+
+    try {
+      final response = await PostService.getPostsPaginated(
+        feedType: widget.feedType!,
+        authorId: widget.authorId,
+        category: widget.category,
+        userCity: widget.userCity,
+        userCountry: widget.userCountry,
+        afterId: widget.feedType == 'local' ? null : _afterId,
+        lastDistance: widget.feedType == 'local' ? _lastDistance : null,
+        lastPostId: widget.feedType == 'local' ? _lastPostId : null,
+        limit: 10,
+      );
+
+      final nextPosts = response.data;
+      
+      if (mounted) {
+        setState(() {
+          _currentPosts.addAll(nextPosts);
+          _afterId = response.nextCursor;
+          _lastDistance = response.lastDistance;
+          _lastPostId = response.lastPostId;
+          _hasMore = response.hasMore;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading more reels: $e');
+    } finally {
+      if (mounted) setState(() => _isFetchingMore = false);
+    }
+  }
+
+  Future<void> _fetchSinglePost() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final response = await BackendService.getPost(widget.postId!);
+      if (response.success && response.data != null) {
+        if (mounted) {
+          setState(() {
+            _currentPosts = [Post.fromJson(response.data!)];
+            _currentIndex = 0;
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _error = response.error ?? "Failed to load post";
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
@@ -52,6 +183,32 @@ class _PostReelsViewState extends State<PostReelsView> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
+      );
+    }
+
+    if (_error != null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_error!, style: const TextStyle(color: Colors.white70)),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _fetchSinglePost,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -59,7 +216,7 @@ class _PostReelsViewState extends State<PostReelsView> {
           PageView.builder(
             controller: _pageController,
             scrollDirection: Axis.vertical,
-            itemCount: widget.posts.length,
+            itemCount: _currentPosts.length,
             onPageChanged: (index) {
               setState(() {
                 _currentIndex = index;
@@ -67,8 +224,8 @@ class _PostReelsViewState extends State<PostReelsView> {
             },
             itemBuilder: (context, index) {
               return ReelPostItem(
-                key: ValueKey(widget.posts[index].id),
-                post: widget.posts[index],
+                key: ValueKey(_currentPosts[index].id),
+                post: _currentPosts[index],
                 isCurrentPage: index == _currentIndex,
               );
             },
@@ -308,9 +465,7 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
                   icon: Icons.chat_bubble_outline,
                   color: Colors.white,
                   label: '${widget.post.commentCount}',
-                  onTap: () {
-                    // TODO: Show comments sheet
-                  },
+                  onTap: () => CommentsBottomSheet.show(context, widget.post),
                 ),
                 const SizedBox(height: 20),
                 _ReelActionButton(

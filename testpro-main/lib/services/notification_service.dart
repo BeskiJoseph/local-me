@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
-import '../screens/post_detail_screen.dart';
+import '../screens/post_reels_view.dart';
 import '../main.dart';
 import 'backend_service.dart';
 import 'notification_data_service.dart';
@@ -80,7 +80,7 @@ class NotificationService {
     if (postId != null && navigatorKey.currentContext != null) {
       Navigator.push(
         navigatorKey.currentContext!,
-        MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId)),
+        MaterialPageRoute(builder: (_) => PostReelsView(postId: postId)),
       );
     }
   }

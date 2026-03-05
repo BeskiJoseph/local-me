@@ -35,7 +35,7 @@ export const processVideo = (inputPath, outputPath, maxDuration = 300) => {
             .audioCodec('aac')
             .format('mp4')
             .outputOptions([
-                '-crf 28', // Compression level (higher = smaller file, 23-28 is usually good)
+                '-crf 23', // Compression level (lower = better quality, 18-23 is standard)
                 '-preset faster',
                 '-movflags +faststart' // Progressive download
             ]);

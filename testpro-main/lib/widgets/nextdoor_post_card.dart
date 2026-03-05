@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:share_plus/share_plus.dart';
@@ -9,7 +10,7 @@ import '../services/post_service.dart';
 import '../utils/proxy_helper.dart';
 import '../utils/safe_error.dart';
 
-import '../screens/post_detail_screen.dart';
+import '../screens/post_reels_view.dart';
 import '../screens/post_insights_screen.dart';
 import '../core/utils/time_utils.dart';
 import '../shared/widgets/user_avatar.dart';
@@ -19,6 +20,8 @@ import '../core/utils/haptic_service.dart';
 import '../shared/widgets/heart_pop_overlay.dart';
 import 'comments_bottom_sheet.dart';
 import 'package:intl/intl.dart';
+import 'package:video_player/video_player.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'dart:async';
 
 /// ============================================================
@@ -195,13 +198,26 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     final post = widget.post;
     final user = AuthService.currentUser;
 
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: ColoredBox(
-        color: Colors.white,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return ValueListenableBuilder<UserSessionData?>(
+      valueListenable: UserSession.current,
+      builder: (context, sessionData, _) {
+        final isMe = UserSession.isMe(post.authorId);
+        final displayName = isMe 
+            ? (sessionData?.displayName ?? post.authorName) 
+            : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
+
+        return GestureDetector(
+          onTap: widget.onTap ?? () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => PostReelsView(posts: [post], startIndex: 0)),
+            );
+          },
+          child: ColoredBox(
+            color: Colors.white,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
             child: _PostHeader(
@@ -211,116 +227,15 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
             ),
           ),
 
-          // ── Category & Text Content ───────────────────────────────
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Category Chip ────────────────────────────────
-                if (post.category.isNotEmpty) ...[
-                  Row(
-                    children: [
-                      _CategoryChip(label: post.category.toUpperCase()),
-                      if (post.isEvent && post.computedStatus == 'archived') ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
-                          ),
-                          child: const Text(
-                            'ARCHIVED',
-                            style: TextStyle(
-                              color: Color(0xFF64748B),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                // ── Title ────────────────────────────────────────
-                if (post.title.isNotEmpty) ...[
-                  Text(
-                    post.title,
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontFamily,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                      color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF1A1A1A),
-                      height: 1.3,
-                      decoration: post.computedStatus == 'archived' ? TextDecoration.lineThrough : null,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
-
-                // ── Event Dates ──────────────────────────────────
-                if (post.isEvent && post.eventStartDate != null) ...[
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.calendar_today_rounded,
-                        size: 16,
-                        color: post.computedStatus == 'archived' ? const Color(0xFFC0C0C0) : AppTheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _formatEventDateRange(post.eventStartDate!, post.eventEndDate),
-                          style: TextStyle(
-                            fontFamily: AppTheme.fontFamily,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF4A4A4A),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                ],
-
-                // ── Body (Optional fallback) ─────────────────────
-                if (post.body.isNotEmpty && post.body != post.title) ...[
-                  Text(
-                    post.body,
-                    style: const TextStyle(
-                      fontFamily: AppTheme.fontFamily,
-                      fontSize: 15,
-                      color: Color(0xFF333333),
-                      height: 1.5,
-                    ),
-                    maxLines: 5,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 14),
-                ],
-              ],
-            ),
-          ),
-
           // ── Media ────────────────────────────────────────────
-          // Show media section for posts with URLs or temporary posts
           if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
             _PostMedia(
               post: post, 
               activeHearts: _activeHearts,
               onDoubleTap: () {
-                // If not already liked, like it
                 if (!(_optimisticLiked ?? _isLiked)) {
                   _handleLike();
                 }
-                // Always show heart pop
                 final heartKey = UniqueKey();
                 setState(() => _activeHearts.add(heartKey));
                 Future.delayed(const Duration(milliseconds: 800), () {
@@ -333,7 +248,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
 
           // ── Reaction Row ──────────────────────────────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: _ReactionRow(
               post: post,
               isLiked: _optimisticLiked ?? _isLiked,
@@ -342,7 +257,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
               onLike: user != null ? _handleLike : null,
               onComment: () => CommentsBottomSheet.show(context, post),
               onBookmark: () {
-                if (_bookmarkLoading) return; // Debounce rapid taps
+                if (_bookmarkLoading) return;
                 HapticService.light();
                 final newState = !_isBookmarked;
                 setState(() => _isBookmarked = newState);
@@ -354,7 +269,6 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
                     behavior: SnackBarBehavior.floating,
                   ),
                 );
-                // Persist to backend (fire-and-forget with silent rollback)
                 () async {
                   try {
                     final resp = newState
@@ -372,11 +286,48 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
               },
             ),
           ),
-        ],
+
+          // ── Post Content (Caption) ───────────────────────────
+          if (post.title.isNotEmpty || post.body.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: _ExpandableText(
+                text: post.title.isNotEmpty ? post.title : post.body,
+                isArchived: post.computedStatus == 'archived',
+              ),
+            ),
+
+          // ── Event Dates ──────────────────────────────────
+          if (post.isEvent && post.eventStartDate != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.calendar_today_rounded,
+                    size: 14,
+                    color: post.computedStatus == 'archived' ? const Color(0xFFC0C0C0) : AppTheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _formatEventDateRange(post.eventStartDate!, post.eventEndDate),
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontFamily,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF4A4A4A),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
     );
-  }
+  },
+);
+}
 
   String _formatEventDateRange(DateTime start, DateTime? end) {
     if (end == null) {
@@ -493,7 +444,7 @@ class _PostHeaderState extends State<_PostHeader> {
               child: UserAvatar(
                 imageUrl: displayAvatar,
                 name: displayName,
-                radius: 22,
+                radius: 18,
                 backgroundColor: AppTheme.primaryLight,
                 initialsColor: AppTheme.primary,
               ),
@@ -511,7 +462,7 @@ class _PostHeaderState extends State<_PostHeader> {
                     style: const TextStyle(
                       fontFamily: AppTheme.fontFamily,
                       fontWeight: FontWeight.w700,
-                      fontSize: 15,
+                      fontSize: 14,
                       color: Color(0xFF1A1A1A),
                     ),
                   ),
@@ -787,7 +738,7 @@ class _CategoryChip extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Media — Instagram-style compact, 4:5 for images, 9:16 for video
 // ─────────────────────────────────────────────────────────────
-class _PostMedia extends StatelessWidget {
+class _PostMedia extends StatefulWidget {
   final Post post;
   final List<Key> activeHearts;
   final VoidCallback onDoubleTap;
@@ -799,12 +750,89 @@ class _PostMedia extends StatelessWidget {
   });
 
   @override
+  State<_PostMedia> createState() => _PostMediaState();
+}
+
+class _PostMediaState extends State<_PostMedia> {
+  VideoPlayerController? _controller;
+  bool _isInitialized = false;
+  bool _isVisible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.post.mediaType == 'video' && widget.post.mediaUrl != null) {
+      _initializeVideo();
+    }
+  }
+
+  Future<void> _initializeVideo() async {
+    final url = ProxyHelper.getUrl(widget.post.mediaUrl!);
+    _controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    
+    try {
+      await _controller!.initialize();
+      if (mounted) {
+        setState(() {
+          _isInitialized = true;
+          _controller!.setLooping(true);
+          _controller!.setVolume(0); // Muted by default
+          if (_isVisible) _controller!.play();
+        });
+      }
+    } catch (e) {
+      debugPrint('Error initializing feed video: $e');
+    }
+  }
+
+  @override
+  void didUpdateWidget(_PostMedia oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.post.mediaUrl != widget.post.mediaUrl) {
+      _disposeController();
+      if (widget.post.mediaType == 'video' && widget.post.mediaUrl != null) {
+        _initializeVideo();
+      }
+    }
+  }
+
+  void _disposeController() {
+    _controller?.pause();
+    _controller?.dispose();
+    _controller = null;
+    _isInitialized = false;
+  }
+
+  @override
+  void dispose() {
+    _disposeController();
+    super.dispose();
+  }
+
+  void _handleVisibilityChanged(VisibilityInfo info) {
+    if (!mounted || _controller == null) return;
+    
+    // Play if > 50% visible, otherwise pause
+    final bool isNowVisible = info.visibleFraction > 0.5;
+    
+    if (isNowVisible != _isVisible) {
+      _isVisible = isNowVisible;
+      if (_isInitialized) {
+        if (_isVisible) {
+          _controller!.play();
+        } else {
+          _controller!.pause();
+        }
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final isVideo = post.mediaType == 'video';
+    final isVideo = widget.post.mediaType == 'video';
     final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
     
-    if (post.mediaUrl == null && post.id.startsWith('temp_')) {
-      // ... (rest of loading state remains same)
+    if (widget.post.mediaUrl == null && widget.post.id.startsWith('temp_')) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         child: AspectRatio(
@@ -840,12 +868,9 @@ class _PostMedia extends StatelessWidget {
       );
     }
     
-    return GestureDetector(
-      onDoubleTap: onDoubleTap,
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => PostDetailScreen(post: post)),
-      ),
+    return VisibilityDetector(
+      key: Key('post_media_${widget.post.id}'),
+      onVisibilityChanged: _handleVisibilityChanged,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: Padding(
@@ -855,42 +880,54 @@ class _PostMedia extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                CachedNetworkImage(
-                  imageUrl: ProxyHelper.getUrl(
-                      post.thumbnailUrl ?? post.mediaUrl!),
-                  fit: BoxFit.cover,
-                  memCacheWidth: 600,
-                  placeholder: (context, url) => Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Color(0xFFEBEBF4),
-                          Color(0xFFF7F7FA),
-                          Color(0xFFEBEBF4),
-                        ],
-                        begin: Alignment(-1, 0),
-                        end: Alignment(1, 0),
+                // Video Player or Thumbnail
+                if (isVideo && _isInitialized)
+                  VideoPlayer(_controller!)
+                else
+                  CachedNetworkImage(
+                    imageUrl: ProxyHelper.getUrl(
+                        widget.post.thumbnailUrl ?? widget.post.mediaUrl!),
+                    fit: BoxFit.cover,
+                    memCacheWidth: 600,
+                    placeholder: (context, url) => Container(
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Color(0xFFEBEBF4),
+                            Color(0xFFF7F7FA),
+                            Color(0xFFEBEBF4),
+                          ],
+                          begin: Alignment(-1, 0),
+                          end: Alignment(1, 0),
+                        ),
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.image_outlined,
+                          color: Color(0xFFCCCCCC),
+                          size: 32,
+                        ),
                       ),
                     ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.image_outlined,
-                        color: Color(0xFFCCCCCC),
-                        size: 32,
-                      ),
+                    errorWidget: (context, url, error) => Container(
+                      color: const Color(0xFFECECEC),
+                      child: const Icon(Icons.broken_image_outlined,
+                          color: Color(0xFF8A8A8A)),
                     ),
                   ),
-                  errorWidget: (context, url, error) => Container(
-                    color: const Color(0xFFECECEC),
-                    child: const Icon(Icons.broken_image_outlined,
-                        color: Color(0xFF8A8A8A)),
-                  ),
+
+                // Overlay for tap interactions
+                GestureDetector(
+                  onDoubleTap: widget.onDoubleTap,
+                  behavior: HitTestBehavior.opaque,
+                  child: const SizedBox.expand(),
                 ),
+
                 // Dynamic Heart Pops
-                ...activeHearts.map((key) => HeartPopOverlay(key: key)),
+                ...widget.activeHearts.map((key) => HeartPopOverlay(key: key)),
                 
-                // Video play badge
-                if (post.mediaType == 'video')
+                // Video Overlay Icons
+                if (isVideo)
                   Positioned(
                     bottom: 10,
                     right: 10,
@@ -901,8 +938,8 @@ class _PostMedia extends StatelessWidget {
                         color: Colors.black.withValues(alpha: 0.6),
                         borderRadius: BorderRadius.circular(6),
                       ),
-                      child: const Icon(
-                        Icons.play_arrow_rounded,
+                      child: Icon(
+                        _isInitialized ? Icons.videocam_rounded : Icons.play_arrow_rounded,
                         color: Colors.white,
                         size: 18,
                       ),
@@ -1239,6 +1276,80 @@ class _Tile extends StatelessWidget {
             padding: EdgeInsets.symmetric(horizontal: 16),
             child: Divider(height: 1, color: Color(0xFFF2F2F2)),
           ),
+      ],
+    );
+  }
+}
+
+class _ExpandableText extends StatefulWidget {
+  final String text;
+  final bool isArchived;
+
+  const _ExpandableText({
+    super.key,
+    required this.text,
+    this.isArchived = false,
+  });
+
+  @override
+  State<_ExpandableText> createState() => _ExpandableTextState();
+}
+
+class _ExpandableTextState extends State<_ExpandableText> {
+  bool _isExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final textSpan = TextSpan(
+              text: widget.text,
+              style: TextStyle(
+                fontSize: 14,
+                color: widget.isArchived ? const Color(0xFF8A8A8A) : const Color(0xFF333333),
+                decoration: widget.isArchived ? TextDecoration.lineThrough : null,
+              ),
+            );
+
+            final textPainter = TextPainter(
+              text: textSpan,
+              maxLines: 2,
+              textDirection: ui.TextDirection.ltr,
+            );
+
+            textPainter.layout(maxWidth: constraints.maxWidth);
+
+            if (!textPainter.didExceedMaxLines) {
+              return RichText(text: textSpan);
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                RichText(
+                  text: textSpan,
+                  maxLines: _isExpanded ? null : 2,
+                  overflow: _isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                GestureDetector(
+                  onTap: () => setState(() => _isExpanded = !_isExpanded),
+                  child: Text(
+                    _isExpanded ? 'less' : 'more',
+                    style: const TextStyle(
+                      color: Color(0xFF8A8A8A),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ],
     );
   }

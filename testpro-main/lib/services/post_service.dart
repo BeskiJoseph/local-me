@@ -75,6 +75,8 @@ class PostService {
     double? lastDistance,
     String? lastPostId,
     String? watchedIds,
+    String? authorId,
+    String? category,
     int limit = 10,
   }) {
     return _repository.getPostsPaginated(
@@ -85,6 +87,8 @@ class PostService {
       lastDistance: lastDistance,
       lastPostId: lastPostId,
       watchedIds: watchedIds,
+      authorId: authorId,
+      category: category,
       limit: limit,
     );
   }
