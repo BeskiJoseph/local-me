@@ -18,7 +18,7 @@ class ChatService {
   /// real-time Firestore listener (snapshots) for instant updates.
   static Stream<List<ChatMessage>> messagesStream(String eventId) {
     // Use a StreamController so we can push cache instantly AND stream Firestore
-    final controller = StreamController<List<ChatMessage>>();
+    final controller = StreamController<List<ChatMessage>>.broadcast();
 
     // 1. Push cache IMMEDIATELY (synchronous, before any async gap)
     if (_messagesCache.containsKey(eventId)) {

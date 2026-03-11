@@ -1,5 +1,6 @@
 import '../models/post.dart';
 import '../models/paginated_response.dart';
+import '../models/api_response.dart';
 import '../services/backend_service.dart';
 import '../services/location_service.dart';
 
@@ -53,6 +54,14 @@ class PostRepository {
   }
 
   // ─────────────────────────────────────────────
+  // Update Post
+  // ─────────────────────────────────────────────
+  Future<void> updatePost(String postId, Map<String, dynamic> updates) async {
+    final response = await BackendService.updatePost(postId, updates);
+    if (!response.success) throw response.error ?? 'Failed to update post';
+  }
+
+  // ─────────────────────────────────────────────
   // Get Posts Paginated
   // Supported both Global (afterId) and Local (distance) cursors
   // ─────────────────────────────────────────────
@@ -66,6 +75,7 @@ class PostRepository {
     String? watchedIds,
     String? authorId,
     String? category,
+    String? mediaType,
     int limit = 20,
   }) async {
     var pos = LocationService.currentPosition;
@@ -88,6 +98,7 @@ class PostRepository {
       watchedIds: watchedIds,
       authorId: authorId,
       category: category,
+      mediaType: mediaType,
     );
 
     if (!response.success) throw response.error ?? 'Failed to fetch feed';
@@ -108,7 +119,11 @@ class PostRepository {
   // ─────────────────────────────────────────────
   // Posts by Author (Stream)
   // ─────────────────────────────────────────────
-  Stream<List<Post>> postsByAuthor(String authorId) async* {
+  Stream<List<Post>> postsByAuthor(String authorId) {
+    return _postsByAuthorInternal(authorId).asBroadcastStream();
+  }
+
+  Stream<List<Post>> _postsByAuthorInternal(String authorId) async* {
     final response = await BackendService.getPosts(authorId: authorId);
     if (response.success) {
       final data = response.data ?? [];
@@ -161,7 +176,11 @@ class PostRepository {
   // ─────────────────────────────────────────────
   // Standard Streams and Helpers
   // ─────────────────────────────────────────────
-  Stream<List<Post>> postsByScope(String scope) async* {
+  Stream<List<Post>> postsByScope(String scope) {
+    return _postsByScopeInternal(scope).asBroadcastStream();
+  }
+
+  Stream<List<Post>> _postsByScopeInternal(String scope) async* {
     final response = await BackendService.getPosts(category: scope);
     if (response.success) {
       final data = response.data ?? [];
@@ -170,7 +189,11 @@ class PostRepository {
     }
   }
 
-  Stream<int> eventAttendeesCountStream(String eventId) async* {
+  Stream<int> eventAttendeesCountStream(String eventId) {
+    return _eventAttendeesCountStreamInternal(eventId).asBroadcastStream();
+  }
+
+  Stream<int> _eventAttendeesCountStreamInternal(String eventId) async* {
     final response = await BackendService.getPost(eventId);
     if (response.success) {
       yield response.data!['attendeeCount'] as int? ?? 0;
@@ -182,10 +205,18 @@ class PostRepository {
     if (!response.success) throw response.error ?? 'Action failed';
   }
 
-  Stream<bool> isAttendingEventStream(String eventId, String userId) async* {
+  Stream<bool> isAttendingEventStream(String eventId, String userId) {
+    return _isAttendingEventStreamInternal(eventId, userId).asBroadcastStream();
+  }
+
+  Stream<bool> _isAttendingEventStreamInternal(String eventId, String userId) async* {
     final response = await BackendService.checkEventAttendance(eventId);
     if (response.success) {
       yield response.data ?? false;
     }
+  }
+
+  Future<ApiResponse<Map<String, dynamic>>> getPost(String postId) async {
+    return await BackendService.getPost(postId);
   }
 }

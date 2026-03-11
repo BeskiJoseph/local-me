@@ -11,6 +11,7 @@ import '../services/auth_service.dart';
 import '../utils/proxy_helper.dart';
 import '../core/utils/navigation_utils.dart';
 import '../shared/widgets/user_avatar.dart';
+import 'post_reels_view.dart';
 
 class ReelsFeedScreen extends StatefulWidget {
   final String feedType; // 'local', 'global'
@@ -73,50 +74,10 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          widget.feedType.toUpperCase(),
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Colors.white))
-          : _posts.isEmpty
-              ? const Center(
-                  child: Text(
-                    'No posts available',
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                )
-              : PageView.builder(
-                  controller: _pageController,
-                  scrollDirection: Axis.vertical,
-                  onPageChanged: (index) {
-                    setState(() {
-                      _currentIndex = index;
-                    });
-                  },
-                  itemCount: _posts.length,
-                  itemBuilder: (context, index) {
-                    return ReelPostItem(
-                      key: ValueKey(_posts[index].id),
-                      post: _posts[index],
-                      isCurrentPage: index == _currentIndex,
-                    );
-                  },
-                ),
+    return PostReelsView(
+      feedType: widget.feedType,
+      userCity: widget.userCity,
+      userCountry: widget.userCountry,
     );
   }
 }

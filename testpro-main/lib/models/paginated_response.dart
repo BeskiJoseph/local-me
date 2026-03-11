@@ -18,4 +18,24 @@ class PaginatedResponse<T> {
     this.lastPostId,
     this.fallbackLevel,
   });
+
+  PaginatedResponse<T> copyWith({
+    List<T>? data,
+    String? nextCursor,
+    bool? hasMore,
+    int? total,
+    double? lastDistance,
+    String? lastPostId,
+    String? fallbackLevel,
+  }) {
+    return PaginatedResponse<T>(
+      data: data ?? this.data,
+      nextCursor: nextCursor ?? this.nextCursor,
+      hasMore: hasMore ?? this.hasMore,
+      total: total ?? this.total,
+      lastDistance: lastDistance ?? this.lastDistance,
+      lastPostId: lastPostId ?? this.lastPostId,
+      fallbackLevel: fallbackLevel ?? this.fallbackLevel,
+    );
+  }
 }

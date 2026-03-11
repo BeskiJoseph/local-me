@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import '../config/app_theme.dart';
 import '../services/post_service.dart';
 import '../services/backend_service.dart';
@@ -154,6 +155,15 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
     setState(() => _isSubmitting = true);
 
     try {
+      // Get GPS coordinates so the article appears in the local feed
+      Position? position;
+      try {
+        position = await Geolocator.getCurrentPosition()
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        if (kDebugMode) debugPrint('Location detection failed (optional): $e');
+      }
+
       // Articles are text-only, no media upload
       final responseId = await PostService.createPost(
         title: title,
@@ -162,6 +172,8 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
         mediaUrl: null,
         mediaType: 'none',
         city: LocationService.getLocationString(),
+        latitude: position?.latitude,
+        longitude: position?.longitude,
       );
 
       if (!mounted) return;

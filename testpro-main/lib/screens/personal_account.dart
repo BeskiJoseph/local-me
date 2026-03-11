@@ -62,6 +62,24 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         setState(() {
           _likedPostIds[data['postId']] = data['isLiked'];
         });
+      } else if (event.type == FeedEventType.postUpdated && mounted) {
+        final data = event.data as Map<String, dynamic>;
+        final String postId = data['postId'];
+        final Map<String, dynamic> updates = data['updates'];
+        
+        setState(() {
+          final index = _posts.indexWhere((p) => p.id == postId);
+          if (index != -1) {
+            final current = _posts[index];
+            _posts[index] = current.copyWith(
+              title: updates['title'] ?? current.title,
+              body: updates['body'] ?? updates['text'] ?? current.body,
+              city: updates['city'] ?? current.city,
+              country: updates['country'] ?? current.country,
+              category: updates['category'] ?? current.category,
+            );
+          }
+        });
       }
     });
   }
@@ -171,7 +189,8 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     if (mounted) setState(() => _isLoadingPosts = true);
 
     try {
-      final response = await BackendService.getPosts(
+      final response = await PostService.getPostsPaginated(
+        feedType: 'global',
         authorId: profileUserId,
         afterId: refresh ? null : _cursor,
         limit: 10,
@@ -179,27 +198,22 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
 
       if (!mounted) return;
 
-      if (response.success && response.data != null) {
-        final List<dynamic> data = response.data!;
-        final String? nextCursor = response.pagination?.cursor;
-        final List<Post> newPosts = data.map((e) => Post.fromJson(e)).toList();
+      final List<Post> newPosts = response.data;
+      final String? nextCursor = response.nextCursor;
 
-        // ── Optimized: Use Embedded isLiked ──
-        setState(() {
-          for (var p in newPosts) {
-            _likedPostIds[p.id] = p.isLiked;
-          }
-          if (refresh) {
-            _posts.clear();
-          }
-          _posts.addAll(newPosts);
-          _cursor = nextCursor;
-          _hasMore = nextCursor != null;
-          _isLoadingPosts = false;
-        });
-      } else {
-        setState(() => _isLoadingPosts = false);
-      }
+      // ── Optimized: Use Embedded isLiked ──
+      setState(() {
+        for (var p in newPosts) {
+          _likedPostIds[p.id] = p.isLiked;
+        }
+        if (refresh) {
+          _posts.clear();
+        }
+        _posts.addAll(newPosts);
+        _cursor = nextCursor;
+        _hasMore = response.hasMore;
+        _isLoadingPosts = false;
+      });
     } catch (e) {
       if (kDebugMode) debugPrint('Error loading profile posts: $e');
       if (mounted) setState(() => _isLoadingPosts = false);
@@ -307,218 +321,248 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
               slivers: [
                 SliverToBoxAdapter(
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Use a Stack for the Banner and its overlays (Settings/Back)
                       Stack(
                         clipBehavior: Clip.none,
-                        alignment: Alignment.center,
-                      children: [
-                        // Banner (Shortened)
-                        Container(
-                          height: 100,
-                          width: double.infinity,
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                Color(0xFF2E7D6A),
-                                Color(0xFF1A4D42),
-                              ],
+                        children: [
+                          // Banner
+                          Container(
+                            height: 120,
+                            width: double.infinity,
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFF2E7D6A), Color(0xFF1A4D42)],
+                              ),
                             ),
                           ),
-                        ),
-                        // Back & Settings Icons
-                        Positioned(
-                          top: 10,
-                          left: 10,
-                          child: Navigator.of(context).canPop()
-                              ? IconButton(
-                                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                                  onPressed: () => Navigator.pop(context),
-                                )
-                              : const SizedBox.shrink(),
-                        ),
-                        Positioned(
-                          top: 10,
-                          right: 10,
-                          child: IconButton(
-                            icon: Icon(
-                              isOwnProfile ? Icons.settings_outlined : Icons.more_horiz,
-                              color: Colors.white,
-                            ),
-                            onPressed: () async {
-                              if (isOwnProfile) {
-                                final result = await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => EditProfileScreen(profile: profile),
-                                  ),
-                                );
-                                if (result == true) {
-                                  _loadData();
+                          // Back Button
+                          Positioned(
+                            top: 10,
+                            left: 10,
+                            child: Navigator.of(context).canPop()
+                                ? IconButton(
+                                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                    onPressed: () => Navigator.pop(context),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                          // Settings Icon
+                          Positioned(
+                            top: 10,
+                            right: 15,
+                            child: IconButton(
+                              icon: const Icon(Icons.settings_outlined, color: Colors.white, size: 28),
+                              onPressed: () async {
+                                if (isOwnProfile) {
+                                  final result = await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (context) => EditProfileScreen(profile: profile)),
+                                  );
+                                  if (result == true) _loadData();
                                 }
-                              }
-                            },
-                          ),
-                        ),
-                        // Overlapping Avatar (Ensured on top via Stack order)
-                        Positioned(
-                          bottom: -54, // Centered on the bottom edge (radius is 54)
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                            child: UserAvatar(
-                              imageUrl: profileImage,
-                              name: displayTitle,
-                              radius: 54,
-                              initialsFontSize: 40,
+                              },
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                    
-                    const SizedBox(height: 54 + 16), // Padding for the overlapping avatar
-                    // Username & Verification
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          displayTitle,
-                          style: const TextStyle(
-                            fontSize: 28, // Slightly larger
-                            fontWeight: FontWeight.w900, // Extra bold for "Beski" look
-                            fontFamily: AppTheme.fontFamily,
-                            color: Color(0xFF1A1A1A),
-                            letterSpacing: -0.5,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                           padding: const EdgeInsets.all(2),
-                           decoration: const BoxDecoration(color: Color(0xFF2E7D6A), shape: BoxShape.circle),
-                           child: const Icon(Icons.check, color: Colors.white, size: 10),
-                        ),
-                      ],
-                    ),
-
-                    // Location
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.location_on, size: 16, color: Color(0xFF8A8A8A)),
-                        const SizedBox(width: 4),
-                        Text(
-                          displayLocation,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            color: Color(0xFF8A8A8A),
-                            fontFamily: AppTheme.fontFamily,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    // Bio (About us) - Positioned in between per user request
-                    if (profile?.about != null && profile!.about!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 40),
-                        child: Text(
-                          profile.about!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF4A4A4A),
-                            height: 1.4,
-                            fontFamily: AppTheme.fontFamily,
-                          ),
+                        ],
+                      ),
+                      
+                      // Secondary Header Section: Avatar and Action Button
+                      // This part is placed below the Stack but uses translation to overlap
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            // Overlapping Avatar
+                            Transform.translate(
+                              offset: const Offset(0, -45),
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                                child: GestureDetector(
+                                  onTap: () async {
+                                    if (isOwnProfile) {
+                                      final result = await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => EditProfileScreen(profile: profile)),
+                                      );
+                                      if (result == true) _loadData();
+                                    }
+                                  },
+                                  child: UserAvatar(
+                                    imageUrl: profileImage,
+                                    name: displayTitle,
+                                    radius: 50,
+                                    initialsFontSize: 36,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const Spacer(),
+                            // Action Button (Edit Profile / Follow)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12), // Space it above the name section
+                              child: isOwnProfile
+                                  ? OutlinedButton(
+                                      onPressed: () async {
+                                        final result = await Navigator.push(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => EditProfileScreen(profile: profile)),
+                                        );
+                                        if (result == true) _loadData();
+                                      },
+                                      style: OutlinedButton.styleFrom(
+                                        side: const BorderSide(color: Color(0xFFCCCCCC)),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                                      ),
+                                      child: const Text(
+                                        'Edit profile',
+                                        style: TextStyle(
+                                          color: Color(0xFF1A1A1A),
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          fontFamily: AppTheme.fontFamily,
+                                        ),
+                                      ),
+                                    )
+                                  : ElevatedButton(
+                                      onPressed: _toggleFollow,
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _isFollowing ? Colors.grey.shade200 : const Color(0xFF2E7D6A),
+                                        foregroundColor: _isFollowing ? const Color(0xFF1A1A1A) : Colors.white,
+                                        elevation: 0,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                                      ),
+                                      child: Text(
+                                        _isFollowing ? 'Following' : 'Follow',
+                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                                      ),
+                                    ),
+                            ),
+                          ],
                         ),
                       ),
 
-                    const SizedBox(height: 24),
+                      // Adjust spacing before name
+                      const SizedBox(height: 10),
 
-                    // Profile Actions
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: isOwnProfile
-                          ? Row(
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Name & Verified Badge
+                            Row(
                               children: [
-                                Expanded(
-                                  child: _ActionBtn(
-                                    label: 'Edit profile',
-                                    color: const Color(0xFF2E7D6A),
-                                    isOutlined: false,
-                                    onTap: () async {
-                                      final result = await Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) => EditProfileScreen(profile: profile),
-                                        ),
-                                      );
-                                      if (result == true) _loadData();
-                                    },
+                                Text(
+                                  displayTitle,
+                                  style: const TextStyle(
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.w900,
+                                    fontFamily: AppTheme.fontFamily,
+                                    color: Color(0xFF1A1A1A),
+                                    letterSpacing: -0.5,
                                   ),
                                 ),
-                                const SizedBox(width: 12),
-                                // Stats integrated into a compact row
+                                const SizedBox(width: 8),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: const Color(0xFFEEEEEE)),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      _buildStatItem('${profile?.subscribers ?? 0}', 'Followers'),
-                                      const SizedBox(width: 16),
-                                      _buildVerticalDivider(),
-                                      const SizedBox(width: 16),
-                                      _buildStatItem('${profile?.followingCount ?? 0}', 'Following'),
-                                    ],
-                                  ),
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: const BoxDecoration(color: Color(0xFF2E7D6A), shape: BoxShape.circle),
+                                  child: const Icon(Icons.check, color: Colors.white, size: 12),
                                 ),
                               ],
-                            )
-                          : Row(
+                            ),
+
+                            const SizedBox(height: 8),
+
+                            // Location
+                            Row(
                               children: [
-                                Expanded(
-                                  child: _ActionBtn(
-                                    label: _isFollowing ? 'Following' : 'Follow',
-                                    color: _isFollowing ? Colors.grey.shade300 : const Color(0xFF2E7D6A),
-                                    isOutlined: _isFollowing,
-                                    onTap: _toggleFollow,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                // Stats for other user
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: const Color(0xFFEEEEEE)),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      _buildStatItem('${profile?.subscribers ?? 0}', 'Followers'),
-                                      const SizedBox(width: 16),
-                                      _buildVerticalDivider(),
-                                      const SizedBox(width: 16),
-                                      _buildStatItem('${profile?.followingCount ?? 0}', 'Following'),
-                                    ],
+                                const Icon(Icons.location_on, size: 18, color: Color(0xFF666666)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  displayLocation,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    color: Color(0xFF666666),
+                                    fontFamily: AppTheme.fontFamily,
+                                    fontWeight: FontWeight.w500,
                                   ),
                                 ),
                               ],
                             ),
-                    ),
-                  ],
+
+                            const SizedBox(height: 16),
+
+                            // Bio
+                            if (profile?.about != null && profile!.about!.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 16),
+                                child: Text(
+                                  profile.about!,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    color: Color(0xFF1A1A1A),
+                                    height: 1.4,
+                                    fontFamily: AppTheme.fontFamily,
+                                  ),
+                                ),
+                              ),
+
+                            // Stats line
+                            Row(
+                              children: [
+                                Text(
+                                  '${profile?.followingCount ?? 0}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 16,
+                                    color: Color(0xFF1A1A1A),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Text(
+                                  'Following',
+                                  style: TextStyle(
+                                    color: Color(0xFF666666),
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Text('·', style: TextStyle(color: Color(0xFF666666), fontSize: 16)),
+                                const SizedBox(width: 12),
+                                Text(
+                                  '${profile?.subscribers ?? 0}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 16,
+                                    color: Color(0xFF1A1A1A),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Text(
+                                  'Followers',
+                                  style: TextStyle(
+                                    color: Color(0xFF666666),
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+
 
               // ── Sticky Tab Bar ─────────────────────────────────
               SliverPersistentHeader(
@@ -621,39 +665,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     );
   }
 
-  Widget _buildStatItem(String count, String label) {
-    return Column(
-      children: [
-        Text(
-          count,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF1A1A1A),
-            fontFamily: AppTheme.fontFamily,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: Color(0xFF8A8A8A),
-            fontWeight: FontWeight.w500,
-            fontFamily: AppTheme.fontFamily,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildVerticalDivider() {
-    return Container(
-      height: 20,
-      width: 1,
-      color: const Color(0xFFEEEEEE),
-    );
-  }
 
   Widget _buildMediaGrid() {
     final mediaPosts = _posts.where((p) {
@@ -740,63 +751,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   }
 }
 
-class _ActionBtn extends StatelessWidget {
-  final String label;
-  final IconData? icon;
-  final Color color;
-  final bool isOutlined;
-  final VoidCallback onTap;
-
-  const _ActionBtn({
-    required this.label,
-    this.icon,
-    required this.color,
-    this.isOutlined = false,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 38, // More compact height
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: isOutlined ? const Color(0xFFEEEEEE) : color,
-          borderRadius: BorderRadius.circular(10), // Slightly tighter radius
-          boxShadow: isOutlined ? null : [
-            BoxShadow(
-              color: color.withValues(alpha: 0.2),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
-            )
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, color: Colors.white, size: 18),
-              const SizedBox(width: 6),
-            ],
-            Text(
-              label,
-              style: TextStyle(
-                color: isOutlined ? const Color(0xFF1A1A1A) : Colors.white,
-                fontSize: 14, // Smaller, sleeker font
-                fontWeight: FontWeight.w600,
-                fontFamily: AppTheme.fontFamily,
-                letterSpacing: 0.1,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _SliverTabHeaderDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;

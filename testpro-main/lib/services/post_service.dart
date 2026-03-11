@@ -5,12 +5,26 @@ import '../models/paginated_response.dart';
 import '../repositories/post_repository.dart';
 import '../services/location_service.dart';
 
-enum FeedEventType { postCreated, postDeleted, postLiked, userFollowed, eventMembershipChanged }
+enum FeedEventType { postCreated, postDeleted, postUpdated, postLiked, commentAdded, userFollowed, eventMembershipChanged }
 
 class FeedEvent {
   final FeedEventType type;
   final dynamic data;
   FeedEvent(this.type, this.data);
+}
+
+class _PostInteraction {
+  final bool? isLiked;
+  final int? likeCount;
+  final int? commentCount;
+  
+  const _PostInteraction({this.isLiked, this.likeCount, this.commentCount});
+  
+  _PostInteraction merge(_PostInteraction other) => _PostInteraction(
+    isLiked: other.isLiked ?? isLiked,
+    likeCount: other.likeCount ?? likeCount,
+    commentCount: other.commentCount ?? commentCount,
+  );
 }
 
 /// Facade for [PostRepository].
@@ -20,7 +34,39 @@ class PostService {
   static final _eventController = StreamController<FeedEvent>.broadcast();
   static Stream<FeedEvent> get events => _eventController.stream;
 
+  // Session interaction cache — ensures likes/comments survive refresh
+  static final Map<String, _PostInteraction> _interactionCache = {};
+
+  // Hidden initializer for the sync listener
+  static final bool _initialized = _initSyncListener();
+
+  static bool _initSyncListener() {
+    events.listen((event) {
+      if (event.type == FeedEventType.postLiked) {
+        final data = event.data as Map<String, dynamic>;
+        final id = data['postId']?.toString();
+        if (id == null) return;
+        final existing = _interactionCache[id] ?? const _PostInteraction();
+        _interactionCache[id] = existing.merge(_PostInteraction(
+          isLiked: data['isLiked'],
+          likeCount: data['likeCount'],
+        ));
+      } else if (event.type == FeedEventType.commentAdded) {
+        final data = event.data as Map<String, dynamic>;
+        final id = data['postId']?.toString();
+        if (id == null) return;
+        final existing = _interactionCache[id] ?? const _PostInteraction();
+        _interactionCache[id] = existing.merge(_PostInteraction(
+          commentCount: data['commentCount'],
+        ));
+      }
+    });
+    return true;
+  }
+
   static void emit(FeedEvent event) {
+    // Ensure initialized
+    if (!_initialized) {}
     if (kDebugMode) debugPrint('📡 PostService emitting event: ${event.type}');
     _eventController.add(event);
   }
@@ -29,6 +75,19 @@ class PostService {
 
   static set repository(PostRepository repo) {
     _repository = repo;
+  }
+
+  /// Overlay session interactions onto fresh API data
+  static Post mergeInteractions(Post post) {
+    // Ensure initialized
+    if (!_initialized) {}
+    final cached = _interactionCache[post.id];
+    if (cached == null) return post;
+    return post.copyWith(
+      isLiked: cached.isLiked ?? post.isLiked,
+      likeCount: cached.likeCount ?? post.likeCount,
+      commentCount: cached.commentCount ?? post.commentCount,
+    );
   }
 
   /// Creates a new post.
@@ -67,6 +126,11 @@ class PostService {
     emit(FeedEvent(FeedEventType.postDeleted, postId));
   }
 
+  static Future<void> updatePost(String postId, Map<String, dynamic> updates) async {
+    await _repository.updatePost(postId, updates);
+    emit(FeedEvent(FeedEventType.postUpdated, {'postId': postId, 'updates': updates}));
+  }
+
   static Future<PaginatedResponse<Post>> getPostsPaginated({
     required String feedType,
     String? userCity,
@@ -77,9 +141,10 @@ class PostService {
     String? watchedIds,
     String? authorId,
     String? category,
+    String? mediaType,
     int limit = 10,
-  }) {
-    return _repository.getPostsPaginated(
+  }) async {
+    final response = await _repository.getPostsPaginated(
       feedType: feedType,
       userCity: userCity,
       userCountry: userCountry,
@@ -89,16 +154,29 @@ class PostService {
       watchedIds: watchedIds,
       authorId: authorId,
       category: category,
+      mediaType: mediaType,
       limit: limit,
     );
+    
+    // Transparently merge session interactions before returning
+    final mergedPosts = response.data.map(mergeInteractions).toList();
+    return response.copyWith(data: mergedPosts);
+  }
+
+  static Future<Post?> getPost(String postId) async {
+    final response = await _repository.getPost(postId);
+    if (response.success && response.data != null) {
+      return mergeInteractions(Post.fromJson(response.data!));
+    }
+    return null;
   }
 
   static Stream<List<Post>> postsByAuthor(String authorId) {
-    return _repository.postsByAuthor(authorId);
+    return _repository.postsByAuthor(authorId).map((list) => list.map(mergeInteractions).toList());
   }
 
   static Stream<List<Post>> postsByScope(String scope) {
-    return _repository.postsByScope(scope);
+    return _repository.postsByScope(scope).map((list) => list.map(mergeInteractions).toList());
   }
 
   // --- Event Related Methods ---

@@ -208,7 +208,6 @@ class _NewPostScreenState extends State<NewPostScreen> {
                   final file = await _picker.pickVideo(
                     source: ImageSource.camera,
                     maxDuration: const Duration(seconds: 60),
-                    videoQuality: VideoQuality.high,
                   );
                   _processMedia(file, 'video');
                 },
@@ -221,7 +220,6 @@ class _NewPostScreenState extends State<NewPostScreen> {
                   final file = await _picker.pickVideo(
                     source: ImageSource.gallery,
                     maxDuration: const Duration(seconds: 60),
-                    videoQuality: VideoQuality.high,
                   );
                   _processMedia(file, 'video');
                 },

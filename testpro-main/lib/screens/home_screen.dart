@@ -11,6 +11,7 @@ import 'activity_screen.dart';
 import 'personal_account.dart';
 import 'community_screen.dart';
 import '../widgets/feed/paginated_feed_list.dart';
+import '../widgets/feed/feed_shimmer.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
 import '../core/session/user_session.dart';
@@ -51,6 +52,8 @@ class _HomeScreenState extends State<HomeScreen> {
     // Activate custom backend session layer (bridging Firebase Auth)
     BackendService.syncCustomTokens();
     _detectLocation();
+    // Fetch initial notification badge count (fire-and-forget)
+    NotificationDataService.fetchNotifications();
   }
 
   Future<void> _detectLocation() async {
@@ -212,36 +215,24 @@ class _HomeScreenState extends State<HomeScreen> {
             index: _feedToggleIndex,
             children: [
               _isLoadingLocation
-                  ? const _LocationLoadingState()
+                  ? const FeedShimmer(itemCount: 3)
                   : _locationError != null
                       ? _LocationErrorState(
                           error: _locationError!,
                           onRetry: _detectLocation,
                         )
-                      : RefreshIndicator(
-                          onRefresh: () async {
-                            setState(() => _feedRevision++);
-                          },
-                          color: AppTheme.primary,
-                          child: PaginatedFeedList(
-                            key: ValueKey('nearby_$_feedRevision'),
-                            feedType: 'local',
-                            userCity: _currentCity,
-                            userCountry: _currentCountry,
-                          ),
+                      : PaginatedFeedList(
+                          key: ValueKey('nearby_$_feedRevision'),
+                          feedType: 'local',
+                          userCity: _currentCity,
+                          userCountry: _currentCountry,
                         ),
               _visitedFeedIndexes.contains(1)
-                  ? RefreshIndicator(
-                      onRefresh: () async {
-                        setState(() => _feedRevision++);
-                      },
-                      color: AppTheme.primary,
-                      child: PaginatedFeedList(
-                        key: ValueKey('global_$_feedRevision'),
-                        feedType: 'global',
-                        userCity: null,
-                        userCountry: null,
-                      ),
+                  ? PaginatedFeedList(
+                      key: ValueKey('global_$_feedRevision'),
+                      feedType: 'global',
+                      userCity: null,
+                      userCountry: null,
                     )
                   : const SizedBox.shrink(),
             ],
@@ -440,94 +431,7 @@ class _NotificationBadge extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Location Loading State — branded, polished
-// ─────────────────────────────────────────────────────────────
-class _LocationLoadingState extends StatefulWidget {
-  const _LocationLoadingState();
 
-  @override
-  State<_LocationLoadingState> createState() => _LocationLoadingStateState();
-}
-
-class _LocationLoadingStateState extends State<_LocationLoadingState>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulseController;
-  late final Animation<double> _pulseAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-    _pulseAnimation = Tween<double>(begin: 0.6, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _pulseController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: FadeTransition(
-        opacity: _pulseAnimation,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: AppTheme.primaryLight,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.location_on_rounded,
-                size: 36,
-                color: AppTheme.primary,
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Finding posts near you...',
-              style: TextStyle(
-                fontFamily: AppTheme.fontFamily,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF4A4A4A),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Discovering your neighborhood',
-              style: TextStyle(
-                fontFamily: AppTheme.fontFamily,
-                fontSize: 13,
-                color: Color(0xFF8A8A8A),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: AppTheme.primary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 // ─────────────────────────────────────────────────────────────
 // Location Error State — cleaner UX

@@ -100,7 +100,9 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
 
     switch (event.type) {
       case FeedEventType.postCreated:
-        if (event.data is String) {
+        if (event.data is Post) {
+          _feedController.prependPost(event.data as Post);
+        } else if (event.data is String) {
           _fetchAndPrependNewPost(event.data as String);
         }
         break;
@@ -113,6 +115,14 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
         final data = event.data as Map<String, dynamic>;
         _likedPostIds[data['postId']] = data['isLiked'];
         _feedController.updatePostLike(data['postId'], data['isLiked'], data['likeCount']);
+        break;
+      case FeedEventType.commentAdded:
+        final data = event.data as Map<String, dynamic>;
+        _feedController.updatePostCommentCount(data['postId'], data['commentCount']);
+        break;
+      case FeedEventType.postUpdated:
+        final data = event.data as Map<String, dynamic>;
+        _feedController.updatePost(data['postId'], data['updates']);
         break;
       default:
         break;
@@ -244,6 +254,7 @@ class _PaginatedFeedListState extends State<PaginatedFeedList> with AutomaticKee
               color: const Color(0xFF6C5CE7),
               child: ListView.builder(
                 controller: _scrollController,
+                physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.only(top: 8, bottom: 80),
                 itemCount: posts.length + (hasMore || error != null ? 1 : 0) + (_feedController.isCycling ? 1 : 0),
                 itemBuilder: (context, index) {

@@ -4,6 +4,7 @@ import '../models/post.dart';
 import '../models/comment.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
+import '../services/post_service.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/utils/time_utils.dart';
 import '../utils/safe_error.dart';
@@ -47,6 +48,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   List<Comment> _comments = [];
   bool _isLoading = true;
   bool _isLoadingMore = false;
+  int _addedCommentCount = 0;
   bool _isSending = false;
   String? _nextCursor;
   String _sortVersion = 'newest'; // 'newest' or 'top'
@@ -211,6 +213,12 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
             }
           });
         }
+        // Broadcast updated comment count to the feed
+        _addedCommentCount++;
+        PostService.emit(FeedEvent(
+          FeedEventType.commentAdded,
+          {'postId': widget.post.id, 'commentCount': widget.post.commentCount + _addedCommentCount},
+        ));
       } else {
         throw Exception(response.error);
       }
@@ -415,7 +423,7 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
 
   Widget _buildInputArea() {
     return Container(
-      padding: EdgeInsets.only(left: 16, right: 16, top: 10, bottom: MediaQuery.of(context).viewInsets.bottom + 10),
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 10, bottom: 10),
       decoration: BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Colors.grey.shade100))),
       child: Row(
         children: [

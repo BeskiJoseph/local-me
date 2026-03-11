@@ -611,10 +611,11 @@ router.get('/', authenticate, async (req, res, next) => {
         //
         // For author/category/city filtered queries → no trending, just recency
 
-        const isFilteredQuery = !!(authorId || category || city || country);
+        const { mediaType } = req.query;
+        const isFilteredQuery = !!(authorId || category || (!isLocalFeed && feedType !== 'global' && (city || country)));
         const cacheKey = isFilteredQuery
-            ? `feed:filtered:${authorId || ''}:${category || ''}:${city || ''}:${pageSize}:${afterId || 'p1'}`
-            : `feed:global:trending:${uid}:${pageSize}`;
+            ? `feed:filtered:${authorId || ''}:${category || ''}:${city || ''}:${mediaType || ''}:${pageSize}:${afterId || 'p1'}`
+            : `feed:global:trending:${uid}:${mediaType || ''}:${pageSize}`;
 
         let responseDataPromise;
         const cached = FEED_CACHE.get(cacheKey);
@@ -636,6 +637,8 @@ router.get('/', authenticate, async (req, res, next) => {
                     if (authorId) query = query.where('authorId', '==', authorId);
                     if (category) query = query.where('category', '==', category);
                     if (city) query = query.where('city', '==', city);
+                    if (country) query = query.where('country', '==', country);
+                    if (mediaType) query = query.where('mediaType', '==', mediaType);
 
                     query = query.orderBy('createdAt', 'desc');
 
@@ -674,13 +677,19 @@ router.get('/', authenticate, async (req, res, next) => {
 
                 let snapshot;
                 try {
-                    snapshot = await db.collection('posts')
+                    let trendingQuery = db.collection('posts')
                         .where('visibility', '==', 'public')
-                        .where('status', '==', 'active')
-                        .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(windowStart))
+                        .where('status', '==', 'active');
+
+                    if (mediaType) {
+                        trendingQuery = trendingQuery.where('mediaType', '==', mediaType);
+                    }
+
+                    trendingQuery = trendingQuery.where('createdAt', '>=', admin.firestore.Timestamp.fromDate(windowStart))
                         .orderBy('createdAt', 'desc')
-                        .limit(200) // Fetch pool — score + sort in memory
-                        .get();
+                        .limit(200);
+
+                    snapshot = await trendingQuery.get();
                 } catch (indexErr) {
                     if (indexErr.code === 9 || indexErr.message?.includes('index')) {
                         logger.error('Missing Firestore index for trending feed');
@@ -844,6 +853,82 @@ router.get('/:id', authenticate, async (req, res, next) => {
                 likeCount: (data.likeCount || 0) + countDelta,
                 createdAt: safeParseIso(data.createdAt),
             },
+            error: null
+        });
+    } catch (err) { next(err); }
+});
+
+// ============================================================
+//  PATCH /api/posts/:id — Update Post
+// ============================================================
+router.patch('/:id', authenticate, async (req, res, next) => {
+    try {
+        const postId = req.params.id;
+        const { uid } = req.user;
+        const postRef = db.collection('posts').doc(postId);
+        const doc = await postRef.get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ success: false, error: 'Post not found' });
+        }
+
+        const currentData = doc.data();
+        if (currentData.authorId !== uid && req.user.role !== 'admin') {
+            return res.status(403).json({ success: false, error: 'Unauthorized' });
+        }
+
+        const ALLOWED_UPDATE_FIELDS = [
+            'title', 'body', 'text', 'category', 'city', 'country',
+            'mediaUrl', 'mediaType', 'thumbnailUrl', 'location',
+            'tags', 'isEvent', 'eventStartDate', 'eventEndDate', 'eventDate',
+            'eventLocation', 'isFree', 'eventType', 'subtitle'
+        ];
+        const cleanUpdates = cleanPayload(req.body, ALLOWED_UPDATE_FIELDS);
+
+        // Use postSchema for validation (allowing partials as per Joi default in this context)
+        const { error, value } = postSchema.validate(cleanUpdates, { allowUnknown: true });
+        if (error) {
+            const err = new Error(error.details[0].message);
+            err.status = 400;
+            return next(err);
+        }
+
+        const updateData = {
+            ...value,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        if (value.title !== undefined) {
+            updateData.title_lowercase = value.title.toLowerCase();
+        }
+        if (value.body !== undefined || value.text !== undefined) {
+            updateData.body_lowercase = (value.body || value.text || '').toLowerCase();
+        }
+
+        let newGeoHash = null;
+        if (value.location?.lat && value.location?.lng) {
+            newGeoHash = ngeohash.encode(value.location.lat, value.location.lng, 5);
+            updateData.geoHash = newGeoHash;
+        }
+
+        await postRef.update(updateData);
+
+        // Update RAM index if location changed
+        if (newGeoHash) {
+            geoIndex.add(postId, value.location.lat, value.location.lng);
+        }
+
+        // Invalidate caches
+        FEED_CACHE.clear();
+
+        await AuditService.logAction({
+            userId: uid, action: 'POST_UPDATED',
+            metadata: { postId, updates: Object.keys(value) }, req
+        });
+
+        return res.json({
+            success: true,
+            data: { id: postId, ...updateData, updatedAt: new Date().toISOString() },
             error: null
         });
     } catch (err) { next(err); }

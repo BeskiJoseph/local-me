@@ -189,8 +189,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         PostService.emit(FeedEvent(FeedEventType.postCreated, post));
         
         if (!mounted) return;
-        // Navigate to the newly created group chat
-        Navigator.pushReplacement(
+        // Pop back through CreateEvent → NewPostScreen → Home, then push GroupChat
+        // This ensures the home screen refreshes the feed
+        Navigator.popUntil(context, (route) => route.isFirst);
+        Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => GroupChatScreen(event: post)),
         );

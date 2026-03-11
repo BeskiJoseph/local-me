@@ -76,6 +76,29 @@ class FeedController extends ChangeNotifier {
     }
   }
 
+  void updatePostCommentCount(String postId, int commentCount) {
+    final index = _posts.indexWhere((p) => p.id == postId);
+    if (index != -1) {
+      _posts[index] = _posts[index].copyWith(commentCount: commentCount);
+      notifyListeners();
+    }
+  }
+
+  void updatePost(String postId, Map<String, dynamic> updates) {
+    final index = _posts.indexWhere((p) => p.id == postId);
+    if (index != -1) {
+      final current = _posts[index];
+      _posts[index] = current.copyWith(
+        title: updates['title'] ?? current.title,
+        body: updates['body'] ?? updates['text'] ?? current.body,
+        category: updates['category'] ?? current.category,
+        city: updates['city'] ?? current.city,
+        country: updates['country'] ?? current.country,
+      );
+      notifyListeners();
+    }
+  }
+
   void prependPost(Post post) {
     if (!_posts.any((p) => p.id == post.id)) {
       _posts.insert(0, post);

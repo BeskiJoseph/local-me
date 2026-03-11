@@ -29,6 +29,7 @@ class BackendService {
       _instance.getFeed(cursor: cursor, limit: limit, type: type);
   static Future<ApiResponse<Map<String, dynamic>>> getProfile(String uid) => _instance.getProfile(uid);
   static Future<ApiResponse<bool>> updateProfile(Map<String, dynamic> data) => _instance.updateProfile(data);
+  static Future<ApiResponse<bool>> updatePost(String postId, Map<String, dynamic> data) => _instance.updatePost(postId, data);
   static Future<ApiResponse<bool>> deletePost(String postId) => _instance.deletePost(postId);
   static Future<ApiResponse<List<dynamic>>> getMessages(String eventId) => _instance.getMessages(eventId);
   static Future<ApiResponse<bool>> sendChatMessage(String eventId, String text) => _instance.sendChatMessage(eventId, text);
@@ -45,6 +46,7 @@ class BackendService {
     double? lastDistance,
     String? lastPostId,
     String? watchedIds,
+    String? mediaType,
   }) => _instance.getPosts(
     authorId: authorId,
     category: category,
@@ -58,6 +60,7 @@ class BackendService {
     lastDistance: lastDistance,
     lastPostId: lastPostId,
     watchedIds: watchedIds,
+    mediaType: mediaType,
   );
   static Future<ApiResponse<List<dynamic>>> getComments(String postId, {String? afterId, int limit = 20, String sort = 'newest'}) => 
       _instance.getComments(postId, afterId: afterId, limit: limit, sort: sort);
@@ -492,6 +495,17 @@ class BackendClient {
     } catch (e) { return ApiResponse(success: false, error: e.toString()); }
   }
 
+  Future<ApiResponse<bool>> updatePost(String postId, Map<String, dynamic> data) async {
+    try {
+      final resp = await _sendRequest((token) async => await _client.patch(
+        Uri.parse('$_baseUrl/api/posts/$postId'),
+        headers: await _getHeaders(token),
+        body: jsonEncode(data),
+      ));
+      return _processResponse(resp, (_) => true);
+    } catch (e) { return ApiResponse(success: false, error: e.toString()); }
+  }
+
   Future<ApiResponse<List<dynamic>>> getMessages(String eventId) async {
     try {
       final resp = await _sendRequest((token) async => await _client.get(
@@ -526,6 +540,7 @@ class BackendClient {
     double? lastDistance,
     String? lastPostId,
     String? watchedIds,
+    String? mediaType,
   }) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/posts').replace(queryParameters: {
@@ -540,6 +555,7 @@ class BackendClient {
         if (lastDistance != null) 'lastDistance': lastDistance.toString(),
         if (lastPostId != null) 'lastPostId': lastPostId,
         if (watchedIds != null) 'watchedIds': watchedIds,
+        if (mediaType != null) 'mediaType': mediaType,
         'limit': limit.toString(),
       });
       final resp = await _sendRequest((token) async => await _client.get(uri, headers: await _getHeaders(token)));

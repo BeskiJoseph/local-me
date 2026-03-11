@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/post.dart';
+import '../screens/edit_post_screen.dart';
 import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/backend_service.dart';
@@ -13,6 +14,7 @@ import '../utils/safe_error.dart';
 import '../screens/post_reels_view.dart';
 import '../screens/post_insights_screen.dart';
 import '../core/utils/time_utils.dart';
+import '../shared/widgets/expandable_text.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
 import '../core/utils/navigation_utils.dart';
@@ -291,9 +293,14 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
           if (post.title.isNotEmpty || post.body.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: _ExpandableText(
+              child: ExpandableText(
                 text: post.title.isNotEmpty ? post.title : post.body,
-                isArchived: post.computedStatus == 'archived',
+                maxLines: 2,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF333333),
+                  decoration: post.computedStatus == 'archived' ? TextDecoration.lineThrough : null,
+                ),
               ),
             ),
 
@@ -540,11 +547,13 @@ class _PostHeaderState extends State<_PostHeader> {
         isOwner: isOwner,
         post: widget.post,
         onDelete: widget.onDelete,
-        onEdit: () {
+        onEdit: () async {
           Navigator.pop(context);
-          // Navigate to edit screen (can be implemented later)
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Edit feature coming soon')),
+          await Navigator.push<bool>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => EditPostScreen(post: widget.post),
+            ),
           );
         },
         onShare: () async {
@@ -833,35 +842,29 @@ class _PostMediaState extends State<_PostMedia> {
     final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
     
     if (widget.post.mediaUrl == null && widget.post.id.startsWith('temp_')) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: AspectRatio(
-          aspectRatio: aspectRatio,
-          child: Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFFECECEC),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+      return AspectRatio(
+        aspectRatio: aspectRatio,
+        child: Container(
+          color: const Color(0xFFECECEC),
+          child: const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Uploading media...',
+                  style: TextStyle(
+                    color: Color(0xFF8A8A8A),
+                    fontSize: 12,
+                    fontFamily: AppTheme.fontFamily,
                   ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Uploading media...',
-                    style: TextStyle(
-                      color: Color(0xFF8A8A8A),
-                      fontSize: 12,
-                      fontFamily: AppTheme.fontFamily,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -871,15 +874,11 @@ class _PostMediaState extends State<_PostMedia> {
     return VisibilityDetector(
       key: Key('post_media_${widget.post.id}'),
       onVisibilityChanged: _handleVisibilityChanged,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: AspectRatio(
-            aspectRatio: aspectRatio,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
+      child: AspectRatio(
+        aspectRatio: aspectRatio,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
                 // Video Player or Thumbnail
                 if (isVideo && _isInitialized)
                   VideoPlayer(_controller!)
@@ -948,10 +947,8 @@ class _PostMediaState extends State<_PostMedia> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
+        );
+      }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1281,76 +1278,4 @@ class _Tile extends StatelessWidget {
   }
 }
 
-class _ExpandableText extends StatefulWidget {
-  final String text;
-  final bool isArchived;
-
-  const _ExpandableText({
-    super.key,
-    required this.text,
-    this.isArchived = false,
-  });
-
-  @override
-  State<_ExpandableText> createState() => _ExpandableTextState();
-}
-
-class _ExpandableTextState extends State<_ExpandableText> {
-  bool _isExpanded = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final textSpan = TextSpan(
-              text: widget.text,
-              style: TextStyle(
-                fontSize: 14,
-                color: widget.isArchived ? const Color(0xFF8A8A8A) : const Color(0xFF333333),
-                decoration: widget.isArchived ? TextDecoration.lineThrough : null,
-              ),
-            );
-
-            final textPainter = TextPainter(
-              text: textSpan,
-              maxLines: 2,
-              textDirection: ui.TextDirection.ltr,
-            );
-
-            textPainter.layout(maxWidth: constraints.maxWidth);
-
-            if (!textPainter.didExceedMaxLines) {
-              return RichText(text: textSpan);
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                RichText(
-                  text: textSpan,
-                  maxLines: _isExpanded ? null : 2,
-                  overflow: _isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                GestureDetector(
-                  onTap: () => setState(() => _isExpanded = !_isExpanded),
-                  child: Text(
-                    _isExpanded ? 'less' : 'more',
-                    style: const TextStyle(
-                      color: Color(0xFF8A8A8A),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-}
+// _ExpandableText removed (using shared ExpandableText)
