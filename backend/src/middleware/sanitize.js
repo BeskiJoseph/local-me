@@ -31,10 +31,10 @@ export const handleValidationErrors = (req, res, next) => {
 // File upload validation rules
 export const validateFileUpload = [
     body('mediaType')
-        .isIn(['image', 'video'])
-        .withMessage('Media type must be either image or video'),
+        .isIn(['image', 'video', 'document'])
+        .withMessage('Media type must be either image, video or document'),
     body('fileExtension')
-        .matches(/^(jpg|jpeg|png|webp|gif|mp4|webm|mov)$/)
+        .matches(/^(jpg|jpeg|png|webp|gif|mp4|webm|mov|pdf|doc|docx)$/)
         .withMessage('Invalid file extension'),
     handleValidationErrors,
 ];
@@ -67,6 +67,11 @@ export const validateFileMagicBytes = async (req, res, next) => {
         const allowedTypes = {
             image: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
             video: ['video/mp4', 'video/webm', 'video/quicktime'],
+            document: [
+                'application/pdf',
+                'application/msword',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            ],
         };
 
         const mediaType = req.body.mediaType;

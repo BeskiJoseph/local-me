@@ -9,6 +9,21 @@ import ngeohash from 'ngeohash';
 import { cleanPayload } from '../utils/sanitizer.js';
 import { buildDisplayName } from '../utils/userDisplayName.js';
 import { geoIndex } from '../services/geoIndex.js';
+
+// In-memory session tracking for 'seen' posts to minimize payload size
+// Format: sessionId -> Set of postIds
+const SESSION_SEEN = new Map();
+const SESSION_EXPIRY = 2 * 60 * 60 * 1000; // 2 hour TTL
+
+// Cleanup function to evict old sessions
+function cleanupSessions() {
+    const now = Date.now();
+    for (const [sid, session] of SESSION_SEEN.entries()) {
+        if (now - session.lastActive > SESSION_EXPIRY) {
+            SESSION_SEEN.delete(sid);
+        }
+    }
+}
 import {
     getUserContext,
     updateUserContextCache,
@@ -49,17 +64,47 @@ function getPrecisionForDistance(distanceKm) {
 }
 
 // ============================================================
+//  N-GRAM GENERATOR FOR SUBSTRING SEARCH
+//  Generates 3+ char substrings from title for array-contains queries
+// ============================================================
+function generateNgrams(text, minLen = 3) {
+    if (!text) return [];
+    const normalized = text.toLowerCase().trim();
+    const tokens = new Set();
+
+    // Sliding window n-grams over full string
+    for (let i = 0; i < normalized.length; i++) {
+        for (let len = minLen; len <= Math.min(normalized.length - i, 20); len++) {
+            tokens.add(normalized.substring(i, i + len));
+        }
+    }
+
+    // Per-word n-grams
+    const words = normalized.split(/\s+/).filter(w => w.length >= minLen);
+    for (const word of words) {
+        for (let i = 0; i < word.length; i++) {
+            for (let len = minLen; len <= Math.min(word.length - i, 15); len++) {
+                tokens.add(word.substring(i, i + len));
+            }
+        }
+    }
+
+    // Cap at 100 tokens to keep Firestore doc size reasonable
+    return Array.from(tokens).slice(0, 100);
+}
+
+// ============================================================
 //  POST SCHEMA VALIDATION
 // ============================================================
 const postSchema = Joi.object({
-    title: Joi.string().max(200).allow(null, ''),
-    body: Joi.string().max(2000).allow(null, ''),
-    text: Joi.string().max(2000).allow(null, ''),
+    title: Joi.string().max(2000).allow(null, ''),
+    body: Joi.string().max(5000).allow(null, ''),
+    text: Joi.string().max(5000).allow(null, ''),
     category: Joi.string().max(50).allow(null, ''),
     city: Joi.string().max(100).allow(null, ''),
     country: Joi.string().max(100).allow(null, ''),
     mediaUrl: Joi.string().uri().allow(null, ''),
-    mediaType: Joi.string().valid('image', 'video', 'text', 'none').default('none'),
+    mediaType: Joi.string().valid('image', 'video', 'text', 'document', 'none').default('none'),
     thumbnailUrl: Joi.string().uri().allow(null, ''),
     location: Joi.object({
         lat: Joi.number(),
@@ -119,7 +164,11 @@ function computeTrendingScore(post, gravity = 1.4) {
 }
 
 // (Moved User Context logic to src/services/userContextService.js)
-export const invalidateFeedCache = () => { FEED_CACHE.clear(); };
+export const invalidateFeedCache = () => { 
+    FEED_CACHE.clear(); 
+    LOCAL_POOL_CACHE.clear();
+    logger.debug('[CACHE] Global and Local feed caches cleared');
+};
 
 // ============================================================
 //  SAFE DATE PARSER
@@ -185,186 +234,83 @@ const mapDocToPost = (doc) => {
 
 // (Moved getUserContext to src/services/userContextService.js)
 
-//  ⭐ CORE: IN-MEMORY DISTANCE FEED
-//  Queries the RAM index first, then fetches docs from Firestore
 // ============================================================
-async function fetchLocalFeedWithCursor(
+//  LOCAL FEED ENGINE ( seenIds-based )
+// ============================================================
+export async function fetchLocalFeedWithCursor(
     lat, lng,
-    lastDistance, lastPostId,
-    watchedIdsSet, pageSize
+    watchedIdsSet, pageSize,
+    mediaType = null
 ) {
     const startTime = Date.now();
+    const userLat = parseFloat(lat);
+    const userLng = parseFloat(lng);
 
-    // STEP 1: Check if geoIndex is ready
-    if (!geoIndex || !geoIndex.isReady) {
-        logger.info('[FEED] GeoIndex not ready yet. Using Firestore fallback.');
-        return fetchFromFirestoreFallback(lat, lng, lastDistance, lastPostId, watchedIdsSet, pageSize);
-    }
+    // 1. Query RAM Index for exact distance matches
+    logger.info({ userLat, userLng, pageSize, watchedCount: watchedIdsSet.size }, '[LOCAL FEED] Querying GeoIndex RAM');
+    const searchResult = geoIndex.queryLocal(userLat, userLng, watchedIdsSet, mediaType, pageSize);
+    const candidates = searchResult.posts;
+    const maxScanned = searchResult.maxScannedDistance;
 
-    // STEP 2: Query in-memory index
-    const geoStartTime = Date.now();
-    const geoResults = geoIndex.query({
-        userLat: parseFloat(lat),
-        userLng: parseFloat(lng),
-        lastDistance,
-        lastPostId,
-        watchedIdsSet,
-        limit: pageSize * 3
-    });
-    const geoQueryMs = Date.now() - geoStartTime;
+    if (candidates.length === 0) {
+        logger.info('[LOCAL FEED] All posts seen. Triggering "Cycle" fallback.');
+        const cycleResult = geoIndex.queryLocal(userLat, userLng, new Set(), mediaType, pageSize);
+        const cycleCandidates = cycleResult.posts;
+        
+        if (cycleCandidates.length === 0) {
+            return { success: true, posts: [], hasMore: false, maxScannedDistance: 0 };
+        }
 
-    // STEP 3: If 0 results returned
-    if (geoResults.length === 0) {
+        const cycleDocs = await Promise.all(
+            cycleCandidates.map(c => db.collection('posts').doc(c.id).get())
+        );
+
+        const cyclePage = cycleDocs
+            .filter(d => d.exists)
+            .map(d => {
+                const idxData = cycleCandidates.find(c => c.id === d.id);
+                return { ...mapDocToPost(d), distance: idxData ? idxData.distance : 0 };
+            });
+
         return {
             success: true,
-            data: [],
-            pagination: {
-                lastDistance,
-                lastPostId,
-                hasMore: false,
-                cursor: null,
-                fallbackLevel: 'distance'
-            }
+            posts: cyclePage,
+            hasMore: true, // 🥇 Fix 2: Cycle always has more potential content
+            maxScannedDistance: cyclePage.length > 0 ? cyclePage[cyclePage.length - 1].distance : 0
         };
     }
 
-    const roundedLat = Math.round(parseFloat(lat) * 100) / 100;
-    const roundedLng = Math.round(parseFloat(lng) * 100) / 100;
-    const cellKey = `local:${roundedLat}:${roundedLng}:${pageSize}:${lastDistance}:${lastPostId}`;
+    // 2. Fetch full Post documents from Firestore concurrently
+    const firestoreStartTime = Date.now();
+    const docs = await Promise.all(
+        candidates.map(c => db.collection('posts').doc(c.id).get())
+    );
+    const firestoreMs = Date.now() - firestoreStartTime;
 
-    let finalPosts = [];
-    const cached = LOCAL_POOL_CACHE.get(cellKey);
-
-    let firestoreMs = 0;
-    if (cached && (Date.now() - cached.timestamp < LOCAL_CACHE_TTL)) {
-        logger.debug({ cellKey }, '[LOCAL FEED] Cache hit');
-        finalPosts = cached.data.map(post => ({
-            ...post,
-            distance: getDistance(parseFloat(lat), parseFloat(lng), post.latitude, post.longitude)
-        }));
-    } else {
-        const firestoreStartTime = Date.now();
-        const pageResults = geoResults.slice(0, pageSize);
-        const docRefs = pageResults.map(({ postId }) => db.collection('posts').doc(postId));
-
-        // STEP 4: Fetch full post data in chunks to respect 500 doc limit
-        const CHUNK_SIZE = 500;
-        const snapshots = [];
-        for (let i = 0; i < docRefs.length; i += CHUNK_SIZE) {
-            const chunk = docRefs.slice(i, i + CHUNK_SIZE);
-            snapshots.push(await db.getAll(...chunk));
-        }
-        const postDocs = snapshots.flat();
-        firestoreMs = Date.now() - firestoreStartTime;
-
-        // STEP 5: Build final post objects
-        const pool = [];
-        postDocs.forEach((doc, index) => {
-            if (doc.exists) {
-                const data = doc.data();
-                if (data.status === 'active' && data.visibility === 'public') {
-                    const post = mapDocToPost(doc);
-                    pool.push(post);
-                    finalPosts.push({
-                        ...post,
-                        distance: getDistance(parseFloat(lat), parseFloat(lng), post.latitude, post.longitude)
-                    });
-                }
-            }
+    const page = docs
+        .filter(d => d.exists)
+        .map(d => {
+            const idxData = candidates.find(c => c.id === d.id);
+            const post = mapDocToPost(d);
+            return {
+                ...post,
+                distance: idxData ? idxData.distance : 0
+            };
         });
 
-        LOCAL_POOL_CACHE.set(cellKey, { timestamp: Date.now(), data: pool });
-    }
-
-    finalPosts.sort((a, b) => a.distance - b.distance);
-
-    const lastPost = finalPosts[finalPosts.length - 1];
+    const lastPost = page[page.length - 1];
     const totalMs = Date.now() - startTime;
 
     logger.info({
-        geoQueryMs,
-        firestoreMs,
-        totalMs,
-        indexSize: geoIndex.size,
-        returned: finalPosts.length,
-        nearest: finalPosts[0]?.distance?.toFixed(2),
-        farthest: lastPost?.distance?.toFixed(2)
-    }, '[LOCAL FEED] Memory query complete');
+        firestoreMs, totalMs, poolSize: geoIndex.size, returned: page.length,
+        hasMore: searchResult.hasMore
+    }, '[LOCAL FEED] Request complete');
 
     return {
         success: true,
-        data: finalPosts,
-        pagination: {
-            lastDistance: lastPost ? parseFloat(lastPost.distance.toFixed(6)) : lastDistance,
-            lastPostId: lastPost ? lastPost.id : lastPostId,
-            hasMore: geoResults.length > pageSize,
-            cursor: lastPost ? lastPost.id : null,
-            fallbackLevel: 'distance'
-        }
-    };
-}
-
-async function fetchFromFirestoreFallback(
-    lat, lng, lastDistance, lastPostId, watchedIdsSet, pageSize
-) {
-    const userLat = parseFloat(lat);
-    const userLng = parseFloat(lng);
-    const centerHash = ngeohash.encode(userLat, userLng, 5);
-    const prefixes = [centerHash, ...ngeohash.neighbors(centerHash)];
-
-    const ringBatches = await Promise.all(
-        prefixes.map(prefix =>
-            db.collection('posts')
-                .where('visibility', '==', 'public')
-                .where('status', '==', 'active')
-                .where('geoHash', '>=', prefix)
-                .where('geoHash', '<=', prefix + '\uf8ff')
-                .orderBy('geoHash')
-                .orderBy('createdAt', 'desc')
-                .limit(200)
-                .get()
-                .then(snap => snap.docs.map(mapDocToPost))
-                .catch(() => [])
-        )
-    );
-
-    let pool = [];
-    const seenIds = new Set();
-    ringBatches.forEach(batch => batch.forEach(p => {
-        if (!seenIds.has(p.id)) {
-            seenIds.add(p.id);
-            pool.push(p);
-        }
-    }));
-
-    const results = pool.map(p => ({
-        ...p,
-        distance: getDistance(userLat, userLng, p.latitude, p.longitude)
-    })).filter(p => {
-        if (watchedIdsSet.has(p.id)) return false;
-        if (p.distance < lastDistance - 0.001) return false;
-        if (lastPostId && Math.abs(p.distance - lastDistance) < 0.001 && p.id <= lastPostId) return false;
-        return true;
-    });
-
-    results.sort((a, b) => {
-        if (Math.abs(a.distance - b.distance) < 0.001) return a.id.localeCompare(b.id);
-        return a.distance - b.distance;
-    });
-
-    const page = results.slice(0, pageSize);
-    const lastPost = page[page.length - 1];
-
-    return {
-        success: true,
-        data: page,
-        pagination: {
-            lastDistance: lastPost ? parseFloat(lastPost.distance.toFixed(6)) : lastDistance,
-            lastPostId: lastPost ? lastPost.id : lastPostId,
-            hasMore: results.length > pageSize,
-            cursor: lastPost ? lastPost.id : null,
-            fallbackLevel: 'fallback'
-        }
+        posts: page,
+        hasMore: searchResult.hasMore,
+        maxScannedDistance: maxScanned
     };
 }
 
@@ -374,14 +320,32 @@ async function fetchFromFirestoreFallback(
  */
 router.get('/new-since', authenticate, async (req, res, next) => {
     try {
-        const { lat, lng, sinceTimestamp, maxDistance } = req.query;
-        if (!lat || !lng || !sinceTimestamp) {
-            return res.status(400).json({ success: false, error: 'Missing required params' });
+        const { lat, lng, city, sinceTimestamp, maxDistance, watchedIds, sid, mediaType } = req.query;
+        if (!sinceTimestamp) {
+            return res.status(400).json({ success: false, error: 'Missing sinceTimestamp' });
         }
 
         const since = new Date(parseInt(sinceTimestamp));
-        const userLat = parseFloat(lat);
-        const userLng = parseFloat(lng);
+        const userLat = lat ? parseFloat(lat) : null;
+        const userLng = lng ? parseFloat(lng) : null;
+        const discoveryRadius = parseFloat(maxDistance) || 10;
+
+        let sessionSet = new Set();
+        if (sid) {
+            if (!SESSION_SEEN.has(sid)) {
+                SESSION_SEEN.set(sid, { ids: new Set(), lastActive: Date.now() });
+            }
+            const sessionData = SESSION_SEEN.get(sid);
+            sessionData.lastActive = Date.now();
+            sessionSet = sessionData.ids;
+        }
+
+        const decodedWatchedIds = watchedIds ? decodeURIComponent(watchedIds) : null;
+        if (decodedWatchedIds) {
+            decodedWatchedIds.split(',').forEach(id => {
+                if (id.trim()) sessionSet.add(id.trim());
+            });
+        }
 
         const snapshot = await db.collection('posts')
             .where('visibility', '==', 'public')
@@ -391,28 +355,32 @@ router.get('/new-since', authenticate, async (req, res, next) => {
             .limit(50)
             .get();
 
-        let newPosts = snapshot.docs.map(mapDocToPost).map(post => ({
-            ...post,
-            distance: getDistance(userLat, userLng, post.latitude, post.longitude)
-        }));
+        let newPosts = snapshot.docs
+            .map(mapDocToPost)
+            .map(post => ({
+                ...post,
+                distance: (userLat && userLng) ? getDistance(userLat, userLng, post.latitude, post.longitude) : null
+            }))
+            .filter(post => {
+                if (sessionSet.has(post.id)) return false;
+                if (mediaType && post.mediaType !== mediaType) return false;
 
-        // Only return posts nearer than user's current scroll position if maxDistance is provided
-        if (maxDistance) {
-            const maxD = parseFloat(maxDistance);
-            newPosts = newPosts.filter(p => p.distance <= maxD);
-        }
+                if (city) {
+                    return post.city === city;
+                } else if (userLat && userLng) {
+                    return post.distance != null && post.distance <= discoveryRadius;
+                }
+                return false;
+            });
 
-        // Sort by distance ASC
-        newPosts.sort((a, b) => a.distance - b.distance);
+        newPosts.sort((a, b) => (a.distance || 0) - (b.distance || 0));
 
         return res.json({
             success: true,
             data: newPosts,
             count: newPosts.length
         });
-    } catch (error) {
-        next(error);
-    }
+    } catch (error) { next(error); }
 });
 
 // ============================================================
@@ -431,9 +399,7 @@ router.post('/', authenticate, async (req, res, next) => {
         const { error, value } = postSchema.validate(cleanBody);
         if (error) {
             const err = new Error(error.details[0].message);
-            err.status = 400;
-            err.code = 'post/invalid-input';
-            return next(err);
+            err.status = 400; return next(err);
         }
 
         if (value.isEvent) {
@@ -453,7 +419,7 @@ router.post('/', authenticate, async (req, res, next) => {
 
         let geoHash = null;
         if (value.location?.lat && value.location?.lng) {
-            geoHash = ngeohash.encode(value.location.lat, value.location.lng, 5);
+            geoHash = ngeohash.encode(value.location.lat, value.location.lng, 9);
         }
 
         const postData = {
@@ -461,6 +427,7 @@ router.post('/', authenticate, async (req, res, next) => {
             authorId: uid,
             authorName: actorDisplayName,
             authorProfileImage: req.user.photoURL,
+            engagementScore: 0,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             likeCount: 0,
             commentCount: 0,
@@ -469,11 +436,12 @@ router.post('/', authenticate, async (req, res, next) => {
             status: 'active',
             geoHash,
             title_lowercase: (value.title || '').toLowerCase(),
-            body_lowercase: (value.body || value.text || '').toLowerCase()
+            body_lowercase: (value.body || value.text || '').toLowerCase(),
+            authorName_lowercase: (actorDisplayName || '').toLowerCase(),
+            titleNgrams: generateNgrams(value.title || '')
         };
 
         const postRef = db.collection('posts').doc(value.id || db.collection('posts').doc().id);
-
         await db.runTransaction(async (transaction) => {
             transaction.set(postRef, postData);
             if (value.isEvent) {
@@ -494,10 +462,8 @@ router.post('/', authenticate, async (req, res, next) => {
             }
         });
 
-        // Add to RAM index
-        geoIndex.add(postRef.id, value.location?.lat, value.location?.lng);
-
-        FEED_CACHE.clear();
+        geoIndex.add(postRef.id, postData);
+        invalidateFeedCache();
 
         await AuditService.logAction({
             userId: uid, action: 'POST_CREATED',
@@ -541,45 +507,82 @@ router.post('/', authenticate, async (req, res, next) => {
 //    limit             — page size
 // ============================================================
 router.get('/', authenticate, async (req, res, next) => {
-    console.time('🔵 TOTAL feed request');
+    const feedStartTime = Date.now();
     try {
         const {
             authorId, category, city, lat, lng, country,
             feedType, limit = 20, afterId,
-            lastDistance, lastPostId, watchedIds
+            watchedIds, mediaType, sid
         } = req.query;
+
+        // ── Session Matching ──
+        let sessionSet = new Set();
+        if (sid) {
+            if (!SESSION_SEEN.has(sid)) {
+                cleanupSessions(); // Run cleanup when a new session is born
+                SESSION_SEEN.set(sid, { ids: new Set(), lastActive: Date.now() });
+            }
+            const sessionData = SESSION_SEEN.get(sid);
+            sessionData.lastActive = Date.now();
+            sessionSet = sessionData.ids;
+        }
+
+        // Explicitly decode URL-encoded commas if they managed to sneak through
+        const decodedWatchedIds = watchedIds ? decodeURIComponent(watchedIds) : null;
+        if (decodedWatchedIds) {
+            decodedWatchedIds.split(',').forEach(id => {
+                if (id.trim()) sessionSet.add(id.trim());
+            });
+        }
 
         const isLocalFeed = feedType === 'local';
         const pageSize = Math.min(parseInt(limit), 50);
         const { uid } = req.user;
 
-        logger.info({ feedType, lat, lng, lastDistance, lastPostId, uid }, '[FEED] Request');
+        logger.info({ feedType, lat, lng, uid }, '[FEED] Request');
 
-        // ── LOCAL FEED: Use strict distance cursor engine ──
-        // Only trigger distance engine if lat/lng present and it's not a specific author query
+
+        // ── LOCAL FEED: Use seenIds-only engine (no distance cursor) ──
+        // Only trigger local feed when lat/lng present and not a specific author query
         if (isLocalFeed && lat && lng && !authorId && !category) {
 
-            const distanceCursor = parseFloat(lastDistance) || 0;
-            const postIdCursor = lastPostId || null;
-            const watchedSet = watchedIds
-                ? new Set(watchedIds.split(',').filter(Boolean))
-                : new Set();
-
-            console.time('🟡 fetchGeoRings & getUserContext');
             const [responseData, userContext] = await Promise.all([
                 fetchLocalFeedWithCursor(
                     lat, lng,
-                    distanceCursor,
-                    postIdCursor,
-                    watchedSet,
-                    pageSize
+                    sessionSet, // Use the persistent session set
+                    pageSize,
+                    mediaType
                 ),
                 getUserContext(uid)
             ]);
-            console.timeEnd('🟡 fetchGeoRings & getUserContext');
+            // Normalize to a common shape
+            let postsFromResponse = (responseData.posts || responseData.data || []);
+            
+            // ✅ RESILIENCY FIX: If Local (Distance) results are insufficient, 
+            // fallback to a City-based query for the same area.
+            if (postsFromResponse.length < pageSize && (city || country)) {
+                logger.info('[FEED] Local GeoIndex results insufficient. Filling from City/Country.');
+                let cityQuery = db.collection('posts')
+                    .where('visibility', '==', 'public')
+                    .where('status', '==', 'active');
+                
+                if (city) cityQuery = cityQuery.where('city', '==', city);
+                else if (country) cityQuery = cityQuery.where('country', '==', country);
+                
+                if (mediaType) cityQuery = cityQuery.where('mediaType', '==', mediaType);
+                
+                const citySnapshot = await cityQuery.orderBy('createdAt', 'desc').limit(pageSize).get();
+                const cityPosts = citySnapshot.docs.map(mapDocToPost);
+                
+                const postMap = new Map();
+                postsFromResponse.forEach(p => postMap.set(p.id, p));
+                cityPosts.forEach(p => {
+                    if (!postMap.has(p.id)) postMap.set(p.id, p);
+                });
+                postsFromResponse = Array.from(postMap.values()).slice(0, pageSize);
+            }
 
-            console.time('🟡 embedLikeState');
-            let finalPosts = (responseData.data || []).filter(
+            let finalPosts = postsFromResponse.filter(
                 post => !userContext.mutedUserIds.has(post.authorId)
             );
 
@@ -592,12 +595,14 @@ router.get('/', authenticate, async (req, res, next) => {
                     likeCount: (post.likeCount || 0) + delta
                 };
             });
-            console.timeEnd('🟡 embedLikeState');
 
-            console.timeEnd('🔵 TOTAL feed request');
+            // ✅ Fix 1: Strictly REMOVED automatic seen marking in backend.
+            // Result: Only posts actually viewed in frontend enter the seenIds filter.
+
             return res.json({
-                ...responseData,
-                data: finalPosts
+                success: true,
+                data: finalPosts,
+                hasMore: responseData.hasMore || finalPosts.length >= pageSize // ✅ Fix 3: Safer hasMore
             });
         }
 
@@ -611,11 +616,10 @@ router.get('/', authenticate, async (req, res, next) => {
         //
         // For author/category/city filtered queries → no trending, just recency
 
-        const { mediaType } = req.query;
         const isFilteredQuery = !!(authorId || category || (!isLocalFeed && feedType !== 'global' && (city || country)));
         const cacheKey = isFilteredQuery
             ? `feed:filtered:${authorId || ''}:${category || ''}:${city || ''}:${mediaType || ''}:${pageSize}:${afterId || 'p1'}`
-            : `feed:global:trending:${uid}:${mediaType || ''}:${pageSize}`;
+            : `feed:global:trending:${mediaType || ''}:${pageSize}:${afterId || 'p1'}`;
 
         let responseDataPromise;
         const cached = FEED_CACHE.get(cacheKey);
@@ -671,78 +675,65 @@ router.get('/', authenticate, async (req, res, next) => {
                     };
                 }
 
-                // ── Global trending feed — time-decay scoring ──
-                // Fetch posts from the past 72 hours only (trending window)
-                const windowStart = new Date(Date.now() - 72 * 3600000);
+                // ── Global trending feed — native engagement ranking ──
+                let trendingQuery = db.collection('posts')
+                    .where('visibility', '==', 'public')
+                    .where('status', '==', 'active');
 
-                let snapshot;
-                try {
-                    let trendingQuery = db.collection('posts')
+                if (mediaType) {
+                    trendingQuery = trendingQuery.where('mediaType', '==', mediaType);
+                }
+
+                // Apply Cursor for Trending
+                if (afterId) {
+                    const lastDoc = await db.collection('posts').doc(afterId).get();
+                    if (lastDoc.exists) {
+                        // Note: In Trending sessions, cursors are tricky because engagement scores change.
+                        // For simplicity, we fallback to recent if afterId is present or use a standardized cursor.
+                        trendingQuery = trendingQuery.orderBy('engagementScore', 'desc').startAfter(lastDoc);
+                    } else {
+                        trendingQuery = trendingQuery.orderBy('engagementScore', 'desc');
+                    }
+                } else {
+                    trendingQuery = trendingQuery.orderBy('engagementScore', 'desc');
+                }
+
+                const trendingSnapshot = await trendingQuery.limit(pageSize).get();
+                let posts = trendingSnapshot.docs.map(mapDocToPost);
+
+                // ✅ RESILIENCY FIX: If trending returns nothing (e.g. scores missing or cursor offset),
+                // fallback to most recent posts.
+                if (posts.length < pageSize) {
+                    logger.info('[FEED] Trending results insufficient. Filling from Recency.');
+                    let recentQuery = db.collection('posts')
                         .where('visibility', '==', 'public')
                         .where('status', '==', 'active');
+                    
+                    if (mediaType) recentQuery = recentQuery.where('mediaType', '==', mediaType);
+                    recentQuery = recentQuery.orderBy('createdAt', 'desc');
 
-                    if (mediaType) {
-                        trendingQuery = trendingQuery.where('mediaType', '==', mediaType);
+                    if (afterId) {
+                        const lastDoc = await db.collection('posts').doc(afterId).get();
+                        if (lastDoc.exists) recentQuery = recentQuery.startAfter(lastDoc);
                     }
-
-                    trendingQuery = trendingQuery.where('createdAt', '>=', admin.firestore.Timestamp.fromDate(windowStart))
-                        .orderBy('createdAt', 'desc')
-                        .limit(200);
-
-                    snapshot = await trendingQuery.get();
-                } catch (indexErr) {
-                    if (indexErr.code === 9 || indexErr.message?.includes('index')) {
-                        logger.error('Missing Firestore index for trending feed');
-                        // Fallback: fetch without date filter
-                        snapshot = await db.collection('posts')
-                            .where('visibility', '==', 'public')
-                            .where('status', '==', 'active')
-                            .orderBy('createdAt', 'desc')
-                            .limit(200)
-                            .get();
-                    } else {
-                        throw indexErr;
-                    }
-                }
-
-                // Non-blocking in-memory scoring
-                const rawPosts = snapshot.docs.map(mapDocToPost);
-                let posts = [];
-                for (let i = 0; i < rawPosts.length; i++) {
-                    const post = rawPosts[i];
-                    posts.push({
-                        ...post,
-                        trendingScore: computeTrendingScore(post, 1.4)
+                    
+                    const recentSnapshot = await recentQuery.limit(pageSize).get();
+                    const recentPosts = recentSnapshot.docs.map(mapDocToPost);
+                    
+                    const postMap = new Map();
+                    posts.forEach(p => postMap.set(p.id, p));
+                    recentPosts.forEach(p => {
+                        if (!postMap.has(p.id)) postMap.set(p.id, p);
                     });
-                    if (i > 0 && i % 50 === 0) {
-                        await new Promise(resolve => setImmediate(resolve));
-                    }
+                    posts = Array.from(postMap.values()).slice(0, pageSize);
                 }
-
-                // Sort: Higher score first. 
-                // Tiebreaker: Most likes first.
-                posts.sort((a, b) => {
-                    if (b.trendingScore !== a.trendingScore) {
-                        return b.trendingScore - a.trendingScore;
-                    }
-                    return (b.likeCount || 0) - (a.likeCount || 0);
-                });
-
-                // Dedup against recently seen posts
-                const watchedSet = watchedIds
-                    ? new Set(watchedIds.split(',').filter(Boolean))
-                    : new Set();
-                posts = posts.filter(p => !watchedSet.has(p.id));
-
-                logger.info({ count: posts.length, watchedCount: watchedSet.size }, '[FEED] Global trending pool scored, sorted, and filtered');
 
                 return {
                     success: true,
-                    _allPosts: posts, // Full sorted list stored in cache
-                    data: posts.slice(0, pageSize),
+                    data: posts,
                     pagination: {
-                        cursor: posts.length > pageSize ? posts[pageSize - 1].id : null,
-                        hasMore: posts.length > pageSize
+                        cursor: posts.length > 0 ? posts[posts.length - 1].id : null,
+                        hasMore: posts.length === pageSize
                     }
                 };
             })();
@@ -754,57 +745,70 @@ router.get('/', authenticate, async (req, res, next) => {
             }).catch(() => FETCH_LOCKS.delete(cacheKey));
         }
 
-        // ── Handle pagination for global trending (offset by afterId) ──
-        console.time('🟡 fetchGeoRings & getUserContext');
-        let [resolvedData, userContext] = await Promise.all([
+        // ── Step 2: Decorate with User Context (Muted / Likes / Follows) ──
+        const [resolvedData, userContext] = await Promise.all([
             responseDataPromise,
             getUserContext(uid)
         ]);
-        console.timeEnd('🟡 fetchGeoRings & getUserContext');
 
-        if (!isFilteredQuery && afterId && resolvedData._allPosts) {
-            const allPosts = resolvedData._allPosts;
-            const afterIndex = allPosts.findIndex(p => p.id === afterId);
-            const startIndex = afterIndex >= 0 ? afterIndex + 1 : 0;
-            const pagePosts = allPosts.slice(startIndex, startIndex + pageSize);
-            const nextPost = allPosts[startIndex + pageSize];
-
-            resolvedData = {
-                ...resolvedData,
-                data: pagePosts,
-                pagination: {
-                    cursor: pagePosts.length > 0 ? pagePosts[pagePosts.length - 1].id : null,
-                    hasMore: !!nextPost
-                }
-            };
+        if (!resolvedData?.success) {
+            return res.json({ success: false, data: [], error: resolvedData?.error || 'Feed generation failed' });
         }
 
-        console.time('🟡 embedLikeState');
+        const watchedIdsSet = decodedWatchedIds
+            ? new Set(decodedWatchedIds.split(',').map(id => id.trim()).filter(Boolean))
+            : new Set();
+
         let finalPosts = (resolvedData.data || []).filter(
-            post => !userContext.mutedUserIds.has(post.authorId)
+            post => !userContext.mutedUserIds.has(post.authorId) && !sessionSet.has(post.id)
         );
 
+        let fallbackLevel = 1;
+
+        // ✅ Fix 4: If all results are filtered out, return the raw data as a fallback 
+        // to prevent the feed from showing "no content" prematurely.
+        if (finalPosts.length === 0 && (resolvedData.data || []).length > 0) {
+            logger.info('[GLOBAL FEED] All cached posts seen. Cycling back.');
+            finalPosts = resolvedData.data;
+            fallbackLevel = 'cycle';
+        }
+
+        // ✅ Fix 1: Removed automatic seen marking in backend for Global feed too.
+        /*
+        if (sid && finalPosts.length > 0) {
+            const session = SESSION_SEEN.get(sid);
+            if (session) {
+                finalPosts.forEach(p => session.ids.add(p.id));
+            }
+        }
+        */
+
         finalPosts = finalPosts.map(post => {
-            const delta = INTERACTION_DELTAS.counts.get(post.id) || 0;
+            const countDelta = INTERACTION_DELTAS.counts.get(post.id) || 0;
+            const isFollowing = userContext.followedUserIds.has(post.authorId);
             return {
                 ...post,
                 isLiked: userContext.likedPostIds.has(post.id),
-                isFollowing: userContext.followedUserIds.has(post.authorId),
-                likeCount: (post.likeCount || 0) + delta
+                isFollowing,
+                likeCount: (post.likeCount || 0) + countDelta,
+                engagementScore: post.engagementScore
             };
         });
-        console.timeEnd('🟡 embedLikeState');
 
-        console.timeEnd('🔵 TOTAL feed request');
+        logger.info({ feedMs: Date.now() - feedStartTime }, '[FEED] Request complete');
         return res.json({
-            success: resolvedData.success,
+            success: true,
             data: finalPosts,
-            pagination: resolvedData.pagination,
+            pagination: {
+                ...(resolvedData.pagination || {}),
+                hasMore: (resolvedData.pagination?.hasMore || finalPosts.length >= pageSize),
+                fallbackLevel: fallbackLevel
+            },
             error: null
         });
 
     } catch (err) {
-        console.timeEnd('🔵 TOTAL feed request');
+        logger.error({ feedMs: Date.now() - feedStartTime, err: err.message }, '[FEED] Request error');
         return next(err);
     }
 });
@@ -900,6 +904,7 @@ router.patch('/:id', authenticate, async (req, res, next) => {
 
         if (value.title !== undefined) {
             updateData.title_lowercase = value.title.toLowerCase();
+            updateData.titleNgrams = generateNgrams(value.title);
         }
         if (value.body !== undefined || value.text !== undefined) {
             updateData.body_lowercase = (value.body || value.text || '').toLowerCase();
@@ -907,19 +912,15 @@ router.patch('/:id', authenticate, async (req, res, next) => {
 
         let newGeoHash = null;
         if (value.location?.lat && value.location?.lng) {
-            newGeoHash = ngeohash.encode(value.location.lat, value.location.lng, 5);
+            newGeoHash = ngeohash.encode(value.location.lat, value.location.lng, 9);
             updateData.geoHash = newGeoHash;
         }
 
         await postRef.update(updateData);
 
-        // Update RAM index if location changed
-        if (newGeoHash) {
-            geoIndex.add(postId, value.location.lat, value.location.lng);
-        }
-
-        // Invalidate caches
-        FEED_CACHE.clear();
+        // Update RAM index if location or data changed
+        geoIndex.update(postId, updateData);
+        invalidateFeedCache();
 
         await AuditService.logAction({
             userId: uid, action: 'POST_UPDATED',
@@ -968,8 +969,9 @@ router.delete('/:id', authenticate, async (req, res, next) => {
             metadata: { postId: req.params.id }, req
         });
 
-        // Remove from RAM index
+        // Invalidate caches and RAM index
         geoIndex.remove(req.params.id);
+        invalidateFeedCache();
 
         return res.json({ success: true, data: { message: 'Post deleted' }, error: null });
     } catch (err) { next(err); }
@@ -1026,6 +1028,11 @@ router.post('/:id/view', authenticate, async (req, res, next) => {
         const postId = req.params.id;
         const userId = req.user.uid;
 
+        // Check if user already viewed this post (prevent count inflation)
+        const viewRef = db.collection('posts').doc(postId).collection('views').doc(userId);
+        const existingView = await viewRef.get();
+        const isFirstView = !existingView.exists;
+
         const userDoc = await db.collection('users').doc(userId).get();
         const userData = userDoc.data();
 
@@ -1043,10 +1050,14 @@ router.post('/:id/view', authenticate, async (req, res, next) => {
             viewedAt: admin.firestore.FieldValue.serverTimestamp()
         };
 
-        await db.collection('posts').doc(postId).collection('views').doc(userId).set(viewData, { merge: true });
-        await db.collection('posts').doc(postId).update({ viewCount: admin.firestore.FieldValue.increment(1) });
+        await viewRef.set(viewData, { merge: true });
 
-        return res.json({ success: true, data: { viewed: true }, error: null });
+        // Only increment viewCount on first view by this user
+        if (isFirstView) {
+            await db.collection('posts').doc(postId).update({ viewCount: admin.firestore.FieldValue.increment(1) });
+        }
+
+        return res.json({ success: true, data: { viewed: true, firstView: isFirstView }, error: null });
     } catch (err) { next(err); }
 });
 

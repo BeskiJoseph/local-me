@@ -10,6 +10,7 @@ export const POLICIES = {
     like: { max: 40, window: 60 * 1000 },
     follow: { max: 20, window: 60 * 1000 },
     upload: { max: 20, window: 15 * 60 * 1000 },
+    chat_message: { max: 20, window: 60 * 1000 }, // ~3s per message average
     api: { max: 300, window: 15 * 60 * 1000 }, // General API route limit
     health: { max: 60, window: 60 * 1000 }
 };

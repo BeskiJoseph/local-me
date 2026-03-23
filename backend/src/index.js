@@ -8,14 +8,12 @@ import { geoIndex } from './services/geoIndex.js';
 const httpServer = http.createServer(app);
 const io = initSocket(httpServer);
 
-const server = httpServer.listen(config.port, '0.0.0.0', () => {
+const server = httpServer.listen(config.port, '0.0.0.0', async () => {
     logger.info(`🚀 Server running on port ${config.port}`);
     logger.info(`🌐 Environment: ${config.nodeEnv}`);
 
-    // Build Geo Index on startup
-    geoIndex.build();
-    // Rebuild every 10 mins to catch missed updates
-    setInterval(() => geoIndex.build(), 10 * 60 * 1000);
+    // Build the in-memory geospatial index for the local feed
+    await geoIndex.build();
 });
 
 /**

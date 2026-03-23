@@ -1,0 +1,26 @@
+﻿
+> media-upload-backend@1.0.0 start
+> node src/index.js
+
+[14:31:40 UTC] [32mINFO[39m: [36mΓ£à Firebase Admin initialized with Service Account[39m
+[14:31:41 UTC] [32mINFO[39m: [36m≡ƒÄ¼ Video Processor initialized with System FFmpeg/FFprobe[39m
+[14:31:41 UTC] [32mINFO[39m: [36m≡ƒöÆ Production mode: Security features enabled[39m
+[14:31:41 UTC] [32mINFO[39m: [36m≡ƒÜÇ Running in PRODUCTION mode[39m
+[14:31:41 UTC] [33mWARN[39m: [36mΓÜá∩╕Å  CORS is set to allow all origins (*). This is insecure for production![39m
+[14:31:41 UTC] [33mWARN[39m: [36mΓÜá∩╕Å  CORS_ALLOWED_ORIGINS not set. Using default which may be insecure.[39m
+[14:31:41 UTC] [31mERROR[39m: [36mUncaught Exception[39m
+    err: {
+      "type": "Error",
+      "message": "listen EADDRINUSE: address already in use 0.0.0.0:4000",
+      "stack":
+          Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
+              at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+              at listenInCluster (node:net:1997:12)
+              at node:net:2206:7
+              at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+      "code": "EADDRINUSE",
+      "errno": -4091,
+      "syscall": "listen",
+      "address": "0.0.0.0",
+      "port": 4000
+    }

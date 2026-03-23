@@ -1,8 +1,8 @@
-import '../models/post.dart';
-import '../models/paginated_response.dart';
-import '../models/api_response.dart';
-import '../services/backend_service.dart';
-import '../services/location_service.dart';
+import 'package:testpro/models/post.dart';
+import 'package:testpro/models/paginated_response.dart';
+import 'package:testpro/models/api_response.dart';
+import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/services/location_service.dart';
 
 /// Repository for handling Post and Event data operations.
 /// V2: Strict distance-cursor pagination + session-level deduplication.
@@ -12,7 +12,7 @@ class PostRepository {
   // ─────────────────────────────────────────────
   // Create Post
   // ─────────────────────────────────────────────
-  Future<String> createPost({
+  Future<Post> createPost({
     required String title,
     required String body,
     String scope = 'local',
@@ -41,8 +41,9 @@ class PostRepository {
       'tags': [category],
     });
 
-    if (!response.success) throw response.error ?? 'Failed to create post';
-    return response.data!;
+    if (!response.success || response.data == null)
+      throw response.error ?? 'Failed to create post';
+    return Post.fromJson(response.data!);
   }
 
   // ─────────────────────────────────────────────
@@ -69,14 +70,12 @@ class PostRepository {
     required String feedType,
     String? userCity,
     String? userCountry,
-    String? afterId,
-    double? lastDistance,
-    String? lastPostId,
     String? watchedIds,
     String? authorId,
     String? category,
     String? mediaType,
     int limit = 20,
+    String? sid,
   }) async {
     var pos = LocationService.currentPosition;
     final isLocal = feedType == 'local';
@@ -87,31 +86,29 @@ class PostRepository {
     }
 
     final response = await BackendService.getPosts(
-      afterId: isLocal ? null : afterId,
+      // No cursor-based fetch; rely on seenIds on client side
       limit: limit,
       lat: pos?.latitude,
       lng: pos?.longitude,
+      city: userCity,
       country: userCountry,
       feedType: feedType,
-      lastDistance: lastDistance,
-      lastPostId: lastPostId,
       watchedIds: watchedIds,
       authorId: authorId,
       category: category,
       mediaType: mediaType,
+      sid: sid,
     );
 
     if (!response.success) throw response.error ?? 'Failed to fetch feed';
 
     final data = response.data ?? [];
-    final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+    final posts = data
+        .map((json) => Post.fromJson(json as Map<String, dynamic>))
+        .toList();
 
     return PaginatedResponse<Post>(
       data: posts,
-      nextCursor: response.pagination?.cursor,
-      lastDistance: response.pagination?.lastDistance?.toDouble(),
-      lastPostId: response.pagination?.lastPostId,
-      fallbackLevel: response.pagination?.fallbackLevel,
       hasMore: response.pagination?.hasMore ?? false,
     );
   }
@@ -127,7 +124,9 @@ class PostRepository {
     final response = await BackendService.getPosts(authorId: authorId);
     if (response.success) {
       final data = response.data ?? [];
-      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      final posts = data
+          .map((json) => Post.fromJson(json as Map<String, dynamic>))
+          .toList();
       yield posts;
     }
   }
@@ -135,7 +134,7 @@ class PostRepository {
   // ─────────────────────────────────────────────
   // Create Event
   // ─────────────────────────────────────────────
-  Future<String> createEvent({
+  Future<Post> createEvent({
     required String title,
     required String description,
     required String eventType,
@@ -169,8 +168,9 @@ class PostRepository {
       'tags': ['Events'],
     });
 
-    if (!response.success) throw response.error ?? 'Failed to create event';
-    return response.data!;
+    if (!response.success || response.data == null)
+      throw response.error ?? 'Failed to create event';
+    return Post.fromJson(response.data!);
   }
 
   // ─────────────────────────────────────────────
@@ -184,7 +184,9 @@ class PostRepository {
     final response = await BackendService.getPosts(category: scope);
     if (response.success) {
       final data = response.data ?? [];
-      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      final posts = data
+          .map((json) => Post.fromJson(json as Map<String, dynamic>))
+          .toList();
       yield posts;
     }
   }
@@ -209,7 +211,10 @@ class PostRepository {
     return _isAttendingEventStreamInternal(eventId, userId).asBroadcastStream();
   }
 
-  Stream<bool> _isAttendingEventStreamInternal(String eventId, String userId) async* {
+  Stream<bool> _isAttendingEventStreamInternal(
+    String eventId,
+    String userId,
+  ) async* {
     final response = await BackendService.checkEventAttendance(eventId);
     if (response.success) {
       yield response.data ?? false;

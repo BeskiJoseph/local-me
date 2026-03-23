@@ -15,7 +15,7 @@ const profileSchema = Joi.object({
     username: Joi.string().min(3).max(30).allow('', null),
     firstName: Joi.string().max(50).allow('', null),
     lastName: Joi.string().max(50).allow('', null),
-    about: Joi.string().max(500).allow('', null),
+    about: Joi.string().max(2000).allow('', null),
     profileImageUrl: Joi.string().uri().allow('', null),
     location: Joi.string().max(100).allow('', null),
     fcmToken: Joi.string().optional().allow(null, ''),

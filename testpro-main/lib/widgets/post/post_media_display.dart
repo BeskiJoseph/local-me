@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/post.dart';
 import '../../utils/proxy_helper.dart';
 import '../../screens/video_player_screen.dart';
@@ -27,6 +28,10 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
           builder: (_) => VideoPlayerScreen(post: widget.post),
         ),
       );
+    } else if (widget.post.mediaType == 'document') {
+      // Open document URL
+      final url = Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!));
+      launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
       // Open image in full screen
       showDialog(
@@ -75,6 +80,12 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
     if (widget.post.mediaUrl == null) return const SizedBox.shrink();
 
     final isVideo = widget.post.mediaType == 'video';
+    final isDocument = widget.post.mediaType == 'document';
+    
+    if (isDocument) {
+      return _buildDocumentCard();
+    }
+
     final mediaUrl = widget.post.thumbnailUrl ?? widget.post.mediaUrl!;
     // Instagram-style: 4:5 for images (compact), 9:16 for videos (vertical)
     final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
@@ -228,6 +239,80 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
                   ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDocumentCard() {
+    final fileName = widget.post.mediaUrl?.split('/').last ?? 'Document';
+    final extension = fileName.split('.').last.toUpperCase();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: _handleMediaTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEBF4FF),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.description_rounded,
+                  color: Color(0xFF3182CE),
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      extension == 'PDF' ? 'PDF Document' : 'Word Document',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF2D3748),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Tap to view document',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.open_in_new_rounded,
+                color: Color(0xFFCBD5E0),
+                size: 20,
+              ),
+            ],
           ),
         ),
       ),

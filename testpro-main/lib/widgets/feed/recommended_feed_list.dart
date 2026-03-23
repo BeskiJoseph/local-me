@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../../services/feed_service.dart';
-import '../../services/post_service.dart';
-import '../../models/post.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
+import 'package:testpro/models/post.dart';
 import '../../services/auth_service.dart';
 import '../../core/state/feed_controller.dart';
-import '../nextdoor_post_card.dart';
+import '../../core/state/feed_session.dart';
+import 'package:testpro/widgets/nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
 import '../../utils/safe_error.dart';
 import '../../services/backend_service.dart';
 import '../../screens/interest_picker_screen.dart';
+import '../../screens/post_reels_view.dart';
 
 /// A specialized widget to handle the personalized recommendation feed
 class RecommendedFeedList extends StatefulWidget {
@@ -19,12 +21,13 @@ class RecommendedFeedList extends StatefulWidget {
   State<RecommendedFeedList> createState() => _RecommendedFeedListState();
 }
 
-class _RecommendedFeedListState extends State<RecommendedFeedList> with AutomaticKeepAliveClientMixin {
+class _RecommendedFeedListState extends State<RecommendedFeedList>
+    with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final FeedController _feedController = FeedController();
   final String _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
   final Map<String, bool?> _likedPostIds = {};
-  
+
   Timer? _debounce;
   StreamSubscription? _eventSubscription;
 
@@ -36,7 +39,7 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
     super.initState();
     _loadMorePosts();
     _scrollController.addListener(_onScroll);
-    _eventSubscription = PostService.events.listen(_handleFeedEvent);
+    _eventSubscription = FeedEventBus.events.listen(_handleFeedEvent);
   }
 
   void _handleFeedEvent(FeedEvent event) {
@@ -51,7 +54,11 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
         setState(() {
           _likedPostIds[data['postId']] = data['isLiked'];
         });
-        _feedController.updatePostLike(data['postId'], data['isLiked'], data['likeCount']);
+        _feedController.updatePostLike(
+          data['postId'],
+          data['isLiked'],
+          data['likeCount'],
+        );
         break;
       default:
         break;
@@ -63,7 +70,8 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
 
     _debounce = Timer(const Duration(milliseconds: 300), () {
       if (_scrollController.hasClients &&
-          _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
+          _scrollController.position.pixels >=
+              _scrollController.position.maxScrollExtent - 200 &&
           !_feedController.isLoading &&
           _feedController.hasMore &&
           _feedController.error == null) {
@@ -103,22 +111,22 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
         return;
       }
 
-      final lastId = _feedController.cursor;
-      final newPosts = await FeedService.getRecommendedFeed(
-        userId: user.uid,
-        sessionId: _sessionId,
-        afterId: lastId,
+      final newResponse = await PostService.getPostsPaginated(
+        feedType: 'global',
         limit: 10,
+        watchedIds: FeedSession.instance.seenIdsParam,
+        sid: _sessionId,
       );
+      final newPosts = newResponse.data;
 
       if (mounted) {
         for (var p in newPosts) {
           _likedPostIds[p.id] = p.isLiked;
         }
         _feedController.appendPosts(
-          newPosts, 
-          refresh: refresh, 
-          nextCursor: newPosts.length == 10 ? newPosts.last.id : null
+          newPosts,
+          refresh: refresh,
+          hasMore: newResponse.hasMore,
         );
       }
     } catch (e) {
@@ -132,7 +140,7 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required by AutomaticKeepAliveClientMixin
-    
+
     return ListenableBuilder(
       listenable: _feedController,
       builder: (context, _) {
@@ -174,8 +182,8 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
               }
               final post = posts[index];
               // Hide archived/expired events
-              if ((post.isEvent || post.category.toLowerCase() == 'events') 
-                  && post.computedStatus == 'archived') {
+              if ((post.isEvent || post.category.toLowerCase() == 'events') &&
+                  post.computedStatus == 'archived') {
                 return const SizedBox.shrink();
               }
               // Route events to EventPostCard
@@ -185,6 +193,19 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
               return NextdoorStylePostCard(
                 post: post,
                 initialIsLiked: _likedPostIds[post.id],
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PostReelsView(
+                        posts: posts,
+                        startIndex: index,
+                        feedType: 'global',
+                        initialHasMore: _feedController.hasMore,
+                      ),
+                    ),
+                  );
+                },
               );
             },
           ),
@@ -215,7 +236,12 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
         children: [
           const Icon(Icons.error_outline, size: 48, color: Colors.red),
           const SizedBox(height: 16),
-          Text(safeErrorMessage(error, fallback: 'Failed to load recommendations.')),
+          Text(
+            safeErrorMessage(
+              error,
+              fallback: 'Failed to load recommendations.',
+            ),
+          ),
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: () => _loadMorePosts(refresh: true),
@@ -236,7 +262,9 @@ class _RecommendedFeedListState extends State<RecommendedFeedList> with Automati
           ElevatedButton(
             onPressed: () {
               Navigator.of(context).push(
-                MaterialPageRoute(builder: (context) => const InterestPickerScreen()),
+                MaterialPageRoute(
+                  builder: (context) => const InterestPickerScreen(),
+                ),
               );
             },
             child: const Text('Pick Interests'),

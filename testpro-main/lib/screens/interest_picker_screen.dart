@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../services/feed_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class InterestPickerScreen extends StatefulWidget {

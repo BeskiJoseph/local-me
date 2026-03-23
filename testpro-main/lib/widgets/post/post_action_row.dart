@@ -3,8 +3,8 @@ import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
-import '../../services/post_service.dart';
-import '../../core/utils/haptic_service.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/utils/safe_error.dart';
 import '../comments_bottom_sheet.dart';
 import 'dart:async';
 
@@ -32,7 +32,7 @@ class _PostActionRowState extends State<PostActionRow> {
   bool _isLikeBusy = false;
   bool? _optimisticLiked;
   int? _optimisticLikeCount;
-  StreamSubscription? _eventSub;
+  StreamSubscription? _subscription;
   Timer? _debounceTimer;
 
   @override
@@ -42,7 +42,7 @@ class _PostActionRowState extends State<PostActionRow> {
     _likeCount = widget.post.likeCount;
     
     // Sync with global post events for real-time consistency
-    _eventSub = PostService.events.listen((event) {
+    _subscription = FeedEventBus.events.listen((event) {
       if (!mounted) return;
       if (event.type == FeedEventType.postLiked) {
         final data = event.data as Map<String, dynamic>;
@@ -97,7 +97,8 @@ class _PostActionRowState extends State<PostActionRow> {
           });
 
           // Emit global event to sync other widgets showing this post
-          PostService.emit(FeedEvent(FeedEventType.postLiked, {
+          FeedEventBus.emit(FeedEvent(
+            FeedEventType.postLiked, {
             'postId': widget.post.id,
             'isLiked': _liked,
             'likeCount': _likeCount,
@@ -131,7 +132,7 @@ class _PostActionRowState extends State<PostActionRow> {
 
   @override
   void dispose() {
-    _eventSub?.cancel();
+    _subscription?.cancel();
     _debounceTimer?.cancel();
     super.dispose();
   }

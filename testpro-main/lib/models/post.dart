@@ -71,7 +71,18 @@ class Post {
     DateTime parseDate(dynamic date) {
       if (date == null) return DateTime.now();
       if (date is DateTime) return date;
-      return DateTime.tryParse(date.toString()) ?? DateTime.now();
+      if (date is String) return DateTime.tryParse(date) ?? DateTime.now();
+      if (date is Map && date.containsKey('_seconds')) {
+         return DateTime.fromMillisecondsSinceEpoch(date['_seconds'] * 1000);
+      }
+      return DateTime.now();
+    }
+
+    // Defensive check for location object vs string
+    final locationData = json['location'];
+    Map<String, dynamic>? locationMap;
+    if (locationData is Map<String, dynamic>) {
+       locationMap = locationData;
     }
 
     return Post(
@@ -87,10 +98,10 @@ class Post {
       likeCount: json['likeCount'] as int? ?? 0,
       commentCount: json['commentCount'] as int? ?? 0,
       latitude: (json['latitude'] as num?)?.toDouble() ??
-          (json['location']?['lat'] as num?)?.toDouble(),
+          (locationMap?['lat'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble() ??
-          (json['location']?['lng'] as num?)?.toDouble(),
-      city: json['city'] as String? ?? json['location']?['name'] as String?,
+          (locationMap?['lng'] as num?)?.toDouble(),
+      city: json['city'] as String? ?? locationMap?['name'] as String? ?? (locationData is String ? locationData : null),
       country: json['country'] as String?,
       category: json['category'] as String? ?? 'General',
       authorProfileImage: json['authorProfileImage'] as String?,
@@ -98,12 +109,11 @@ class Post {
       isEvent: (json['isEvent'] == true) || 
           (json['category'] as String? ?? '').toLowerCase() == 'events',
       
-      // Lazy mapping fallback for event start date on the client as well
       eventStartDate: json['eventStartDate'] != null 
-          ? DateTime.parse(json['eventStartDate'])
-          : (json['eventDate'] != null ? DateTime.parse(json['eventDate']) : null),
+          ? parseDate(json['eventStartDate'])
+          : parseDate(json['eventDate']),
           
-      eventEndDate: json['eventEndDate'] != null ? DateTime.parse(json['eventEndDate']) : null,
+      eventEndDate: json['eventEndDate'] != null ? parseDate(json['eventEndDate']) : null,
       eventType: json['eventType'] as String?,
       computedStatus: json['computedStatus'] as String?,
       

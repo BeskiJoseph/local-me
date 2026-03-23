@@ -1,23 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../models/post.dart';
-import '../models/comment.dart';
-import '../services/auth_service.dart';
-import '../services/backend_service.dart';
-import '../services/post_service.dart';
-import '../shared/widgets/user_avatar.dart';
-import '../core/utils/time_utils.dart';
-import '../utils/safe_error.dart';
+import 'package:testpro/models/post.dart';
+import 'package:testpro/models/comment.dart';
+import 'package:testpro/services/auth_service.dart';
+import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/services/socket_service.dart';
+import 'package:testpro/core/session/user_session.dart';
+import 'package:testpro/core/events/feed_events.dart';
+import 'package:testpro/shared/widgets/user_avatar.dart';
+import 'package:testpro/core/utils/time_utils.dart';
+import 'package:testpro/utils/safe_error.dart';
+import 'package:testpro/core/state/post_state.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'dart:async';
 
 /// YouTube-style advanced comments bottom sheet
-class CommentsBottomSheet extends StatefulWidget {
+class CommentsBottomSheet extends ConsumerStatefulWidget {
   final Post post;
 
   const CommentsBottomSheet({super.key, required this.post});
 
   @override
-  State<CommentsBottomSheet> createState() => _CommentsBottomSheetState();
+  ConsumerState<CommentsBottomSheet> createState() => _CommentsBottomSheetState();
 
   static void show(BuildContext context, Post post) {
     showModalBottomSheet(
@@ -40,7 +44,7 @@ class CommentsBottomSheet extends StatefulWidget {
   }
 }
 
-class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
+class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
   final TextEditingController _commentController = TextEditingController();
   final FocusNode _commentFocus = FocusNode();
   final ScrollController _scrollController = ScrollController();
@@ -57,20 +61,83 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
   final Map<String, List<Comment>> _repliesMap = {};
   final Set<String> _loadingReplies = {};
   final Set<String> _expandedReplies = {};
+  StreamSubscription? _eventSub;
 
   @override
   void initState() {
     super.initState();
     _commentController.addListener(() => setState(() {}));
-    _loadComments(refresh: true);
     _scrollController.addListener(_scrollListener);
+    
+    // Join socket room for live updates
+    SocketService.joinPost(widget.post.id);
+    
+    // 🔥 Cache-First Strategy
+    final cacheMap = ref.read(commentCacheProvider);
+    final cache = cacheMap[widget.post.id];
+    
+    if (cache != null) {
+      _comments = List.from(cache.comments);
+      _nextCursor = cache.nextCursor;
+      _isLoading = false;
+      
+      final age = DateTime.now().difference(cache.lastFetched);
+      if (age > const Duration(seconds: 30)) {
+        // Background refresh
+        _loadComments(refresh: true, background: true);
+      }
+    } else {
+      _loadComments(refresh: true);
+    }
+    
+    _eventSub = FeedEventBus.events.listen(
+(event) {
+      if (mounted && event.type == FeedEventType.commentAdded) {
+        final data = event.data as Map<String, dynamic>;
+        if (data['postId'] == widget.post.id && data['newComment'] != null) {
+          final newComment = Comment.fromJson(data['newComment'] as Map<String, dynamic>);
+          
+          // 🔥 1. If we already have this exact ID, skip (already handled by API response)
+          if (_comments.any((c) => c.id == newComment.id)) return;
+          
+          // 🔥 2. Race Condition: If this is OUR comment arriving via socket before API response
+          // Try to find a temporary comment with matching text and replace it
+          if (newComment.authorId == AuthService.currentUser?.uid) {
+            final tempIdx = _comments.indexWhere((c) => c.id.startsWith('temp_') && c.text == newComment.text);
+            if (tempIdx != -1) {
+              setState(() => _comments[tempIdx] = newComment);
+              return;
+            }
+          }
+
+          setState(() {
+            if (newComment.parentId == null) {
+              _comments.insert(0, newComment);
+            } else {
+              _repliesMap[newComment.parentId!] ??= [];
+              if (!_repliesMap[newComment.parentId]!.any((r) => r.id == newComment.id)) {
+                _repliesMap[newComment.parentId!]!.add(newComment);
+                _expandedReplies.add(newComment.parentId!);
+              }
+            }
+          });
+
+          // 🔥 3. Sync to global cache immediately for cross-feed persistence
+          if (newComment.parentId == null) {
+            ref.read(commentCacheProvider.notifier).addComment(widget.post.id, newComment);
+          }
+        }
+      }
+    });
+
     Future.microtask(() {
       if (mounted) _commentFocus.requestFocus();
     });
   }
 
   void _scrollListener() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
+    // 🔥 Improved pagination trigger: 3 items from bottom (approx 200px and check index)
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400 &&
         !_isLoadingMore && _nextCursor != null) {
       _loadComments(refresh: false);
     }
@@ -81,15 +148,19 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
     _commentController.dispose();
     _commentFocus.dispose();
     _scrollController.dispose();
+    _eventSub?.cancel();
+    SocketService.leavePost(widget.post.id);
     super.dispose();
   }
 
-  Future<void> _loadComments({required bool refresh}) async {
+  Future<void> _loadComments({required bool refresh, bool background = false}) async {
     if (refresh) {
-      setState(() {
-        _isLoading = true;
-        _nextCursor = null;
-      });
+      if (!background) {
+        setState(() {
+          _isLoading = true;
+          _nextCursor = null;
+        });
+      }
     } else {
       if (_isLoadingMore) return;
       setState(() => _isLoadingMore = true);
@@ -104,20 +175,33 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
       );
 
       if (response.success) {
-        final List<Comment> newComments = (response.data as List).map((c) => Comment.fromJson(c)).toList();
+        final List<Comment> newCommentsList = (response.data as List).map((c) => Comment.fromJson(c as Map<String, dynamic>)).toList();
         final String? cursor = response.pagination?.cursor;
 
         if (mounted) {
           setState(() {
             if (refresh) {
-              _comments = newComments;
+              _comments = newCommentsList;
             } else {
-              _comments.addAll(newComments);
+              // Deduplicate
+              for (var c in newCommentsList) {
+                if (!_comments.any((existing) => existing.id == c.id)) {
+                  _comments.add(c);
+                }
+              }
             }
             _nextCursor = cursor;
             _isLoading = false;
             _isLoadingMore = false;
           });
+          
+          // 🔥 Sync back to global cache
+          ref.read(commentCacheProvider.notifier).updateCache(
+            widget.post.id, 
+            _comments, 
+            nextCursor: _nextCursor,
+            isAppend: !refresh,
+          );
         }
       } else {
         if (mounted) {
@@ -215,9 +299,13 @@ class _CommentsBottomSheetState extends State<CommentsBottomSheet> {
         }
         // Broadcast updated comment count to the feed
         _addedCommentCount++;
-        PostService.emit(FeedEvent(
+        FeedEventBus.emit(FeedEvent(
           FeedEventType.commentAdded,
-          {'postId': widget.post.id, 'commentCount': widget.post.commentCount + _addedCommentCount},
+          {
+            'postId': widget.post.id, 
+            'commentCount': widget.post.commentCount + _addedCommentCount,
+            'newComment': realComment.toJson() // 🔥 Pass for global sync
+          },
         ));
       } else {
         throw Exception(response.error);

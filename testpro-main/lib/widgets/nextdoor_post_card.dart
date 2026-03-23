@@ -2,28 +2,32 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:share_plus/share_plus.dart';
-import '../models/post.dart';
-import '../screens/edit_post_screen.dart';
-import '../config/app_theme.dart';
-import '../services/auth_service.dart';
-import '../services/backend_service.dart';
-import '../services/post_service.dart';
-import '../utils/proxy_helper.dart';
-import '../utils/safe_error.dart';
+import 'package:testpro/models/post.dart';
+import 'package:testpro/screens/edit_post_screen.dart';
+import 'package:testpro/config/app_theme.dart';
+import 'package:testpro/services/auth_service.dart';
+import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/utils/proxy_helper.dart';
+import 'package:testpro/utils/safe_error.dart';
 
-import '../screens/post_reels_view.dart';
-import '../screens/post_insights_screen.dart';
-import '../core/utils/time_utils.dart';
-import '../shared/widgets/expandable_text.dart';
-import '../shared/widgets/user_avatar.dart';
-import '../core/session/user_session.dart';
-import '../core/utils/navigation_utils.dart';
-import '../core/utils/haptic_service.dart';
-import '../shared/widgets/heart_pop_overlay.dart';
-import 'comments_bottom_sheet.dart';
+import 'package:testpro/screens/post_reels_view.dart';
+import 'package:testpro/screens/post_insights_screen.dart';
+import 'package:testpro/core/utils/time_utils.dart';
+import 'package:testpro/shared/widgets/expandable_text.dart';
+import 'package:testpro/shared/widgets/user_avatar.dart';
+import 'package:testpro/core/session/user_session.dart';
+import 'package:testpro/core/utils/navigation_utils.dart';
+import 'package:testpro/core/utils/haptic_service.dart';
+import 'package:testpro/shared/widgets/heart_pop_overlay.dart';
+import 'package:testpro/widgets/comments_bottom_sheet.dart';
 import 'package:intl/intl.dart';
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:testpro/core/state/post_state.dart';
+import 'package:testpro/core/state/provider_container.dart';
+import 'package:testpro/core/events/feed_events.dart';
 import 'dart:async';
 
 /// ============================================================
@@ -31,7 +35,7 @@ import 'dart:async';
 /// White background, flat (no card border/shadow).
 /// Header → chip → body → media → reaction row → gray divider.
 /// ============================================================
-class NextdoorStylePostCard extends StatefulWidget {
+class NextdoorStylePostCard extends ConsumerStatefulWidget {
   final Post post;
   final String? currentCity;
   final bool? initialIsLiked;
@@ -46,10 +50,10 @@ class NextdoorStylePostCard extends StatefulWidget {
   });
 
   @override
-  State<NextdoorStylePostCard> createState() => _NextdoorStylePostCardState();
+  ConsumerState<NextdoorStylePostCard> createState() => _NextdoorStylePostCardState();
 }
 
-class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
+class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
   bool _isLiked = false;
   int _likeCount = 0;
   bool? _optimisticLiked;
@@ -66,20 +70,10 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
     _likeCount = widget.post.likeCount;
     _isLiked = widget.initialIsLiked ?? widget.post.isLiked;
     
-    // Sync with global post events
-    _eventSub = PostService.events.listen((event) {
-      if (!mounted) return;
-      if (event.type == FeedEventType.postLiked) {
-        final data = event.data as Map<String, dynamic>;
-        if (data['postId'] == widget.post.id) {
-          setState(() {
-            if (data['isLiked'] != null) _isLiked = data['isLiked'];
-            _likeCount = data['likeCount'];
-            // Reset optimistic states as they've been confirmed/synced
-            _optimisticLiked = null;
-            _optimisticLikeCount = null;
-          });
-        }
+    // 🔥 Ensure post is initialized in global state for real-time sync
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(postInteractionProvider.notifier).initializePost(widget.post);
       }
     });
   }
@@ -87,6 +81,12 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
   @override
   void didUpdateWidget(NextdoorStylePostCard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    
+    // Update global state if widget post changes
+    if (oldWidget.post.id != widget.post.id) {
+       ref.read(postInteractionProvider.notifier).initializePost(widget.post);
+    }
+    
     // Only sync from outside if we're NOT in the middle of a user interaction
     if (!_isTogglingLike && _optimisticLiked == null && _optimisticLikeCount == null) {
       final newLiked = widget.initialIsLiked ?? widget.post.isLiked;
@@ -102,7 +102,6 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
 
   @override
   void dispose() {
-    _eventSub?.cancel();
     super.dispose();
   }
 
@@ -138,7 +137,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
           _optimisticLikeCount = null;
         });
         // Emit global event for sync across feeds
-        PostService.emit(FeedEvent(
+        FeedEventBus.emit(FeedEvent(
           FeedEventType.postLiked, 
           {'postId': widget.post.id, 'isLiked': newTarget, 'likeCount': _likeCount}
         ));
@@ -197,6 +196,13 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
 
   @override
   Widget build(BuildContext context) {
+    final interaction = ref.watch(postProvider(widget.post.id));
+    
+    // Prioritize Riverpod state, then optimistic state, then widget property
+    final currentIsLiked = interaction?.isLiked ?? (_optimisticLiked ?? _isLiked);
+    final currentLikeCount = interaction?.likeCount ?? (_optimisticLikeCount ?? _likeCount);
+    final currentCommentCount = interaction?.commentCount ?? widget.post.commentCount;
+
     final post = widget.post;
     final user = AuthService.currentUser;
 
@@ -209,12 +215,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
             : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
 
         return GestureDetector(
-          onTap: widget.onTap ?? () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => PostReelsView(posts: [post], startIndex: 0)),
-            );
-          },
+          onTap: widget.onTap, // Ensure parent manages navigation or use default toggle?
           child: ColoredBox(
             color: Colors.white,
             child: Column(
@@ -235,7 +236,7 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
               post: post, 
               activeHearts: _activeHearts,
               onDoubleTap: () {
-                if (!(_optimisticLiked ?? _isLiked)) {
+                if (!currentIsLiked) {
                   _handleLike();
                 }
                 final heartKey = UniqueKey();
@@ -253,8 +254,9 @@ class _NextdoorStylePostCardState extends State<NextdoorStylePostCard> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: _ReactionRow(
               post: post,
-              isLiked: _optimisticLiked ?? _isLiked,
-              likeCount: _optimisticLikeCount ?? _likeCount,
+              isLiked: currentIsLiked,
+              likeCount: currentLikeCount,
+              commentCount: currentCommentCount,
               isBookmarked: _isBookmarked,
               onLike: user != null ? _handleLike : null,
               onComment: () => CommentsBottomSheet.show(context, post),
@@ -384,7 +386,8 @@ class _PostHeaderState extends State<_PostHeader> {
   void initState() {
     super.initState();
     _isFollowing = widget.post.isFollowing;
-    _subscription = PostService.events.listen((event) {
+    _subscription = FeedEventBus.events.listen(
+(event) {
       if (event.type == FeedEventType.userFollowed) {
         final data = event.data as Map<String, dynamic>;
         if (data['userId'] == widget.post.authorId) {
@@ -408,7 +411,7 @@ class _PostHeaderState extends State<_PostHeader> {
     
     // Optimistic
     setState(() => _isFollowing = newState);
-    PostService.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': newState}));
+    FeedEventBus.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': newState}));
 
     try {
       final res = await BackendService.toggleFollow(widget.post.authorId);
@@ -688,7 +691,7 @@ class _PostHeaderState extends State<_PostHeader> {
                         if (context.mounted) {
                           if (response.success) {
                             // Hide reported post from feed for this user
-                            PostService.emit(FeedEvent(FeedEventType.postDeleted, widget.post.id));
+                            FeedEventBus.emit(FeedEvent(FeedEventType.postDeleted, widget.post.id));
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text('Thank you for your report. Post hidden from your feed.'),
@@ -958,6 +961,7 @@ class _ReactionRow extends StatelessWidget {
   final Post post;
   final bool isLiked;
   final int likeCount;
+  final int commentCount;
   final bool isBookmarked;
   final VoidCallback? onLike;
   final VoidCallback onComment;
@@ -967,6 +971,7 @@ class _ReactionRow extends StatelessWidget {
     required this.post,
     required this.isLiked,
     required this.likeCount,
+    required this.commentCount,
     required this.isBookmarked,
     required this.onLike,
     required this.onComment,
@@ -993,7 +998,7 @@ class _ReactionRow extends StatelessWidget {
         // Comment
         _ActionBtn(
           icon: Icons.chat_bubble_outline_rounded,
-          label: post.commentCount > 0 ? '${post.commentCount}' : '0',
+          label: commentCount > 0 ? '$commentCount' : '0',
           color: const Color(0xFF6E6E73),
           onTap: onComment,
         ),

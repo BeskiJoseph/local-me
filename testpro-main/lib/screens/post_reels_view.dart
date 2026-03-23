@@ -2,38 +2,44 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:testpro/core/state/post_state.dart';
+import 'package:testpro/core/events/feed_events.dart';
 import 'package:video_player/video_player.dart';
-import '../models/post.dart';
-import '../services/post_service.dart';
-import '../services/backend_service.dart';
-import '../services/auth_service.dart';
-import '../utils/proxy_helper.dart';
-import '../utils/safe_error.dart';
-import '../core/utils/navigation_utils.dart';
-import '../shared/widgets/user_avatar.dart';
-import '../shared/widgets/heart_pop_overlay.dart';
-import '../core/utils/haptic_service.dart';
+import 'package:testpro/models/post.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/services/auth_service.dart';
+import 'package:testpro/utils/proxy_helper.dart';
+import 'package:testpro/utils/safe_error.dart';
+import 'package:testpro/core/utils/navigation_utils.dart';
+import 'package:testpro/shared/widgets/user_avatar.dart';
+import 'package:testpro/shared/widgets/heart_pop_overlay.dart';
+import 'package:testpro/core/utils/haptic_service.dart';
 import 'package:intl/intl.dart';
-import '../widgets/comments_bottom_sheet.dart';
-import '../shared/widgets/expandable_text.dart';
+import 'package:testpro/widgets/comments_bottom_sheet.dart';
+import 'package:testpro/shared/widgets/expandable_text.dart';
+import 'package:testpro/widgets/event_card/event_details_section.dart';
+import 'package:testpro/widgets/event_card/event_attendance_section.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+import 'package:testpro/screens/artizone_page.dart';
+import 'package:testpro/core/state/feed_session.dart';
+import 'package:testpro/widgets/feed/paginated_feed_list.dart';
 
 class PostReelsView extends StatefulWidget {
   final List<Post> posts;
   final int startIndex;
   final String? postId;
   final String? feedType; // 'local' or 'global'
-  
+
   // Context for pagination
   final String? authorId;
   final String? category;
   final String? userCity;
   final String? userCountry;
-  
-  // Initial pagination state
-  final String? initialAfterId;
-  final double? initialLastDistance;
-  final String? initialLastPostId;
   final bool initialHasMore;
+  final bool isActiveTab;
 
   const PostReelsView({
     super.key,
@@ -45,10 +51,8 @@ class PostReelsView extends StatefulWidget {
     this.category,
     this.userCity,
     this.userCountry,
-    this.initialAfterId,
-    this.initialLastDistance,
-    this.initialLastPostId,
     this.initialHasMore = true,
+    this.isActiveTab = true,
   });
 
   @override
@@ -62,6 +66,7 @@ class _PostReelsViewState extends State<PostReelsView> {
   @override
   void initState() {
     super.initState();
+    debugPrint('📽️ REELS OPENED: hasMore=${widget.initialHasMore}, seenCount=${FeedSession.instance.seenIds.length}');
     _activeTabIndex = widget.feedType == 'global' ? 1 : 0;
     _horizontalController = PageController(initialPage: _activeTabIndex);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -91,7 +96,7 @@ class _PostReelsViewState extends State<PostReelsView> {
             controller: _horizontalController,
             onPageChanged: _onPageChanged,
             children: [
-              // Nearby Feed
+              // LOCAL TAB
               ReelsVerticalFeed(
                 feedType: 'local',
                 initialPosts: widget.feedType == 'local' ? widget.posts : [],
@@ -99,13 +104,10 @@ class _PostReelsViewState extends State<PostReelsView> {
                 postId: widget.feedType == 'local' ? widget.postId : null,
                 userCity: widget.userCity,
                 userCountry: widget.userCountry,
-                initialAfterId: widget.feedType == 'local' ? widget.initialAfterId : null,
-                initialLastDistance: widget.feedType == 'local' ? widget.initialLastDistance : null,
-                initialLastPostId: widget.feedType == 'local' ? widget.initialLastPostId : null,
-                initialHasMore: widget.feedType == 'local' ? widget.initialHasMore : true,
+                initialHasMore: widget.initialHasMore,
                 isActiveTab: _activeTabIndex == 0,
               ),
-              // Global Feed
+              // GLOBAL TAB
               ReelsVerticalFeed(
                 feedType: 'global',
                 initialPosts: widget.feedType == 'global' ? widget.posts : [],
@@ -113,8 +115,7 @@ class _PostReelsViewState extends State<PostReelsView> {
                 postId: widget.feedType == 'global' ? widget.postId : null,
                 userCity: widget.userCity,
                 userCountry: widget.userCountry,
-                initialAfterId: widget.feedType == 'global' ? widget.initialAfterId : null,
-                initialHasMore: widget.feedType == 'global' ? widget.initialHasMore : true,
+                initialHasMore: widget.initialHasMore,
                 isActiveTab: _activeTabIndex == 1,
               ),
             ],
@@ -127,7 +128,11 @@ class _PostReelsViewState extends State<PostReelsView> {
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white, size: 28),
+                    icon: const Icon(
+                      Icons.arrow_back,
+                      color: Colors.white,
+                      size: 28,
+                    ),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   const SizedBox(width: 8),
@@ -213,9 +218,6 @@ class ReelsVerticalFeed extends StatefulWidget {
   final String? postId;
   final String? userCity;
   final String? userCountry;
-  final String? initialAfterId;
-  final double? initialLastDistance;
-  final String? initialLastPostId;
   final bool initialHasMore;
 
   final bool isActiveTab;
@@ -228,177 +230,37 @@ class ReelsVerticalFeed extends StatefulWidget {
     this.postId,
     this.userCity,
     this.userCountry,
-    this.initialAfterId,
-    this.initialLastDistance,
-    this.initialLastPostId,
-    this.initialHasMore = true,
+    // pagination-related fields removed
     required this.isActiveTab,
+    this.initialHasMore = true,
   });
 
   @override
   State<ReelsVerticalFeed> createState() => _ReelsVerticalFeedState();
 }
 
-class _ReelsVerticalFeedState extends State<ReelsVerticalFeed> with AutomaticKeepAliveClientMixin {
-  late PageController _pageController;
-  late int _currentIndex;
-  List<Post> _currentPosts = [];
-  bool _isLoading = false;
-  String? _error;
-
-  bool _hasMore = true;
-  String? _afterId;
-  double? _lastDistance;
-  String? _lastPostId;
-  bool _isFetchingMore = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _currentPosts = List.from(widget.initialPosts);
-    _currentIndex = widget.startIndex;
-    _pageController = PageController(initialPage: widget.startIndex);
-    
-    _afterId = widget.initialAfterId;
-    _lastDistance = widget.initialLastDistance;
-    _lastPostId = widget.initialLastPostId;
-    _hasMore = widget.initialHasMore;
-
-    _pageController.addListener(_onPageScroll);
-
-    if (_currentPosts.isEmpty) {
-      if (widget.postId != null) {
-        _fetchSinglePost();
-      } else {
-        _loadInitialPosts();
-      }
-    }
-  }
-
+class _ReelsVerticalFeedState extends State<ReelsVerticalFeed>
+    with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
 
-  void _onPageScroll() {
-    if (!_pageController.hasClients) return;
-    if (_pageController.page! >= _currentPosts.length - 2 && 
-        _hasMore && 
-        !_isFetchingMore && 
-        !_isLoading) {
-      _loadMorePosts();
-    }
-  }
-
-  Future<void> _loadInitialPosts() async {
-    setState(() => _isLoading = true);
-    try {
-      final response = await PostService.getPostsPaginated(
-        feedType: widget.feedType,
-        userCity: widget.userCity,
-        userCountry: widget.userCountry,
-        mediaType: 'video',
-        limit: 10,
-      );
-      if (mounted) {
-        setState(() {
-          _currentPosts = response.data;
-          _afterId = response.nextCursor;
-          _lastDistance = response.lastDistance;
-          _lastPostId = response.lastPostId;
-          _hasMore = response.hasMore;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
-    }
-  }
-
-  Future<void> _loadMorePosts() async {
-    if (!_hasMore || _isFetchingMore) return;
-    setState(() => _isFetchingMore = true);
-    try {
-      final response = await PostService.getPostsPaginated(
-        feedType: widget.feedType,
-        userCity: widget.userCity,
-        userCountry: widget.userCountry,
-        afterId: widget.feedType == 'local' ? null : _afterId,
-        lastDistance: widget.feedType == 'local' ? _lastDistance : null,
-        lastPostId: widget.feedType == 'local' ? _lastPostId : null,
-        mediaType: 'video',
-        limit: 10,
-      );
-      if (mounted) {
-        setState(() {
-          _currentPosts.addAll(response.data);
-          _afterId = response.nextCursor;
-          _lastDistance = response.lastDistance;
-          _lastPostId = response.lastPostId;
-          _hasMore = response.hasMore;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading more reels: $e');
-    } finally {
-      if (mounted) setState(() => _isFetchingMore = false);
-    }
-  }
-
-  Future<void> _fetchSinglePost() async {
-    setState(() { _isLoading = true; _error = null; });
-    try {
-      final post = await PostService.getPost(widget.postId!);
-      if (post != null) {
-        if (mounted) {
-          setState(() {
-            _currentPosts = [post];
-            _currentIndex = 0;
-            _isLoading = false;
-          });
-          // Also load more context
-          _loadMorePosts();
-        }
-      } else {
-        if (mounted) setState(() { _error = "Failed to load post"; _isLoading = false; });
-      }
-    } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _isLoading = false; });
-    }
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required for AutomaticKeepAliveClientMixin
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator(color: Colors.white));
-    }
-    if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(_error!, style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 16),
-            ElevatedButton(onPressed: widget.postId != null ? _fetchSinglePost : _loadInitialPosts, child: const Text('Retry')),
-          ],
-        ),
-      );
-    }
-    return PageView.builder(
-      controller: _pageController,
-      scrollDirection: Axis.vertical,
-      itemCount: _currentPosts.length,
-      onPageChanged: (index) => setState(() => _currentIndex = index),
-      itemBuilder: (context, index) {
+    super.build(context);
+    return PaginatedFeedList(
+      feedType: widget.feedType,
+      userCity: widget.userCity,
+      userCountry: widget.userCountry,
+      layoutType: FeedLayoutType.paged,
+      mediaType: 'video',
+      initialPosts: widget.initialPosts,
+      startIndex: widget.startIndex,
+      initialHasMore: widget.initialHasMore,
+      itemBuilder: (context, post, index, isCurrent) {
         return ReelPostItem(
-          key: ValueKey(_currentPosts[index].id),
-          post: _currentPosts[index],
-          isCurrentPage: index == _currentIndex && widget.isActiveTab,
+          key: ValueKey(post.id),
+          post: post,
+          isCurrentPage: isCurrent && widget.isActiveTab,
         );
       },
     );
@@ -408,7 +270,7 @@ class _ReelsVerticalFeedState extends State<ReelsVerticalFeed> with AutomaticKee
 // ─────────────────────────────────────────────────────────────
 // Individual Reel Item (Unchanged but ensuring consistency)
 // ─────────────────────────────────────────────────────────────
-class ReelPostItem extends StatefulWidget {
+class ReelPostItem extends ConsumerStatefulWidget {
   final Post post;
   final bool isCurrentPage;
 
@@ -419,10 +281,11 @@ class ReelPostItem extends StatefulWidget {
   });
 
   @override
-  State<ReelPostItem> createState() => _ReelPostItemState();
+  ConsumerState<ReelPostItem> createState() => _ReelPostItemState();
 }
 
-class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderStateMixin {
+class _ReelPostItemState extends ConsumerState<ReelPostItem>
+    with SingleTickerProviderStateMixin {
   VideoPlayerController? _videoController;
   bool _isInitialized = false;
   bool _isLiked = false;
@@ -443,22 +306,10 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
     _isFollowed = widget.post.isFollowing;
     if (widget.isCurrentPage) _initializeMedia();
 
-    // Sync with global events (likes/comments from Feed or other Reels)
-    _eventSub = PostService.events.listen((event) {
-      if (!mounted) return;
-      if (event.type == FeedEventType.postLiked) {
-        final data = event.data as Map<String, dynamic>;
-        if (data['postId'] == widget.post.id) {
-          setState(() {
-            _isLiked = data['isLiked'];
-            _likeCount = data['likeCount'];
-          });
-        }
-      } else if (event.type == FeedEventType.commentAdded) {
-        final data = event.data as Map<String, dynamic>;
-        if (data['postId'] == widget.post.id) {
-          setState(() => _commentCount = data['commentCount']);
-        }
+    // 🔥 Ensure post is initialized in global state for real-time sync
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(postInteractionProvider.notifier).initializePost(widget.post);
       }
     });
   }
@@ -466,6 +317,12 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
   @override
   void didUpdateWidget(ReelPostItem oldWidget) {
     super.didUpdateWidget(oldWidget);
+    
+    // Update global state if widget post changes
+    if (oldWidget.post.id != widget.post.id) {
+       ref.read(postInteractionProvider.notifier).initializePost(widget.post);
+    }
+    
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
       if (_videoController == null) {
         _initializeMedia();
@@ -479,20 +336,24 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
 
   void _initializeMedia() {
     if (widget.post.mediaType == 'video' && widget.post.mediaUrl != null) {
-      _videoController = VideoPlayerController.networkUrl(
-        Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!)),
-      )..initialize().then((_) {
-          if (!mounted) return;
-          setState(() { _isInitialized = true; });
-          if (widget.isCurrentPage) _videoController?.play();
-          _videoController?.setLooping(true);
-        });
+      _videoController =
+          VideoPlayerController.networkUrl(
+              Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!)),
+            )
+            ..initialize().then((_) {
+              if (!mounted) return;
+              setState(() {
+                _isInitialized = true;
+              });
+              if (widget.isCurrentPage) _videoController?.play();
+              _videoController?.setLooping(true);
+            });
     }
   }
 
   @override
   void dispose() {
-    _eventSub?.cancel();
+    _videoController?.pause();
     _videoController?.dispose();
     super.dispose();
   }
@@ -510,20 +371,31 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
     if (_isLikeBusy) return;
     final user = AuthService.currentUser;
     if (user == null) return;
-    setState(() { _isLikeBusy = true; _isLiked = !_isLiked; _likeCount += _isLiked ? 1 : -1; });
+    setState(() {
+      _isLikeBusy = true;
+      _isLiked = !_isLiked;
+      _likeCount += _isLiked ? 1 : -1;
+    });
     if (_isLiked) HapticService.medium();
     try {
       final response = await BackendService.toggleLike(widget.post.id);
       if (!response.success) throw response.error ?? "Failed";
       // Emit global event so Feed and other screens stay in sync
       if (mounted) {
-        PostService.emit(FeedEvent(
-          FeedEventType.postLiked,
-          {'postId': widget.post.id, 'isLiked': _isLiked, 'likeCount': _likeCount},
-        ));
+        FeedEventBus.emit(FeedEvent(
+          FeedEventType.postLiked, {
+            'postId': widget.post.id,
+            'isLiked': _isLiked,
+            'likeCount': _likeCount,
+          }),
+        );
       }
     } catch (e) {
-      if (mounted) setState(() { _isLiked = !_isLiked; _likeCount += _isLiked ? 1 : -1; });
+      if (mounted)
+        setState(() {
+          _isLiked = !_isLiked;
+          _likeCount += _isLiked ? 1 : -1;
+        });
     } finally {
       if (mounted) setState(() => _isLikeBusy = false);
     }
@@ -533,7 +405,10 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
     if (_isFollowBusy) return;
     final user = AuthService.currentUser;
     if (user == null) return;
-    setState(() { _isFollowBusy = true; _isFollowed = !_isFollowed; });
+    setState(() {
+      _isFollowBusy = true;
+      _isFollowed = !_isFollowed;
+    });
     try {
       final response = await BackendService.toggleFollow(widget.post.authorId);
       if (!response.success) throw response.error ?? "Failed";
@@ -546,61 +421,155 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onDoubleTap: _handleDoubleTap,
-      onTap: () {
-        if (widget.post.mediaType == 'video') {
-          if (_videoController?.value.isPlaying ?? false) {
-            _videoController?.pause();
-          } else {
-            _videoController?.play();
-          }
-          setState(() {});
+    final interaction = ref.watch(postProvider(widget.post.id));
+    
+    // Sync with global state
+    final currentIsLiked = interaction?.isLiked ?? _isLiked;
+    final currentLikeCount = interaction?.likeCount ?? _likeCount;
+    final currentCommentCount = interaction?.commentCount ?? _commentCount;
+
+    final category = widget.post.category.toLowerCase();
+    final isArticle = category == 'article' || category == 'artizone';
+
+    return VisibilityDetector(
+      key: ValueKey('reel_${widget.post.id}'),
+      onVisibilityChanged: (info) {
+        if (info.visibleFraction == 0 && mounted) {
+          _videoController?.pause();
+        } else if (info.visibleFraction > 0.8 &&
+            widget.isCurrentPage &&
+            mounted) {
+          _videoController?.play();
         }
       },
       child: Stack(
         fit: StackFit.expand,
         children: [
-          _buildMedia(),
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Color(0x4D000000), Colors.transparent, Color(0xCC000000)],
-                stops: [0.0, 0.4, 1.0],
+          // Background Media & Taps
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onDoubleTap: _handleDoubleTap,
+            onTap: () {
+              if (isArticle) {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    title: Row(
+                      children: [
+                        const Icon(
+                          Icons.article_outlined,
+                          color: Color(0xFF2E7D6A),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'ArtiZone',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    content: const Text(
+                      'Explore more articles and stories from this user in ArtiZone.',
+                      style: TextStyle(fontSize: 15),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  ArtizonePage(userId: widget.post.authorId),
+                            ),
+                          );
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2E7D6A),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text('Go to ArtiZone'),
+                      ),
+                    ],
+                  ),
+                );
+              } else if (widget.post.mediaType == 'video') {
+                if (_videoController?.value.isPlaying ?? false) {
+                  _videoController?.pause();
+                } else {
+                  _videoController?.play();
+                }
+                setState(() {});
+              }
+            },
+            child: _buildMedia(),
+          ),
+
+          // Gradient Overlay (Ignore pointer to not block taps)
+          IgnorePointer(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0x4D000000),
+                    Colors.transparent,
+                    Color(0xCC000000),
+                  ],
+                  stops: [0.0, 0.4, 1.0],
+                ),
               ),
             ),
           ),
           ..._activeHearts.map((k) => HeartPopOverlay(key: k)),
+          // Interaction Buttons (Like, Comment, etc.)
           Positioned(
             right: 12,
             bottom: 120,
             child: Column(
               children: [
                 _ReelActionButton(
-                  icon: _isLiked ? Icons.favorite : Icons.favorite_border,
-                  color: _isLiked ? Colors.red : Colors.white,
-                  label: '$_likeCount',
+                  icon: currentIsLiked ? Icons.favorite : Icons.favorite_border,
+                  color: currentIsLiked
+                      ? Colors.red
+                      : (isArticle ? Colors.black54 : Colors.white),
+                  label: '$currentLikeCount',
+                  labelColor: isArticle ? Colors.black87 : Colors.white,
                   onTap: _toggleLike,
                 ),
                 const SizedBox(height: 20),
                 _ReelActionButton(
                   icon: Icons.chat_bubble_outline,
-                  color: Colors.white,
-                  label: '$_commentCount',
+                  color: isArticle ? Colors.black54 : Colors.white,
+                  label: '$currentCommentCount',
+                  labelColor: isArticle ? Colors.black87 : Colors.white,
                   onTap: () => CommentsBottomSheet.show(context, widget.post),
                 ),
                 const SizedBox(height: 20),
                 _ReelActionButton(
                   icon: Icons.send_outlined,
-                  color: Colors.white,
+                  color: isArticle ? Colors.black54 : Colors.white,
                   label: '',
+                  labelColor: isArticle ? Colors.black87 : Colors.white,
                   onTap: () {},
                 ),
               ],
             ),
           ),
+          // Author Profile and Post Details
           Positioned(
             bottom: 70,
             left: 12,
@@ -611,7 +580,10 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
                 Row(
                   children: [
                     GestureDetector(
-                      onTap: () => NavigationUtils.navigateToProfile(context, widget.post.authorId),
+                      onTap: () => NavigationUtils.navigateToProfile(
+                        context,
+                        widget.post.authorId,
+                      ),
                       child: UserAvatar(
                         imageUrl: widget.post.authorProfileImage,
                         name: widget.post.authorName,
@@ -623,7 +595,11 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
                     Expanded(
                       child: Text(
                         widget.post.authorName,
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: isArticle ? Colors.black87 : Colors.white,
+                        ),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -632,60 +608,224 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
                       GestureDetector(
                         onTap: _toggleFollow,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Colors.white54, width: 1),
+                            border: Border.all(
+                              color: isArticle
+                                  ? Colors.black26
+                                  : Colors.white54,
+                              width: 1,
+                            ),
                             borderRadius: BorderRadius.circular(6),
-                            color: _isFollowed ? Colors.white24 : Colors.transparent,
+                            color: _isFollowed
+                                ? (isArticle ? Colors.black12 : Colors.white24)
+                                : Colors.transparent,
                           ),
                           child: Text(
                             _isFollowed ? 'Following' : 'Follow',
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.white),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: isArticle ? Colors.black87 : Colors.white,
+                            ),
                           ),
                         ),
                       ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                ExpandableText(
-                  text: widget.post.title,
-                  maxLines: 2,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                  linkStyle: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-                if (widget.post.body.isNotEmpty && widget.post.body != widget.post.title) ...[
-                  const SizedBox(height: 4),
-                  ExpandableText(
-                    text: widget.post.body,
-                    maxLines: 2,
-                    style: const TextStyle(fontSize: 14, color: Colors.white70),
-                    linkStyle: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-                  ),
-                ],
-                const SizedBox(height: 8),
-                if (widget.post.isEvent && widget.post.eventStartDate != null)
-                  Row(
-                    children: [
-                      const Icon(Icons.calendar_today, size: 14, color: Colors.white70),
-                      const SizedBox(width: 6),
+                const SizedBox(height: 12),
+                if (widget.post.category.toLowerCase() == 'events' ||
+                    widget.post.isEvent) ...[
+                  // Just title and minimal description overlay if required. The main event details
+                  // are now built in the _buildMedia space to represent a centered card.
+                  if (widget.post.mediaUrl != null) ...[
+                    Text(
+                      widget.post.title,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    if (widget.post.body.isNotEmpty &&
+                        widget.post.body != widget.post.title) ...[
+                      const SizedBox(height: 8),
                       Text(
-                        DateFormat('MMM d, h:mm a').format(widget.post.eventStartDate!),
-                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                        widget.post.body,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.white70,
+                        ),
                       ),
                     ],
+                  ],
+                ] else ...[
+                  ExpandableText(
+                    text: widget.post.title,
+                    maxLines: 2,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                    linkStyle: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
+                  if (widget.post.body.isNotEmpty &&
+                      widget.post.body != widget.post.title) ...[
+                    const SizedBox(height: 8),
+                    ExpandableText(
+                      text: widget.post.body,
+                      maxLines: 2,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.white70,
+                      ),
+                      linkStyle: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ],
               ],
             ),
           ),
-          if (widget.post.mediaType == 'video' && _videoController != null && !_videoController!.value.isPlaying)
-            const Center(child: Icon(Icons.play_arrow, size: 80, color: Colors.white54)),
         ],
       ),
     );
   }
 
   Widget _buildMedia() {
-    if (widget.post.mediaType == 'video' && _videoController != null) {
+    final isArticle =
+        widget.post.category.toLowerCase() == 'article' ||
+        widget.post.category.toLowerCase() == 'artizone';
+    final isEvent =
+        widget.post.category.toLowerCase() == 'events' || widget.post.isEvent;
+
+    if (isEvent && widget.post.mediaUrl == null) {
+      // Show event as a centered card if it has no background media
+      return Container(
+        color: const Color(0xFFF0F0F0),
+        alignment: Alignment.center,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AbsorbPointer(
+                      absorbing: true,
+                      child: EventDetailsSection(post: widget.post),
+                    ),
+                    const Divider(color: Colors.black12),
+                    EventAttendanceSection(post: widget.post),
+                  ],
+                ),
+              ),
+              const SizedBox(
+                height: 200,
+              ), // padding for the interactions at the bottom
+            ],
+          ),
+        ),
+      );
+    } else if (isEvent && widget.post.mediaUrl != null) {
+      // If event has an image/video, center that media and place a floating card over it in the center.
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          CachedNetworkImage(
+            imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
+            fit: BoxFit.cover,
+            placeholder: (context, url) =>
+                const Center(child: CircularProgressIndicator()),
+            errorWidget: (context, url, error) => const Icon(Icons.error),
+          ),
+          // Ignore pointer on dim background so video/image tap works (but event card is above it)
+          IgnorePointer(
+            child: Container(
+              color: Colors.black54, // dim background
+            ),
+          ),
+          Container(
+            alignment: Alignment.center,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(16),
+                          ),
+                          child: CachedNetworkImage(
+                            imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
+                            height: 180,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        AbsorbPointer(
+                          absorbing: true,
+                          child: EventDetailsSection(post: widget.post),
+                        ),
+                        const Divider(color: Colors.black12),
+                        EventAttendanceSection(post: widget.post),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(
+                    height: 200,
+                  ), // padding for the interactions at the bottom
+                ],
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (widget.post.mediaType == 'video' && _videoController != null) {
       return _isInitialized
           ? FittedBox(
               fit: BoxFit.cover,
@@ -696,37 +836,226 @@ class _ReelPostItemState extends State<ReelPostItem> with SingleTickerProviderSt
               ),
             )
           : const Center(child: CircularProgressIndicator(color: Colors.white));
+    } else if (widget.post.mediaType == 'document') {
+      return _buildDocumentReelCard(fullScreen: true);
     } else if (widget.post.mediaUrl != null) {
       return CachedNetworkImage(
         imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
         fit: BoxFit.cover,
-        placeholder: (context, url) => const Center(child: CircularProgressIndicator()),
+        placeholder: (context, url) =>
+            const Center(child: CircularProgressIndicator()),
         errorWidget: (context, url, error) => const Icon(Icons.error),
+      );
+    } else if (isArticle) {
+      return Container(
+        color: const Color(0xFFF7F8FA),
+        padding: const EdgeInsets.only(
+          top: kToolbarHeight + 40,
+          bottom: 40,
+          left: 16,
+          right: 16,
+        ),
+        child: SingleChildScrollView(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(4),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (widget.post.mediaUrl != null) ...[
+                  if (widget.post.mediaType == 'document')
+                    _buildDocumentReelCard()
+                  else
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: CachedNetworkImage(
+                        imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: 200,
+                      ),
+                    ),
+                  const SizedBox(height: 24),
+                ],
+                Text(
+                  widget.post.title,
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1A1A1A),
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    UserAvatar(
+                      imageUrl: widget.post.authorProfileImage,
+                      name: widget.post.authorName,
+                      radius: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.post.authorName,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF1A1A1A),
+                            ),
+                          ),
+                          Text(
+                            DateFormat(
+                              'MMM d, yyyy',
+                            ).format(widget.post.createdAt),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8A8A8A),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                Text(
+                  (widget.post.body.isNotEmpty
+                          ? widget.post.body
+                          : widget.post.title)
+                      .replaceAll(RegExp(r'!\[.*?\]\(.*?\)\n?'), '')
+                      .trim(),
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    height: 1.8,
+                    color: Color(0xFF333333),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     } else {
       return Container(color: Colors.grey[900]);
     }
   }
+
+  Widget _buildDocumentReelCard({bool fullScreen = false}) {
+    final fileName = widget.post.mediaUrl?.split('/').last ?? 'Document';
+    final extension = fileName.split('.').last.toUpperCase();
+
+    return Container(
+      color: fullScreen ? const Color(0xFFF7F8FA) : Colors.transparent,
+      padding: fullScreen ? const EdgeInsets.all(24) : EdgeInsets.zero,
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 15,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: InkWell(
+          onTap: () {
+            final url = Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!));
+            launchUrl(url, mode: LaunchMode.externalApplication);
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEBF4FF),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  extension == 'PDF'
+                      ? Icons.picture_as_pdf_rounded
+                      : Icons.description_rounded,
+                  color: const Color(0xFF3182CE),
+                  size: 32,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '${extension == 'PDF' ? 'PDF' : 'Word'} Document',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF2D3748),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Tap to open and read',
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ReelActionButton extends StatelessWidget {
   final IconData icon;
-  final Color color;
   final String label;
   final VoidCallback onTap;
+  final Color color;
+  final Color? labelColor;
 
-  const _ReelActionButton({required this.icon, required this.color, required this.label, required this.onTap});
+  const _ReelActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.color = Colors.white,
+    this.labelColor,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: color, size: 30),
+          Icon(icon, color: color, size: 32),
           if (label.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
+            Text(
+              label,
+              style: TextStyle(
+                color: labelColor ?? color,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
         ],
       ),

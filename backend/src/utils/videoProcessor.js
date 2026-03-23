@@ -2,7 +2,19 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 import logger from './logger.js';
 
-ffmpeg.setFfmpegPath(ffmpegStatic);
+// 🚀 Industrial Configuration: Production uses system FFmpeg, Local uses static binaries
+if (process.env.NODE_ENV === 'production') {
+    // In Docker (Ubuntu), ffmpeg and ffprobe are installed system-wide in /usr/bin/
+    ffmpeg.setFfmpegPath('/usr/bin/ffmpeg');
+    ffmpeg.setFfprobePath('/usr/bin/ffprobe');
+    logger.info('🎬 Video Processor initialized with System FFmpeg/FFprobe');
+} else {
+    // Local development uses the npm static binaries
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+    // Note: ffprobe-static should be installed if you need it locally, 
+    // but in Production Docker we now have it via apt-get.
+    logger.info('🎬 Video Processor initialized with Static FFmpeg');
+}
 
 /**
  * Get metadata for a video file

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../config/app_theme.dart';
+import 'package:file_picker/file_picker.dart';
 import 'create_event_screen.dart';
 import 'write_article_screen.dart';
 import '../services/auth_service.dart';
@@ -49,7 +50,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
   double _uploadProgress = 0.0;
 
   // Character limit
-  static const int _maxChars = 500;
+  static const int _maxChars = 2000;
 
   // track if user has made any edits (for draft protection)
   bool get _hasDraft =>
@@ -60,7 +61,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
       !_isSubmitting &&
       _mediaBytes != null &&
       _contentController.text.trim().isNotEmpty &&
-      _contentController.text.length <= _maxChars;
+      (_mediaType == 'document' || _contentController.text.length <= _maxChars);
 
   @override
   void initState() {
@@ -224,7 +225,6 @@ class _NewPostScreenState extends State<NewPostScreen> {
                   _processMedia(file, 'video');
                 },
               ),
-              // Camera and Gallery options available
               const SizedBox(height: 16),
             ],
           ),
@@ -240,7 +240,8 @@ class _NewPostScreenState extends State<NewPostScreen> {
       final ext = segments.last.toLowerCase();
       const validImage = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'gif'];
       const validVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm'];
-      if (validImage.contains(ext) || validVideo.contains(ext)) return ext;
+      const validDoc = ['pdf', 'doc', 'docx'];
+      if (validImage.contains(ext) || validVideo.contains(ext) || validDoc.contains(ext)) return ext;
     }
     return fallback;
   }
@@ -370,26 +371,28 @@ class _NewPostScreenState extends State<NewPostScreen> {
       String? thumbnailUrl;
       if (_mediaBytes != null) {
         setState(() {
-          _uploadStep = 'Uploading ${_mediaType == "video" ? "video" : "photo"}...';
+          _uploadStep = 'Uploading ${_mediaType == "video" ? "video" : (_mediaType == "document" ? "document" : "photo")}...';
           _uploadProgress = 0.3;
         });
         if (_cancelUpload) throw _UploadCancelled();
-        mediaUrl = await MediaUploadService.uploadPostMedia(
+        final uploadResult = await MediaUploadService.uploadPostMedia(
           postId: postId,
           data: _mediaBytes!,
           fileExtension: _mediaExtension ?? 'jpg',
           mediaType: _mediaType,
         );
+        mediaUrl = uploadResult?['url'] as String?;
         setState(() => _uploadProgress = 0.6);
 
         if (_mediaType == 'video' && _thumbnailBytes != null) {
           setState(() => _uploadStep = 'Uploading thumbnail...');
-          thumbnailUrl = await MediaUploadService.uploadPostMedia(
+          final thumbResult = await MediaUploadService.uploadPostMedia(
             postId: postId,
             data: _thumbnailBytes!,
             fileExtension: 'jpg',
             mediaType: 'image',
           );
+          thumbnailUrl = thumbResult?['url'] as String?;
         }
         setState(() => _uploadProgress = 0.75);
       }
@@ -401,7 +404,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
         _uploadStep = 'Publishing...';
         _uploadProgress = 0.85;
       });
-      final createdPostId = await PostService.createPost(
+      final post = await PostService.createPost(
         title: _contentController.text.trim(),
         body: _contentController.text.trim(),
         city: _currentLocation,
@@ -415,8 +418,8 @@ class _NewPostScreenState extends State<NewPostScreen> {
 
       if (!mounted) return;
 
-      if (createdPostId.isNotEmpty) {
-        if (kDebugMode) debugPrint('✅ Post created successfully with ID: $createdPostId');
+      if (post.id.isNotEmpty) {
+        if (kDebugMode) debugPrint('✅ Post created successfully with ID: ${post.id}');
         setState(() {
           _uploadStep = 'Done!';
           _uploadProgress = 1.0;
@@ -759,15 +762,43 @@ class _NewPostScreenState extends State<NewPostScreen> {
                             Stack(
                               alignment: Alignment.center,
                               children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(20),
-                                  child: Image.memory(
-                                    (_mediaType == 'video' ? (_thumbnailBytes ?? _mediaBytes!) : _mediaBytes!),
-                                    height: 320,
+                                if (_mediaType == 'document')
+                                  Container(
+                                    height: 120,
                                     width: double.infinity,
-                                    fit: BoxFit.cover,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(Icons.description, color: Color(0xFF4285F4), size: 40),
+                                        const SizedBox(width: 12),
+                                        Flexible(
+                                          child: Text(
+                                            'Selected: ${_mediaExtension?.toUpperCase() ?? "Document"}',
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                              color: Color(0xFF64748B),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                else
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(20),
+                                    child: Image.memory(
+                                      (_mediaType == 'video' ? (_thumbnailBytes ?? _mediaBytes!) : _mediaBytes!),
+                                      height: 320,
+                                      width: double.infinity,
+                                      fit: BoxFit.cover,
+                                    ),
                                   ),
-                                ),
                                 // Play icon overlay for video
                                 if (_mediaType == 'video')
                                   Container(

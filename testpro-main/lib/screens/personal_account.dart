@@ -12,10 +12,12 @@ import '../core/session/user_session.dart';
 import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
-import '../widgets/nextdoor_post_card.dart';
+import 'package:testpro/widgets/nextdoor_post_card.dart';
 import 'event_post_card.dart';
 import '../services/post_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
 import 'post_reels_view.dart';
+import '../core/state/feed_session.dart';
 
 class PersonalAccount extends StatefulWidget {
   final String? userId;
@@ -26,22 +28,22 @@ class PersonalAccount extends StatefulWidget {
   State<PersonalAccount> createState() => _PersonalAccountState();
 }
 
-class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProviderStateMixin {
+class _PersonalAccountState extends State<PersonalAccount>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  
+
   // REST States
   UserProfile? _profile;
   List<Post> _posts = [];
   bool _isLoadingProfile = true;
   String? _profileError;
   bool _isLoadingPosts = false;
-  String? _cursor;
   bool _hasMore = true;
   Map<String, bool> _likedPostIds = {};
   List<String> _myEventIds = [];
   bool _isFollowing = false;
   bool _isTogglingFollow = false;
-  StreamSubscription? _eventSub;
+  StreamSubscription? _subscription;
 
   String get profileUserId {
     final uid = widget.userId ?? AuthService.currentUser?.uid;
@@ -49,14 +51,15 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   }
 
   // This getter is no longer used directly in build, but kept for other methods if needed.
-  bool get isOwnProfile => widget.userId == null || widget.userId == AuthService.currentUser?.uid;
+  bool get isOwnProfile =>
+      widget.userId == null || widget.userId == AuthService.currentUser?.uid;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadData();
-    _eventSub = PostService.events.listen((event) {
+    _subscription = FeedEventBus.events.listen((event) {
       if (event.type == FeedEventType.postLiked && mounted) {
         final data = event.data as Map<String, dynamic>;
         setState(() {
@@ -66,7 +69,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         final data = event.data as Map<String, dynamic>;
         final String postId = data['postId'];
         final Map<String, dynamic> updates = data['updates'];
-        
+
         setState(() {
           final index = _posts.indexWhere((p) => p.id == postId);
           if (index != -1) {
@@ -95,16 +98,16 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   @override
   void dispose() {
     _tabController.dispose();
-    _eventSub?.cancel();
+    _subscription?.cancel();
     super.dispose();
   }
 
   Future<void> _loadData() async {
     if (profileUserId.isEmpty) return;
-    
+
     // Load profile header first for better perceived performance
     _loadProfile();
-    
+
     // Then load other sections in parallel without blocking the UI
     _loadFollowState();
     _loadPosts(refresh: true);
@@ -166,7 +169,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
   Future<void> _toggleFollow() async {
     if (_isTogglingFollow) return;
     setState(() => _isTogglingFollow = true);
-    
+
     final originalState = _isFollowing;
     setState(() => _isFollowing = !originalState);
 
@@ -192,14 +195,14 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       final response = await PostService.getPostsPaginated(
         feedType: 'global',
         authorId: profileUserId,
-        afterId: refresh ? null : _cursor,
+        // Remove cursor; rely on seenIds-based per-user state downstream
         limit: 10,
+        watchedIds: FeedSession.instance.seenIdsParam,
       );
 
       if (!mounted) return;
 
       final List<Post> newPosts = response.data;
-      final String? nextCursor = response.nextCursor;
 
       // ── Optimized: Use Embedded isLiked ──
       setState(() {
@@ -210,7 +213,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
           _posts.clear();
         }
         _posts.addAll(newPosts);
-        _cursor = nextCursor;
         _hasMore = response.hasMore;
         _isLoadingPosts = false;
       });
@@ -229,9 +231,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     }
 
     if (_isLoadingProfile && _profile == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (!_isLoadingProfile && _profile == null && _profileError != null) {
@@ -266,7 +266,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       builder: (context, sessionData, _) {
         // Use fresh _profile data inside builder to ensure updates are reflected
         final profile = _profile;
-        
+
         String fullNameFromProfile(UserProfile? p) {
           if (p == null) return '';
           final first = (p.firstName ?? '').trim();
@@ -277,13 +277,18 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
         String displayTitle = 'User';
         if (isOwnProfile) {
           // Priority: Session (real-time) > Firebase Auth > Backend Profile
-          if (sessionData?.displayName != null && sessionData!.displayName!.isNotEmpty) {
+          if (sessionData?.displayName != null &&
+              sessionData!.displayName!.isNotEmpty) {
             displayTitle = sessionData.displayName!;
-          } else if (user?.displayName != null && user!.displayName!.isNotEmpty) {
+          } else if (user?.displayName != null &&
+              user!.displayName!.isNotEmpty) {
             displayTitle = user.displayName!;
-          } else if (profile != null && (profile.displayName ?? '').isNotEmpty) {
+          } else if (profile != null &&
+              (profile.displayName ?? '').isNotEmpty) {
             displayTitle = profile.displayName!;
-          } else if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
+          } else if (profile != null &&
+              profile.username.isNotEmpty &&
+              profile.username != 'User') {
             displayTitle = profile.username;
           } else if (fullNameFromProfile(profile).isNotEmpty) {
             displayTitle = fullNameFromProfile(profile);
@@ -294,20 +299,25 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
           // STRICT SEPARATION: Only rely on fetched backend data for other users
           if (profile != null && (profile.displayName ?? '').isNotEmpty) {
             displayTitle = profile.displayName!;
-          } else if (profile != null && profile.username.isNotEmpty && profile.username != 'User') {
+          } else if (profile != null &&
+              profile.username.isNotEmpty &&
+              profile.username != 'User') {
             displayTitle = profile.username;
           } else if (fullNameFromProfile(profile).isNotEmpty) {
             displayTitle = fullNameFromProfile(profile);
           }
         }
 
-        final String? profileImage = isOwnProfile 
-            ? (sessionData?.avatarUrl ?? user?.photoURL ?? profile?.profileImageUrl) 
+        final String? profileImage = isOwnProfile
+            ? (sessionData?.avatarUrl ??
+                  user?.photoURL ??
+                  profile?.profileImageUrl)
             : profile?.profileImageUrl;
 
         String displayLocation = 'Location not set';
         if (isOwnProfile) {
-          displayLocation = sessionData?.location ?? profile?.location ?? 'Location not set';
+          displayLocation =
+              sessionData?.location ?? profile?.location ?? 'Location not set';
         } else {
           displayLocation = profile?.location ?? 'Location not set';
         }
@@ -345,7 +355,10 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                             left: 10,
                             child: Navigator.of(context).canPop()
                                 ? IconButton(
-                                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                    icon: const Icon(
+                                      Icons.arrow_back,
+                                      color: Colors.white,
+                                    ),
                                     onPressed: () => Navigator.pop(context),
                                   )
                                 : const SizedBox.shrink(),
@@ -355,12 +368,19 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                             top: 10,
                             right: 15,
                             child: IconButton(
-                              icon: const Icon(Icons.settings_outlined, color: Colors.white, size: 28),
+                              icon: const Icon(
+                                Icons.settings_outlined,
+                                color: Colors.white,
+                                size: 28,
+                              ),
                               onPressed: () async {
                                 if (isOwnProfile) {
                                   final result = await Navigator.push(
                                     context,
-                                    MaterialPageRoute(builder: (context) => EditProfileScreen(profile: profile)),
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          EditProfileScreen(profile: profile),
+                                    ),
                                   );
                                   if (result == true) _loadData();
                                 }
@@ -369,7 +389,7 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                           ),
                         ],
                       ),
-                      
+
                       // Secondary Header Section: Avatar and Action Button
                       // This part is placed below the Stack but uses translation to overlap
                       Container(
@@ -382,13 +402,21 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                               offset: const Offset(0, -45),
                               child: Container(
                                 padding: const EdgeInsets.all(4),
-                                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
                                 child: GestureDetector(
                                   onTap: () async {
                                     if (isOwnProfile) {
                                       final result = await Navigator.push(
                                         context,
-                                        MaterialPageRoute(builder: (context) => EditProfileScreen(profile: profile)),
+                                        MaterialPageRoute(
+                                          builder: (context) =>
+                                              EditProfileScreen(
+                                                profile: profile,
+                                              ),
+                                        ),
                                       );
                                       if (result == true) _loadData();
                                     }
@@ -405,20 +433,36 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                             const Spacer(),
                             // Action Button (Edit Profile / Follow)
                             Padding(
-                              padding: const EdgeInsets.only(bottom: 12), // Space it above the name section
+                              padding: const EdgeInsets.only(
+                                bottom: 12,
+                              ), // Space it above the name section
                               child: isOwnProfile
                                   ? OutlinedButton(
                                       onPressed: () async {
                                         final result = await Navigator.push(
                                           context,
-                                          MaterialPageRoute(builder: (context) => EditProfileScreen(profile: profile)),
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                EditProfileScreen(
+                                                  profile: profile,
+                                                ),
+                                          ),
                                         );
                                         if (result == true) _loadData();
                                       },
                                       style: OutlinedButton.styleFrom(
-                                        side: const BorderSide(color: Color(0xFFCCCCCC)),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                                        side: const BorderSide(
+                                          color: Color(0xFFCCCCCC),
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                          vertical: 8,
+                                        ),
                                       ),
                                       child: const Text(
                                         'Edit profile',
@@ -433,15 +477,29 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                                   : ElevatedButton(
                                       onPressed: _toggleFollow,
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor: _isFollowing ? Colors.grey.shade200 : const Color(0xFF2E7D6A),
-                                        foregroundColor: _isFollowing ? const Color(0xFF1A1A1A) : Colors.white,
+                                        backgroundColor: _isFollowing
+                                            ? Colors.grey.shade200
+                                            : const Color(0xFF2E7D6A),
+                                        foregroundColor: _isFollowing
+                                            ? const Color(0xFF1A1A1A)
+                                            : Colors.white,
                                         elevation: 0,
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 24,
+                                          vertical: 8,
+                                        ),
                                       ),
                                       child: Text(
                                         _isFollowing ? 'Following' : 'Follow',
-                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
                                       ),
                                     ),
                             ),
@@ -473,8 +531,15 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                                 const SizedBox(width: 8),
                                 Container(
                                   padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(color: Color(0xFF2E7D6A), shape: BoxShape.circle),
-                                  child: const Icon(Icons.check, color: Colors.white, size: 12),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF2E7D6A),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.check,
+                                    color: Colors.white,
+                                    size: 12,
+                                  ),
                                 ),
                               ],
                             ),
@@ -484,7 +549,11 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                             // Location
                             Row(
                               children: [
-                                const Icon(Icons.location_on, size: 18, color: Color(0xFF666666)),
+                                const Icon(
+                                  Icons.location_on,
+                                  size: 18,
+                                  color: Color(0xFF666666),
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   displayLocation,
@@ -501,7 +570,8 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                             const SizedBox(height: 16),
 
                             // Bio
-                            if (profile?.about != null && profile!.about!.isNotEmpty)
+                            if (profile?.about != null &&
+                                profile!.about!.isNotEmpty)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 16),
                                 child: Text(
@@ -535,7 +605,13 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                const Text('·', style: TextStyle(color: Color(0xFF666666), fontSize: 16)),
+                                const Text(
+                                  '·',
+                                  style: TextStyle(
+                                    color: Color(0xFF666666),
+                                    fontSize: 16,
+                                  ),
+                                ),
                                 const SizedBox(width: 12),
                                 Text(
                                   '${profile?.subscribers ?? 0}',
@@ -563,51 +639,64 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                   ),
                 ),
 
-
-              // ── Sticky Tab Bar ─────────────────────────────────
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _SliverTabHeaderDelegate(
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      color: Colors.white,
-                      border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
-                    ),
-                    child: TabBar(
-                      controller: _tabController,
-                      indicatorColor: AppTheme.primary,
-                      indicatorWeight: 2,
-                      indicatorSize: TabBarIndicatorSize.tab,
-                      labelColor: const Color(0xFF1A1A1A),
-                      unselectedLabelColor: const Color(0xFF8A8A8A),
-                      labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, fontFamily: AppTheme.fontFamily),
-                      unselectedLabelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, fontFamily: AppTheme.fontFamily),
-                      tabs: const [
-                        Tab(text: "Posts"),
-                        Tab(text: "ArtiZone"),
-                        Tab(text: "Events"),
-                      ],
+                // ── Sticky Tab Bar ─────────────────────────────────
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _SliverTabHeaderDelegate(
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        border: Border(
+                          bottom: BorderSide(
+                            color: Color(0xFFEEEEEE),
+                            width: 1,
+                          ),
+                        ),
+                      ),
+                      child: TabBar(
+                        controller: _tabController,
+                        indicatorColor: AppTheme.primary,
+                        indicatorWeight: 2,
+                        indicatorSize: TabBarIndicatorSize.tab,
+                        labelColor: const Color(0xFF1A1A1A),
+                        unselectedLabelColor: const Color(0xFF8A8A8A),
+                        labelStyle: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          fontFamily: AppTheme.fontFamily,
+                        ),
+                        unselectedLabelStyle: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          fontFamily: AppTheme.fontFamily,
+                        ),
+                        tabs: const [
+                          Tab(text: "Posts"),
+                          Tab(text: "ArtiZone"),
+                          Tab(text: "Events"),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
 
-              // ── Posts List ─────────────────────────────────────
-              SliverFillRemaining(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildPostsTab(),
-                    _buildMediaGrid(),
-                    _buildEventsTab(),
-                  ],
+                // ── Posts List ─────────────────────────────────────
+                SliverFillRemaining(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildPostsTab(),
+                      _buildMediaGrid(),
+                      _buildEventsTab(),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
   }
 
   Widget _buildPostsTab() {
@@ -654,8 +743,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
               builder: (_) => PostReelsView(
                 posts: postOnlyItems,
                 startIndex: index,
-                authorId: profileUserId,
-                initialAfterId: _cursor,
                 initialHasMore: _hasMore,
               ),
             ),
@@ -664,7 +751,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
       },
     );
   }
-
 
   Widget _buildMediaGrid() {
     final mediaPosts = _posts.where((p) {
@@ -688,10 +774,12 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
               _loadPosts();
             });
           }
-          return const Center(child: Padding(
-            padding: EdgeInsets.all(16.0),
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ));
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
         }
         final post = mediaPosts[index];
         return NextdoorStylePostCard(
@@ -704,8 +792,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                 posts: mediaPosts,
                 startIndex: index,
                 authorId: profileUserId,
-                category: 'article', // ArtiZone/Article
-                initialAfterId: _cursor,
                 initialHasMore: _hasMore,
               ),
             ),
@@ -739,8 +825,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
                 posts: eventPosts,
                 startIndex: index,
                 authorId: profileUserId,
-                category: 'events',
-                initialAfterId: _cursor,
                 initialHasMore: _hasMore,
               ),
             ),
@@ -750,7 +834,6 @@ class _PersonalAccountState extends State<PersonalAccount> with SingleTickerProv
     );
   }
 }
-
 
 class _SliverTabHeaderDelegate extends SliverPersistentHeaderDelegate {
   final Widget child;
@@ -762,7 +845,11 @@ class _SliverTabHeaderDelegate extends SliverPersistentHeaderDelegate {
   double get maxExtent => 48;
 
   @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
     return child;
   }
 

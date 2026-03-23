@@ -21,6 +21,7 @@ export const clearUserCache = (uid) => {
 const authenticate = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
+
         if (!authHeader?.startsWith('Bearer ')) {
             const error = new Error('No authentication token provided');
             error.status = 401;
@@ -29,6 +30,7 @@ const authenticate = async (req, res, next) => {
         }
 
         const token = authHeader.split('Bearer ')[1];
+
 
 
 

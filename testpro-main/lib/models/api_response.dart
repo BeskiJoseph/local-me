@@ -18,7 +18,7 @@ class ApiResponse<T> {
     T Function(dynamic) fromJsonT,
   ) {
     final bool success = json['success'] ?? false;
-    
+
     if (!success) {
       final dynamic rawError = json['error'];
       String message = 'An unknown error occurred';
@@ -33,45 +33,29 @@ class ApiResponse<T> {
         message = json['message'] as String;
       }
 
-      return ApiResponse(
-        success: false,
-        error: message,
-        errorCode: code,
-      );
+      return ApiResponse(success: false, error: message, errorCode: code);
     }
 
     return ApiResponse(
       success: true,
       data: json['data'] != null ? fromJsonT(json['data']) : null,
-      pagination: json['pagination'] != null 
-          ? ApiResponsePagination.fromJson(json['pagination']) 
+      pagination: json['pagination'] != null
+          ? ApiResponsePagination.fromJson(json['pagination'])
           : null,
     );
   }
 }
 
 class ApiResponsePagination {
-  final String? cursor;
   final bool hasMore;
-  final num? lastDistance;
-  final String? lastPostId;
-  final String? fallbackLevel;
+  final String? cursor;
 
-  ApiResponsePagination({
-    this.cursor,
-    this.hasMore = false,
-    this.lastDistance,
-    this.lastPostId,
-    this.fallbackLevel,
-  });
+  ApiResponsePagination({this.hasMore = false, this.cursor});
 
   factory ApiResponsePagination.fromJson(Map<String, dynamic> json) {
     return ApiResponsePagination(
-      cursor: json['cursor'] as String?,
       hasMore: json['hasMore'] as bool? ?? false,
-      lastDistance: json['lastDistance'] != null ? (json['lastDistance'] as num) : null,
-      lastPostId: json['lastPostId'] as String?,
-      fallbackLevel: json['fallbackLevel'] as String?,
+      cursor: json['cursor']?.toString() ?? json['nextCursor']?.toString(),
     );
   }
 }

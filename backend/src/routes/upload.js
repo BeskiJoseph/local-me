@@ -16,6 +16,10 @@ import {
 import { checkDailyUploadLimit, incrementDailyUploadCount } from '../middleware/uploadLimits.js';
 import { getVideoMetadata, processVideo } from '../utils/videoProcessor.js';
 import logger from '../utils/logger.js';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const pdf = require('pdf-parse');
+const mammoth = require('mammoth');
 
 const router = express.Router();
 
@@ -59,6 +63,9 @@ function getExtension(mime) {
         'video/mp4': 'mp4',
         'video/webm': 'webm',
         'video/quicktime': 'mov',
+        'application/pdf': 'pdf',
+        'application/msword': 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
     };
     return map[mime] || null;
 }
@@ -159,9 +166,33 @@ router.post(
 
             const safePostId =
                 postId.replace(/[^a-zA-Z0-9-_]/g, '').slice(0, 100) || 'uncategorized';
-            const folder = mediaType === 'video' ? 'videos' : 'images';
+            
+            let folder;
+            if (mediaType === 'video') {
+                folder = 'videos';
+            } else if (mediaType === 'document') {
+                folder = 'documents';
+            } else {
+                folder = 'images';
+            }
 
             let finalBuffer = await fs.readFile(req.file.path);
+            let extractedText = '';
+
+            // Handle document text extraction
+            if (mediaType === 'document') {
+                try {
+                    if (ext === 'pdf') {
+                        const data = await pdf(finalBuffer);
+                        extractedText = data.text;
+                    } else if (ext === 'doc' || ext === 'docx') {
+                        const result = await mammoth.extractRawText({ buffer: finalBuffer });
+                        extractedText = result.value;
+                    }
+                } catch (err) {
+                    logger.warn('Text extraction failed', { error: err.message });
+                }
+            }
             let finalKey = `posts/${req.user.uid}/${safePostId}/${folder}/${crypto.randomUUID()}.${ext}`;
 
             // Handle video processing
@@ -205,6 +236,7 @@ router.post(
             return res.json({
                 key: finalKey,
                 url: `${process.env.R2_PUBLIC_BASE_URL}/${finalKey}`,
+                extractedText: extractedText || undefined,
             });
         } catch (err) {
             logger.error('Post upload error', {

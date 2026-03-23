@@ -1,5 +1,6 @@
 import express from 'express';
 import admin, { db } from '../config/firebase.js';
+import geoIndex from '../services/geoIndex.js';
 import logger from '../utils/logger.js';
 import authenticate from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
@@ -9,7 +10,8 @@ import { enforceLikeVelocity, enforceFollowVelocity } from '../middleware/intera
 import { buildDisplayName } from '../utils/userDisplayName.js';
 import { updateUserContextCache, getUserContext } from '../services/userContextService.js';
 import { invalidateFeedCache } from './posts.js';
-import { broadcastLikeUpdate } from '../services/socketService.js';
+import { broadcastLikeUpdate, broadcastCommentUpdate } from '../services/socketService.js';
+import NotificationService from '../services/notificationService.js';
 import { filterContent } from '../utils/contentFilter.js';
 
 const router = express.Router();
@@ -61,8 +63,10 @@ router.post(
                 if (likeDoc.exists) {
                     // Unlike
                     transaction.delete(likeRef);
+                    const currentScore = postDoc.data().engagementScore || 0;
                     transaction.update(postRef, {
-                        likeCount: admin.firestore.FieldValue.increment(-1)
+                        likeCount: admin.firestore.FieldValue.increment(-1),
+                        engagementScore: Math.max(0, currentScore - 5)
                     });
                 } else {
                     // Like
@@ -72,7 +76,8 @@ router.post(
                         createdAt: admin.firestore.FieldValue.serverTimestamp()
                     });
                     transaction.update(postRef, {
-                        likeCount: admin.firestore.FieldValue.increment(1)
+                        likeCount: admin.firestore.FieldValue.increment(1),
+                        engagementScore: admin.firestore.FieldValue.increment(5)
                     });
 
                     // Prepare notification to post author if different from liker
@@ -99,7 +104,7 @@ router.post(
 
             // Trigger notification outside transaction for speed
             if (notificationPayload) {
-                _sendNotificationInternal(notificationPayload)
+                NotificationService.notify(notificationPayload.toUserId, notificationPayload)
                     .catch(err => logger.error('Like Notification Error', { err: err.message }));
             }
 
@@ -182,7 +187,20 @@ router.post(
                 transaction.set(commentRef, commentData);
 
                 transaction.update(postRef, {
-                    commentCount: admin.firestore.FieldValue.increment(1)
+                    commentCount: admin.firestore.FieldValue.increment(1),
+                    engagementScore: admin.firestore.FieldValue.increment(10)
+                });
+
+                // Broadcast to other users in real-time
+                const currentCount = postDoc.data().commentCount || 0;
+                broadcastCommentUpdate(postId, currentCount + 1, {
+                    id: commentRef.id,
+                    text: text.substring(0, 1000),
+                    authorId: userId,
+                    authorName: actorDisplayName,
+                    authorProfileImage: req.user.photoURL,
+                    createdAt: new Date().toISOString(),
+                    postId
                 });
 
                 // Prepare notification to post author if different from commenter
@@ -203,7 +221,7 @@ router.post(
 
             // Trigger notification outside transaction
             if (notificationPayload) {
-                _sendNotificationInternal(notificationPayload)
+                NotificationService.notify(notificationPayload.toUserId, notificationPayload)
                     .catch(err => logger.error('Comment Notification Error', { err: err.message }));
             }
 
@@ -213,7 +231,7 @@ router.post(
                     // Don't send mention if they already got a comment notification
                     if (notificationPayload && targetUid === notificationPayload.toUserId) return;
 
-                    _sendNotificationInternal({
+                    NotificationService.notify(targetUid, {
                         toUserId: targetUid,
                         fromUserId: userId,
                         fromUserName: actorDisplayName,
@@ -246,15 +264,76 @@ router.post(
                     postId,
                     likeCount: 0,
                     replyCount: 0,
-                    isLiked: false
-                },
-                error: null
+                    parentId: parentId || null
+                }
             });
-        } catch (error) {
-            return res.status(500).json({ error: 'An internal error occurred' });
+        } catch (err) {
+            logger.error('Comment implementation error', { error: err.message, stack: err.stack });
+            return res.status(500).json({ success: false, error: 'Failed to post comment' });
         }
     }
 );
+
+/**
+ * @route   DELETE /api/interactions/comment/:commentId
+ * @desc    Delete a comment and decrement counts
+ */
+router.delete(
+    '/comment/:commentId',
+    async (req, res) => {
+        const { commentId } = req.params;
+        const userId = req.user.uid;
+
+        try {
+            const commentRef = db.collection('comments').doc(commentId);
+            
+            await db.runTransaction(async (transaction) => {
+                const commentDoc = await transaction.get(commentRef);
+                if (!commentDoc.exists) throw new Error('Comment not found');
+
+                const commentData = commentDoc.data();
+                
+                // Permission Check: only author can delete
+                if (commentData.userId !== userId && commentData.authorId !== userId) {
+                    throw new Error('Unauthorized to delete this comment');
+                }
+
+                const postRef = db.collection('posts').doc(commentData.postId);
+
+                // 1. Decrement post comment count
+                transaction.update(postRef, {
+                    commentCount: admin.firestore.FieldValue.increment(-1)
+                });
+
+                // 2. If it's a reply, decrement parent reply count
+                if (commentData.parentId) {
+                    const parentRef = db.collection('comments').doc(commentData.parentId);
+                    transaction.update(parentRef, {
+                        replyCount: admin.firestore.FieldValue.increment(-1)
+                    });
+                }
+
+                // 3. Delete the comment itself
+                transaction.delete(commentRef);
+
+                // Log Audit Action in transaction scope (optional but good)
+                AuditService.logAction({
+                    userId,
+                    action: 'POST_COMMENT_DELETED',
+                    metadata: { postId: commentData.postId, commentId },
+                    req
+                }).catch(e => logger.error('Audit Log Error (Delete)', e));
+            });
+
+            return res.json({ success: true, message: 'Comment deleted successfully' });
+        } catch (err) {
+            logger.error('Comment deletion error', { error: err.message, userId });
+            const status = err.message === 'Unauthorized to delete this comment' ? 403 : 500;
+            return res.status(status).json({ success: false, error: err.message });
+        }
+    }
+);
+
 
 /**
  * @route   POST /api/interactions/follow
@@ -313,7 +392,7 @@ router.post(
                         subscribers: admin.firestore.FieldValue.increment(1)
                     });
 
-                    _sendNotificationInternal({
+                    NotificationService.notify(targetUserId, {
                         toUserId: targetUserId,
                         fromUserId: userId,
                         fromUserName: actorDisplayName,
@@ -404,7 +483,7 @@ router.post(
                     // Send notification to event creator
                     const eventData = eventDoc.data();
                     if (eventData.authorId && eventData.authorId !== userId) {
-                        _sendNotificationInternal({
+                        NotificationService.notify(eventData.authorId, {
                             toUserId: eventData.authorId,
                             fromUserId: userId,
                             fromUserName: resolveActorDisplayName(req),
@@ -426,27 +505,7 @@ router.post(
     }
 );
 
-// Helper for notifications (mirrors existing Firestore logic)
-async function _sendNotificationInternal({ toUserId, fromUserId, fromUserName, fromUserProfileImage, type, postId, postThumbnail, commentText }) {
-    if (!toUserId || toUserId === fromUserId) return;
 
-    // Construct data object without undefined values
-    const notificationData = {
-        toUserId,
-        fromUserId,
-        fromUserName,
-        fromUserProfileImage,
-        type,
-        isRead: false,
-        timestamp: admin.firestore.FieldValue.serverTimestamp()
-    };
-
-    if (postId !== undefined) notificationData.postId = postId;
-    if (postThumbnail !== undefined) notificationData.postThumbnail = postThumbnail;
-    if (commentText !== undefined) notificationData.commentText = commentText;
-
-    await db.collection('notifications').add(notificationData);
-}
 
 /**
  * Extracts mentions from text and returns unique list of mentioned uids
@@ -512,6 +571,7 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
         const commentIds = snapshot.docs.map(doc => doc.id);
         const likedSet = new Set();
         if (commentIds.length > 0) {
+            // Firestore 'in' query supports up to 30 items
             const likesSnapshot = await db.collection('comment_likes')
                 .where('userId', '==', userId)
                 .where('commentId', 'in', commentIds.slice(0, 30))
@@ -519,12 +579,16 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
             likesSnapshot.docs.forEach(doc => likedSet.add(doc.data().commentId));
         }
 
-        const comments = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            isLiked: likedSet.has(doc.id),
-            createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
-        }));
+        const comments = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                ...data,
+                parentId: data.parentId || null,
+                isLiked: likedSet.has(doc.id),
+                createdAt: safeDate(data.createdAt).toISOString()
+            };
+        });
 
         return res.json({
             success: true,
@@ -535,7 +599,13 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
             }
         });
     } catch (err) {
-        next(err);
+        console.error("🔥 COMMENTS ERROR [GET /comments/:postId]:", err);
+        return res.status(500).json({
+            success: false,
+            error: err.message,
+            stack: err.stack,
+            requestId: req.params.postId
+        });
     }
 });
 
@@ -556,11 +626,15 @@ router.get('/comments/:commentId/replies', authenticate, async (req, res, next) 
         }
 
         const snapshot = await query.limit(parseInt(limit)).get();
-        const replies = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
-        }));
+        const replies = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                ...data,
+                parentId: data.parentId || null,
+                createdAt: safeDate(data.createdAt).toISOString()
+            };
+        });
 
         return res.json({
             success: true,
@@ -571,7 +645,13 @@ router.get('/comments/:commentId/replies', authenticate, async (req, res, next) 
             }
         });
     } catch (err) {
-        next(err);
+        console.error("🔥 REPLIES ERROR [GET /comments/:commentId/replies]:", err);
+        return res.status(500).json({
+            success: false,
+            error: err.message,
+            stack: err.stack,
+            requestId: req.params.commentId
+        });
     }
 });
 

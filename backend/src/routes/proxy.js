@@ -39,7 +39,7 @@ router.get('/', async (req, res) => {
     try {
         const response = await fetch(parsedUrl.toString(), {
             headers: { 'User-Agent': 'LocalMe-Backend-Proxy/1.0' },
-            signal: AbortSignal.timeout(15000), // 15s timeout for media fetch
+            signal: AbortSignal.timeout(30000), // 30s timeout for media fetch (increased for slower networks)
         });
 
         if (!response.ok) {

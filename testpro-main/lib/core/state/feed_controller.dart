@@ -1,61 +1,53 @@
 import 'package:flutter/foundation.dart';
 import '../../models/post.dart';
+import 'feed_session.dart';
 
 /// Lightweight feed controller for abstracting mutable list operations
 class FeedController extends ChangeNotifier {
   final List<Post> _posts = [];
   final Set<String> _tombstones = {}; // Memory layer for optimistic deletions
-  
-  // Local feed distance cursors
-  double lastDistance = 0.0;
-  String? lastPostId;
-  
+  // Local feed state moved to seenIds-based flow; remove distance cursor state
+
   List<Post> get posts => List.unmodifiable(_posts);
   bool isLoading = false;
   bool hasMore = true;
-  String? cursor; // afterId for global feed
   String? error;
   bool isCycling = false;
 
-  void appendPosts(List<Post> newPosts, {
-    bool refresh = false, 
-    String? nextCursor,
-    double? newLastDistance,
-    String? newLastPostId,
-    String? fallbackLevel,
+  void appendPosts(
+    List<Post> newPosts, {
+    bool refresh = false,
+    bool isHistorical = true, // ✅ New flag
+    bool? hasMore, // provided by repo
   }) {
     if (refresh) {
       _posts.clear();
-      lastDistance = 0.0;
-      lastPostId = null;
+      // reset state for new session
       isCycling = false;
+      hasMore = true; // Reset hasMore on refresh
     }
-    
+
     // Prevent duplicates from rapid pagination AND filter out tombstoned ghost posts
     final existingIds = _posts.map((p) => p.id).toSet();
-    final uniqueNew = newPosts.where((p) => 
-      !existingIds.contains(p.id) && !_tombstones.contains(p.id)
-    ).toList();
-    
+    final uniqueNew = newPosts
+        .where(
+          (p) => !existingIds.contains(p.id) && !_tombstones.contains(p.id),
+        )
+        .toList();
+
     _posts.addAll(uniqueNew);
-    
-    // Update cursors
-    cursor = nextCursor;
-    if (newLastDistance != null) lastDistance = newLastDistance;
-    if (newLastPostId != null) lastPostId = newLastPostId;
-    
-    if (_posts.isEmpty && !refresh) {
-      hasMore = false;
-    } else {
-      // Local feed uses distance cursor, so nextCursor (afterId) might be null
-      // But we determine hasMore from the API response's metadata
-      hasMore = nextCursor != null || (newLastPostId != null);
-    }
-    
-    if (fallbackLevel == 'cycle') {
+
+    // Update pagination state
+    if (hasMore != null) this.hasMore = hasMore;
+
+    // Post-shipment: rely on provided hasMore flag from repo when available
+
+    if (false) {
       isCycling = true;
+      hasMore = true;
+      FeedSession.instance.reset();
     }
-    
+
     notifyListeners();
   }
 
@@ -114,7 +106,7 @@ class FeedController extends ChangeNotifier {
 
       // Find the correct insertion point based on distance
       final insertIndex = _posts.indexWhere(
-        (p) => (p.distance ?? 999999) > (newPost.distance ?? 999999)
+        (p) => (p.distance ?? 999999) > (newPost.distance ?? 999999),
       );
 
       if (insertIndex == -1) {
@@ -137,11 +129,43 @@ class FeedController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void prependPosts(List<Post> newPosts) {
+    if (newPosts.isEmpty) return;
+
+    final existingIds = _posts.map((p) => p.id).toSet();
+    final uniqueNew = newPosts
+        .where(
+          (p) => !existingIds.contains(p.id) && !_tombstones.contains(p.id),
+        )
+        .toList();
+
+    _posts.insertAll(0, uniqueNew);
+    notifyListeners();
+  }
+
+  /// Injects posts at a specific index (usually current visible index)
+  /// to avoid making the user re-scroll through already seen content.
+  void insertAtVisiblePosition(List<Post> newPosts, int index) {
+    if (newPosts.isEmpty) return;
+
+    final existingIds = _posts.map((p) => p.id).toSet();
+    final uniqueNew = newPosts
+        .where(
+          (p) => !existingIds.contains(p.id) && !_tombstones.contains(p.id),
+        )
+        .toList();
+
+    if (uniqueNew.isEmpty) return;
+
+    // Clamp index to safe bounds
+    final targetIndex = index.clamp(0, _posts.length);
+    _posts.insertAll(targetIndex, uniqueNew);
+    notifyListeners();
+  }
+
   void clear({bool notify = true}) {
     _posts.clear();
-    cursor = null;
-    lastDistance = 0.0;
-    lastPostId = null;
+    // reset seen-based flow state
     hasMore = true;
     error = null;
     isCycling = false;

@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../config/app_theme.dart';
 import '../services/backend_service.dart';
-import '../services/post_service.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
 import '../models/post.dart';
 import 'group_chat_screen.dart';
 import 'package:intl/intl.dart';
@@ -24,7 +25,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
   // Holds the user's joined event IDs
   List<String>? _myEventIds;
   bool _isLoading = true;
-  StreamSubscription<FeedEvent>? _feedEventsSub;
+  StreamSubscription<FeedEvent>? _eventSubscription;
   late Stream<List<Post>> _eventPostsStream;
 
   @override
@@ -32,7 +33,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
     super.initState();
     _eventPostsStream = PostService.postsByScope('Events');
     _loadMyEvents();
-    _feedEventsSub = PostService.events.listen((event) {
+    _eventSubscription = FeedEventBus.events.listen((event) {
       if (!mounted) return;
       if (event.type == FeedEventType.postCreated ||
           event.type == FeedEventType.eventMembershipChanged) {
@@ -78,7 +79,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   @override
   void dispose() {
-    _feedEventsSub?.cancel();
+    _eventSubscription?.cancel();
     _searchController.dispose();
     super.dispose();
   }

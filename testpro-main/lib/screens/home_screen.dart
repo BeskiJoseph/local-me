@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../services/post_service.dart';
 import '../config/app_theme.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/geocoding_service.dart';
@@ -16,6 +18,9 @@ import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
 import '../core/session/user_session.dart';
 import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
+import 'package:testpro/core/state/feed_session.dart';
 import '../utils/safe_error.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -45,6 +50,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Incrementing forces HomeFeedList recreation → fresh feed fetch
   int _feedRevision = 0;
+  StreamSubscription? _eventSubscription;
 
   @override
   void initState() {
@@ -54,6 +60,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _detectLocation();
     // Fetch initial notification badge count (fire-and-forget)
     NotificationDataService.fetchNotifications();
+
+    // Instant Post: Listen for creation events across the app
+    _eventSubscription = FeedEventBus.events.listen((event) {
+      if (event.type == FeedEventType.postCreated) {
+        if (kDebugMode) debugPrint('🆕 Global post event detected, refreshing home feed');
+        _refreshFeeds();
+      }
+    });
   }
 
   Future<void> _detectLocation() async {
@@ -185,6 +199,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _bottomNavIndex = index;
       _visitedNavIndexes.add(index);
     });
+  }
+
+  @override
+  void dispose() {
+    _eventSubscription?.cancel();
+    super.dispose();
   }
 
   void _refreshFeeds() {

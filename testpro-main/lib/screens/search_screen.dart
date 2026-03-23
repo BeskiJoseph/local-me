@@ -5,12 +5,13 @@ import '../services/backend_service.dart';
 import '../services/auth_service.dart';
 import '../services/search_service.dart';
 import '../widgets/user_search_card.dart';
-import '../widgets/nextdoor_post_card.dart';
+import 'package:testpro/widgets/nextdoor_post_card.dart';
 import '../models/post.dart';
 import '../utils/proxy_helper.dart';
 import '../models/api_response.dart';
 import 'post_reels_view.dart';
 import '../services/post_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
 
 /// Simple search screen with user and content search
 class SearchScreen extends StatefulWidget {
@@ -30,13 +31,13 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   List<dynamic> _postResults = [];
   bool _isSearching = false;
   final Map<String, bool> _likedPostIds = {};
-  StreamSubscription? _eventSub;
+  StreamSubscription? _eventSubscription;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _eventSub = PostService.events.listen((event) {
+    _eventSubscription = FeedEventBus.events.listen((event) {
       if (event.type == FeedEventType.postLiked && mounted) {
         final data = event.data as Map<String, dynamic>;
         setState(() {
@@ -51,7 +52,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     _searchController.dispose();
     _tabController.dispose();
     _debounce?.cancel();
-    _eventSub?.cancel();
+    _eventSubscription?.cancel();
     super.dispose();
   }
 
@@ -77,14 +78,14 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       });
 
       try {
-        final users = await SearchService.searchUsers(_searchQuery);
-        final posts = await SearchService.searchPosts(_searchQuery);
+        // Single API call for both users and posts
+        final results = await SearchService.searchAll(_searchQuery);
         
         if (mounted) {
           setState(() {
-            _userResults = users;
-            _postResults = posts;
-            for (var p in posts) {
+            _userResults = results['users'] ?? [];
+            _postResults = results['posts'] ?? [];
+            for (var p in _postResults) {
               if (p is Map<String, dynamic>) {
                 _likedPostIds[p['id'] ?? p['postId'] ?? ''] = p['isLiked'] == true;
               }
@@ -280,7 +281,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     if (user == null) return const SizedBox.shrink();
 
     return FutureBuilder<ApiResponse<List<dynamic>>>(
-      future: BackendService.getPosts(limit: 30),
+      future: BackendService.getPosts(feedType: 'global', limit: 30),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -321,8 +322,6 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
                     builder: (context) => PostReelsView(
                       posts: posts, 
                       startIndex: index,
-                      // For search results, we don't have a specific feedType that supports pagination yet
-                      // but we can at least scroll through currently loaded results.
                     ),
                   ),
                 );

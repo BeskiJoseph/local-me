@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+logs
+*.log
+.env
+.env.test
+.env.example
+.git
+.gitignore
+Dockerfile
+README.md
+AWS_PRODUCTION_DEPLOYMENT.md
+scripts
+tests
+.qoder

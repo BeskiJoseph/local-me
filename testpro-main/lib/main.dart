@@ -5,32 +5,42 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import 'screens/welcome_screen.dart';
-import 'screens/home_screen.dart';
-import 'services/auth_service.dart';
-import 'services/backend_service.dart';
-import 'firebase_options.dart';
-import 'services/notification_service.dart';
-import 'services/notification_data_service.dart';
-import 'config/app_theme.dart';
-import 'core/session/user_session.dart';
-import 'services/socket_service.dart';
-import 'core/state/feed_session.dart';
-import 'core/auth/auth_event_stream.dart';
-import 'services/connectivity_service.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+
+import 'package:testpro/screens/welcome_screen.dart';
+import 'package:testpro/screens/home_screen.dart';
+import 'package:testpro/services/auth_service.dart';
+import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/firebase_options.dart';
+import 'package:testpro/services/notification_service.dart';
+import 'package:testpro/services/notification_data_service.dart';
+import 'package:testpro/config/app_theme.dart';
+import 'package:testpro/core/session/user_session.dart';
+import 'package:testpro/services/socket_service.dart';
+import 'package:testpro/core/state/feed_session.dart';
+import 'package:testpro/core/auth/auth_event_stream.dart';
+import 'package:testpro/services/connectivity_service.dart';
+import 'package:testpro/core/state/provider_container.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
+  // 🚀 Initialize Riverpod ProviderContainer for static services ABSOLUTE FIRST
+  final container = ProviderContainer();
+  GlobalProviderContainer.initialize(container);
+
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-      await NotificationService.initialize();
-      NotificationDataService.initialize();
-      ConnectivityService.initialize();
-      await BackendService.validateServer();
       
+      // 1. Critical: Initialize Firebase first
+      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+      
+      // 2. Non-critical: Initialize other services in parallel or background
+      unawaited(NotificationService.initialize().then((_) => NotificationDataService.initialize()));
+      ConnectivityService.initialize();
+      unawaited(BackendService.validateServer());
+
       if (!kDebugMode) {
         FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
       } else {
@@ -49,8 +59,7 @@ void main() {
         return true;
       };
 
-      SocketService.init();
-      runApp(const MyApp());
+      runApp(UncontrolledProviderScope(container: container, child: const MyApp()));
     },
     (error, stackTrace) {
       if (!kDebugMode) {
@@ -139,11 +148,13 @@ class _MyAppState extends State<MyApp> {
                 name: user.displayName,
                 avatar: user.photoURL,
               );
-              FeedSession.instance.reset();
+              // Initialize Authenticated Socket
+              user.getIdToken().then((token) {
+                if (token != null) SocketService.init(token);
+              });
               return const HomeScreen();
             } else {
               UserSession.clear();
-              FeedSession.instance.reset();
             }
           }
           return const WelcomeScreen();

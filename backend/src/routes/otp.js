@@ -1,20 +1,26 @@
 import express from 'express';
-import sgMail from '@sendgrid/mail';
 import crypto from 'crypto';
 import admin, { db } from '../config/firebase.js';
 import logger from '../utils/logger.js';
 import { body, validationResult } from 'express-validator';
+import nodemailer from 'nodemailer';
 
 const router = express.Router();
 
-// Initialize SendGrid
-if (process.env.SENDGRID_API_KEY) {
-    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-}
+// Initialize Nodemailer (SMTP Driver - Optimized for Amazon SES)
+const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'email-smtp.us-east-1.amazonaws.com',
+    port: parseInt(process.env.SMTP_PORT || '465'),
+    secure: process.env.SMTP_SECURE !== 'false',
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+    }
+});
 
 /**
  * @route   POST /api/otp/send
- * @desc    Generate and send OTP to email
+ * @desc    Generate and send OTP to email (Amazon SES)
  * @access  Public
  */
 router.post(
@@ -31,8 +37,8 @@ router.post(
         const { email } = req.body;
 
         try {
-            // Generate 6-digit OTP
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            // Generate 6-digit OTP using cryptographically secure random
+            const otp = crypto.randomInt(100000, 999999).toString();
 
             // Store in Firestore with expiration (10 minutes)
             await db.collection('otps').doc(email).set({
@@ -41,39 +47,47 @@ router.post(
                 expiresAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 10 * 60 * 1000))
             });
 
-            // Send via SendGrid
-            if (!process.env.SENDGRID_API_KEY) {
-                logger.warn('SendGrid API key missing, OTP not sent', { email, otp });
-                return res.status(500).json({ error: 'Email service configuration missing' });
+            // PRODUCTION: Use SMTP (SES/Gmail) if credentials present
+            if (process.env.SMTP_PASS || process.env.EMAIL_PASS) {
+                const mailOptions = {
+                    from: process.env.SMTP_FROM_EMAIL || process.env.EMAIL_USER || 'beskijosphjr@gmail.com',
+                    to: email,
+                    subject: 'Your Verification Code',
+                    text: `Your verification code is: ${otp}. It will expire in 10 minutes.`,
+                    html: `
+                        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+                            <h2 style="color: #00B87C;">Verification Code</h2>
+                            <p>Hello,</p>
+                            <p>Your verification code for TestPro is:</p>
+                            <div style="font-size: 32px; font-weight: bold; color: #333; margin: 20px 0; letter-spacing: 5px;">
+                                ${otp}
+                            </div>
+                            <p>This code will expire in 10 minutes.</p>
+                            <p>If you didn't request this code, please ignore this email.</p>
+                        </div>
+                    `,
+                };
+                
+                // Final SES Delivery
+                transporter.sendMail(mailOptions).catch(err => {
+                    logger.error('SES/SMTP Delivery Error', { error: err.message, email, requestId: req.requestId });
+                });
+                
+            } else {
+                // DEVELOPMENT: Fallback for local testing if no credentials provided
+                logger.warn(`No email provider configured. [DEVELOPMENT MODE] OTP for ${email} is ${otp}`);
+                return res.json({ 
+                    message: 'OTP generated (check server logs for code)',
+                    dev: true 
+                });
             }
 
-            const msg = {
-                to: email,
-                from: process.env.SENDGRID_FROM_EMAIL,
-                subject: 'Your Verification Code',
-                text: `Your verification code is: ${otp}. It will expire in 10 minutes.`,
-                html: `
-                    <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-                        <h2 style="color: #00B87C;">Verification Code</h2>
-                        <p>Hello,</p>
-                        <p>Your verification code for TestPro is:</p>
-                        <div style="font-size: 32px; font-weight: bold; color: #333; margin: 20px 0; letter-spacing: 5px;">
-                            ${otp}
-                        </div>
-                        <p>This code will expire in 10 minutes.</p>
-                        <p>If you didn't request this code, please ignore this email.</p>
-                    </div>
-                `,
-            };
-
-            await sgMail.send(msg);
-
-            logger.info('OTP Sent', { email, requestId: req.requestId });
+            logger.info('OTP Delivery Handed to SES/SMTP', { email, requestId: req.requestId });
             return res.json({ message: 'OTP sent successfully' });
 
         } catch (error) {
-            logger.error('OTP Send Error', { error: error.message, email, requestId: req.requestId });
-            return res.status(500).json({ error: 'Failed to send OTP' });
+            logger.error('OTP Dispatch Error', { error: error.message, email, requestId: req.requestId });
+            return res.status(500).json({ error: 'Failed to dispatch OTP' });
         }
     }
 );

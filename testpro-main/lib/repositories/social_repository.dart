@@ -2,7 +2,7 @@ import 'dart:async';
 import '../models/post.dart';
 import '../models/user_profile.dart';
 import '../services/backend_service.dart';
-import '../services/post_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
 
 /// Repository for handling Social Interactions (Likes, Follows).
 class SocialRepository {
@@ -21,7 +21,7 @@ class SocialRepository {
     bool current = response.success && response.data!['liked'] == true;
     yield current;
     
-    await for (final event in PostService.events) {
+    await for (final event in FeedEventBus.events) {
       if (event.type == FeedEventType.postLiked && event.data['postId'] == postId) {
         current = event.data['isLiked'];
         yield current;
@@ -51,7 +51,7 @@ class SocialRepository {
     bool current = response.success && response.data! == true;
     yield current;
     
-    await for (final event in PostService.events) {
+    await for (final event in FeedEventBus.events) {
       if (event.type == FeedEventType.userFollowed && event.data['userId'] == targetUserId) {
         current = event.data['isFollowing'];
         yield current;

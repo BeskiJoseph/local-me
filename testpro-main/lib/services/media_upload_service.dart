@@ -30,9 +30,9 @@ class MediaUploadService {
       return _cachedBaseUrl!;
     }
     
-    // 1. Prioritize build-time configuration (Production & CI/CD)
     // 1. Resolve base URL from environment variable or default
-    const String defaultBaseUrl = 'http://10.211.157.94:4000'; // Physical device IP
+    // Using 10.0.2.2 for Android emulators, or use your computer's local network IP for physical devices (e.g. 192.168.1.X)
+    const String defaultBaseUrl = 'http://localhost:4000'; 
     String url = const String.fromEnvironment('API_URL', defaultValue: defaultBaseUrl);
     
     // 2. Automatic Android emulator loopback detection (ONLY if using localhost)
@@ -40,7 +40,7 @@ class MediaUploadService {
         defaultTargetPlatform == TargetPlatform.android && 
         url.contains('localhost')) {
       url = 'http://10.0.2.2:4000';
-      if (kDebugMode) debugPrint('🤖 Android Emulator detected, using 10.0.2.2:4000');
+      if (kDebugMode) debugPrint('🤖 Android Emulator detected, using http://10.0.2.2:4000');
     }
 
     _cachedBaseUrl = url;
@@ -53,8 +53,9 @@ class MediaUploadService {
   // ──────────────────────────────────────────────
   static const int _maxImageBytes = 10 * 1024 * 1024;  // 10 MB
   static const int _maxVideoBytes = 50 * 1024 * 1024;  // 50 MB
+  static const int _maxDocBytes = 10 * 1024 * 1024;    // 10 MB
 
-  static Future<String?> _upload({
+  static Future<Map<String, dynamic>?> _upload({
     required Uint8List data,
     required String fileExtension,
     required String mediaType,
@@ -63,12 +64,20 @@ class MediaUploadService {
     bool isRetry = false,
   }) async {
     // 0. Validate file size BEFORE network call
-    final maxBytes = mediaType == 'video' ? _maxVideoBytes : _maxImageBytes;
+    final int maxBytes;
+    if (mediaType == 'video') {
+      maxBytes = _maxVideoBytes;
+    } else if (mediaType == 'document') {
+      maxBytes = _maxDocBytes;
+    } else {
+      maxBytes = _maxImageBytes;
+    }
+
     if (data.length > maxBytes) {
       final sizeMB = (data.length / (1024 * 1024)).toStringAsFixed(1);
       final limitMB = (maxBytes / (1024 * 1024)).toStringAsFixed(0);
       throw Exception(
-        '${mediaType == 'video' ? 'Video' : 'Image'} is too large ($sizeMB MB). Maximum allowed: $limitMB MB.',
+        '${mediaType.substring(0, 1).toUpperCase()}${mediaType.substring(1)} is too large ($sizeMB MB). Maximum allowed: $limitMB MB.',
       );
     }
 
@@ -95,7 +104,18 @@ class MediaUploadService {
       request.fields.addAll(extraFields);
     }
 
-    final mimeType = mediaType == 'video' ? 'video/mp4' : 'image/jpeg';
+    final String mimeType;
+    if (mediaType == 'video') {
+      mimeType = 'video/mp4';
+    } else if (mediaType == 'document') {
+      if (fileExtension == 'pdf') {
+        mimeType = 'application/pdf';
+      } else {
+        mimeType = 'application/msword';
+      }
+    } else {
+      mimeType = 'image/jpeg';
+    }
 
     request.files.add(
       http.MultipartFile.fromBytes(
@@ -138,7 +158,7 @@ class MediaUploadService {
 
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body) as Map<String, dynamic>;
-      return body['url'] as String?;
+      return body;
     } else {
       throw Exception(
         'Upload failed with status ${response.statusCode}: ${response.body}',
@@ -175,22 +195,23 @@ class MediaUploadService {
     String fileExtension = 'jpg',
   }) async {
     final compressed = await _compressImage(data);
-    return _upload(
+    final result = await _upload(
       data: compressed,
       fileExtension: fileExtension,
       mediaType: 'image',
       path: '/api/upload/profile',
       extraFields: {'userId': userId},
     );
+    return result?['url'] as String?;
   }
 
-  static Future<String?> uploadPostMedia({
+  static Future<Map<String, dynamic>?> uploadPostMedia({
     required String postId,
     required Uint8List data,
     String fileExtension = 'jpg',
-    String mediaType = 'image', // 'image' or 'video'
+    String mediaType = 'image', // 'image', 'video', or 'document'
   }) async {
-    // Only compress images — videos are handled differently
+    // Only compress images — videos and documents are handled as-is
     final uploadData = mediaType == 'image' ? await _compressImage(data) : data;
     return _upload(
       data: uploadData,

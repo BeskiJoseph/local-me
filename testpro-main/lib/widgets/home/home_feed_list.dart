@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import '../../services/post_service.dart';
-import '../../services/backend_service.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/services/backend_service.dart';
+import 'package:testpro/core/events/feed_events.dart';
+import 'package:testpro/core/state/feed_controller.dart';
+import 'package:testpro/core/state/feed_session.dart';
+import 'package:flutter/foundation.dart';
+import 'package:testpro/utils/safe_error.dart';
 import '../../models/post.dart';
 import '../../models/paginated_response.dart';
 import '../../config/app_theme.dart';
-import '../nextdoor_post_card.dart';
+import 'package:testpro/widgets/nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
-import '../../core/state/feed_session.dart';
-import 'package:flutter/foundation.dart';
-import '../../utils/safe_error.dart';
+import '../../screens/post_reels_view.dart';
 
 /// Feed list — owns its ScrollController, caches the stream,
 /// and uses AutomaticKeepAliveClientMixin to preserve scroll position.
@@ -47,10 +50,10 @@ class _HomeFeedListState extends State<HomeFeedList>
   String? _futureFeedType;
   String? _futureCity;
   String? _futureCountry;
-  
+
   // Static cache to persist posts across navigation
   static final Map<String, PaginatedResponse<Post>> _postsCache = {};
-  
+
   // Static temporary posts to persist across widget recreation
   static final List<Post> _tempPosts = [];
 
@@ -59,8 +62,9 @@ class _HomeFeedListState extends State<HomeFeedList>
 
   @override
   bool get wantKeepAlive => true;
-  
-  String get _cacheKey => '${widget.feedType}_${widget.userCity}_${widget.userCountry}';
+
+  String get _cacheKey =>
+      '${widget.feedType}_${widget.userCity}_${widget.userCountry}';
 
   @override
   void initState() {
@@ -73,15 +77,14 @@ class _HomeFeedListState extends State<HomeFeedList>
       _futureCity = widget.userCity;
       _futureCountry = widget.userCountry;
     }
-    
+
     // Listen for post creation and deletion events for optimistic updates
-    _eventSubscription = PostService.events.listen((event) {
+    _eventSubscription = FeedEventBus.events.listen((event) {
       debugPrint('📬 HomeFeedList received event: ${event.type}');
       if (!mounted) {
         debugPrint('⚠️ HomeFeedList not mounted, skipping event');
         return;
       }
-      
       if (event.type == FeedEventType.postCreated) {
         debugPrint('📬 Post created event received');
         final postData = event.data;
@@ -98,7 +101,9 @@ class _HomeFeedListState extends State<HomeFeedList>
             }
           });
         } else {
-          debugPrint('⚠️ Event data is not a Post or String: ${postData.runtimeType}');
+          debugPrint(
+            '⚠️ Event data is not a Post or String: ${postData.runtimeType}',
+          );
         }
       } else if (event.type == FeedEventType.postDeleted) {
         debugPrint('📬 Post deleted event received');
@@ -110,7 +115,9 @@ class _HomeFeedListState extends State<HomeFeedList>
             _tempPosts.removeWhere((p) => p.id == postId);
             _deletedPostIds.add(postId);
           });
-          debugPrint('➖ Temporary post removed and tombstoned. Current count: ${_tempPosts.length}');
+          debugPrint(
+            '➖ Temporary post removed and tombstoned. Current count: ${_tempPosts.length}',
+          );
         }
       } else if (event.type == FeedEventType.postLiked) {
         debugPrint('📬 Post liked event received');
@@ -124,7 +131,7 @@ class _HomeFeedListState extends State<HomeFeedList>
             if (isLiked != null) {
               _likedPostIds[postId] = isLiked;
             }
-            
+
             // Update the count in the cache as well so it doesn't revert on rebuild
             for (var cacheKey in _postsCache.keys) {
               final cachedResponse = _postsCache[cacheKey]!;
@@ -137,7 +144,7 @@ class _HomeFeedListState extends State<HomeFeedList>
                 );
               }
             }
-            
+
             // Also update temporary posts
             final tempIndex = _tempPosts.indexWhere((p) => p.id == postId);
             if (tempIndex != -1) {
@@ -150,7 +157,6 @@ class _HomeFeedListState extends State<HomeFeedList>
         }
       }
     });
-
   }
 
   @override
@@ -165,16 +171,20 @@ class _HomeFeedListState extends State<HomeFeedList>
     debugPrint('➕ Post author: ${postData.authorName}');
     debugPrint('➕ Post media URL: ${postData.mediaUrl}');
     debugPrint('➕ Post media type: ${postData.mediaType}');
-    
+
     // Check if this is an update to an existing temporary post
     final existingIndex = _tempPosts.indexWhere((p) => p.id == postData.id);
     if (existingIndex != -1) {
-      debugPrint('🔄 Updating existing temporary post at index: $existingIndex');
+      debugPrint(
+        '🔄 Updating existing temporary post at index: $existingIndex',
+      );
       // Replace the existing temporary post with updated version
       setState(() {
         _tempPosts[existingIndex] = postData;
       });
-      debugPrint('🔄 Temporary post updated with media URL: ${postData.mediaUrl != null}');
+      debugPrint(
+        '🔄 Temporary post updated with media URL: ${postData.mediaUrl != null}',
+      );
     } else {
       debugPrint('➕ Adding new temporary post to feed: ${postData.id}');
       // Add new temporary post to the top of the feed
@@ -183,12 +193,15 @@ class _HomeFeedListState extends State<HomeFeedList>
         _tempPosts.insert(0, postData);
       });
     }
-    debugPrint('➕ Temporary post processed. Current count: ${_tempPosts.length}');
+    debugPrint(
+      '➕ Temporary post processed. Current count: ${_tempPosts.length}',
+    );
     debugPrint('➕ Temp posts IDs: ${_tempPosts.map((p) => p.id).toList()}');
   }
 
   Future<PaginatedResponse<Post>> _getFuture() {
-    final paramsChanged = _futureFeedType != widget.feedType ||
+    final paramsChanged =
+        _futureFeedType != widget.feedType ||
         _futureCity != widget.userCity ||
         _futureCountry != widget.userCountry;
 
@@ -197,23 +210,26 @@ class _HomeFeedListState extends State<HomeFeedList>
       _futureFeedType = widget.feedType;
       _futureCity = widget.userCity;
       _futureCountry = widget.userCountry;
-      _feedFuture = PostService.getPostsPaginated(
-        feedType: widget.feedType,
-        userCity: widget.userCity,
-        userCountry: widget.userCountry,
-        watchedIds: FeedSession.instance.seenIdsParam,
-        limit: 20, // Initial load limit
-      ).then((response) {
-        // Track seen posts for cross-feed deduplication
-        FeedSession.instance.markSeen(response.data.map((p) => p.id).toList());
-        
-        // Populate liked posts map
-        for (var p in response.data) {
-          _likedPostIds[p.id] = p.isLiked;
-        }
-        
-        return response;
-      });
+      _feedFuture =
+          PostService.getPostsPaginated(
+            feedType: widget.feedType,
+            userCity: widget.userCity,
+            userCountry: widget.userCountry,
+            watchedIds: FeedSession.instance.seenIdsParam,
+            limit: 20, // Initial load limit
+          ).then((response) {
+            // Track seen posts for cross-feed deduplication
+            FeedSession.instance.markSeen(
+              response.data.map((p) => p.id).toList(),
+            );
+
+            // Populate liked posts map
+            for (var p in response.data) {
+              _likedPostIds[p.id] = p.isLiked;
+            }
+
+            return response;
+          });
     } else {
       debugPrint('📥 Using existing future for: ${widget.feedType}');
     }
@@ -224,16 +240,18 @@ class _HomeFeedListState extends State<HomeFeedList>
   Future<PaginatedResponse<Post>> refreshFeed() {
     debugPrint('🔄 Refreshing feed: $_cacheKey');
     _postsCache.remove(_cacheKey); // Clear cache
-    FeedSession.instance.reset(); // Clear session deduplication on manual refresh
+    // FeedSession.instance.reset(); // Clear session deduplication on manual refresh
     setState(() {
       _feedFuture = null;
       // Don't clear temporary posts here - they should persist until real post arrives
       debugPrint('🔄 Feed future reset, will fetch fresh data');
-      debugPrint('🔄 Temp posts preserved during refresh: ${_tempPosts.length}');
+      debugPrint(
+        '🔄 Temp posts preserved during refresh: ${_tempPosts.length}',
+      );
     });
     return _getFuture();
   }
-  
+
   /// Static method to clear all temporary posts
   static void clearAllTempPosts() {
     debugPrint('🧹 Clearing all temporary posts');
@@ -246,7 +264,8 @@ class _HomeFeedListState extends State<HomeFeedList>
 
     if (widget.isLoadingLocation) {
       return const Center(
-          child: CircularProgressIndicator(color: AppTheme.primary));
+        child: CircularProgressIndicator(color: AppTheme.primary),
+      );
     }
 
     if (widget.locationError != null) {
@@ -258,16 +277,19 @@ class _HomeFeedListState extends State<HomeFeedList>
             children: [
               const Icon(Icons.location_off, size: 48, color: Colors.orange),
               const SizedBox(height: 16),
-              Text(widget.locationError!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.red)),
+              Text(
+                widget.locationError!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.red),
+              ),
               const SizedBox(height: 16),
               ElevatedButton.icon(
                 onPressed: widget.onRetryLocation,
                 icon: const Icon(Icons.refresh),
                 label: const Text('Retry Location'),
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primary),
+                  backgroundColor: AppTheme.primary,
+                ),
               ),
             ],
           ),
@@ -283,17 +305,25 @@ class _HomeFeedListState extends State<HomeFeedList>
     return FutureBuilder<PaginatedResponse<Post>>(
       future: _getFuture(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && _feedFuture != null && !_postsCache.containsKey(_cacheKey)) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            _feedFuture != null &&
+            !_postsCache.containsKey(_cacheKey)) {
           return const Center(
-              child: CircularProgressIndicator(color: AppTheme.primary));
+            child: CircularProgressIndicator(color: AppTheme.primary),
+          );
         }
 
         if (snapshot.hasError && !_postsCache.containsKey(_cacheKey)) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Text(safeErrorMessage(snapshot.error, fallback: 'Failed to load feed.'),
-                  style: const TextStyle(color: Colors.red)),
+              child: Text(
+                safeErrorMessage(
+                  snapshot.error,
+                  fallback: 'Failed to load feed.',
+                ),
+                style: const TextStyle(color: Colors.red),
+              ),
             ),
           );
         }
@@ -305,18 +335,24 @@ class _HomeFeedListState extends State<HomeFeedList>
 
         final response = snapshot.data ?? _postsCache[_cacheKey];
         final posts = response?.data ?? [];
-        
+
         // Clear temporary posts when we get fresh posts from server
         // This happens when _feedFuture is null and we're fetching fresh data
-        if (_feedFuture == null && posts.isNotEmpty && _tempPosts.isNotEmpty && snapshot.connectionState == ConnectionState.done) {
+        if (_feedFuture == null &&
+            posts.isNotEmpty &&
+            _tempPosts.isNotEmpty &&
+            snapshot.connectionState == ConnectionState.done) {
           // Check if these are actually new posts (not from cache)
-          final isFreshData = response != null && response != _postsCache[_cacheKey];
+          final isFreshData =
+              response != null && response != _postsCache[_cacheKey];
           if (isFreshData) {
-            debugPrint('🔄 Fresh posts from server (${posts.length}), clearing temporary posts (${_tempPosts.length})');
+            debugPrint(
+              '🔄 Fresh posts from server (${posts.length}), clearing temporary posts (${_tempPosts.length})',
+            );
             _tempPosts.clear();
           }
         }
-        
+
         // Combine temporary posts with real posts
         final allPosts = [..._tempPosts, ...posts];
 
@@ -328,19 +364,23 @@ class _HomeFeedListState extends State<HomeFeedList>
           debugPrint('📊  - Real posts: ${posts.length}');
           debugPrint('📊  - Total posts: ${allPosts.length}');
           if (_tempPosts.isNotEmpty) {
-            debugPrint('📊  - Temp post IDs: ${_tempPosts.map((p) => p.id).toList()}');
+            debugPrint(
+              '📊  - Temp post IDs: ${_tempPosts.map((p) => p.id).toList()}',
+            );
           }
         }
-        
+
         final filteredPosts = widget.searchQuery.isEmpty
             ? allPosts.where((post) {
                 // Hide archived events from the feed entirely
-                if (post.isEvent && post.computedStatus == 'archived') return false;
+                if (post.isEvent && post.computedStatus == 'archived')
+                  return false;
                 return true;
               }).toList()
             : allPosts.where((post) {
                 // Hide archived events from the feed entirely
-                if (post.isEvent && post.computedStatus == 'archived') return false;
+                if (post.isEvent && post.computedStatus == 'archived')
+                  return false;
                 final q = widget.searchQuery.toLowerCase();
                 return post.title.toLowerCase().contains(q) ||
                     post.body.toLowerCase().contains(q) ||
@@ -361,14 +401,20 @@ class _HomeFeedListState extends State<HomeFeedList>
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.forum_outlined,
-                            size: 80, color: Colors.grey.shade300),
+                        Icon(
+                          Icons.forum_outlined,
+                          size: 80,
+                          color: Colors.grey.shade300,
+                        ),
                         const SizedBox(height: 16),
                         Text(
                           widget.searchQuery.isEmpty
                               ? 'No posts yet in this area'
                               : 'No posts found',
-                          style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Colors.grey.shade600,
+                          ),
                         ),
                         if (widget.searchQuery.isEmpty &&
                             widget.userCity != null) ...[
@@ -376,7 +422,9 @@ class _HomeFeedListState extends State<HomeFeedList>
                           Text(
                             '${widget.userCity}, ${widget.userCountry}',
                             style: const TextStyle(
-                                color: Colors.grey, fontSize: 12),
+                              color: Colors.grey,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ],
@@ -411,6 +459,18 @@ class _HomeFeedListState extends State<HomeFeedList>
                 post: post,
                 currentCity: widget.userCity,
                 initialIsLiked: _likedPostIds[post.id],
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PostReelsView(
+                        posts: filteredPosts,
+                        startIndex: index,
+                        initialHasMore: response?.hasMore ?? false,
+                      ),
+                    ),
+                  );
+                },
               );
             },
           ),

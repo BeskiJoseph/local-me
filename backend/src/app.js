@@ -20,8 +20,8 @@ app.use(corsOptions);
 app.use(httpLogger);
 
 // 3. Request Shaping
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ limit: '1mb', extended: true }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(requestTimeout);
 
 // 4. Health Check (Public - No Limiter or Health-specific Limiter)
@@ -68,6 +68,7 @@ import interactionRoutes from './routes/interactions.js';
 import postRoutes from './routes/posts.js';
 import searchRoutes from './routes/search.js';
 import notificationRoutes from './routes/notifications.js';
+import chatRoutes from './routes/chats.js';
 
 const protectedMiddleware = [authenticate, progressiveLimiter('api', true)];
 
@@ -77,6 +78,7 @@ app.use('/api/posts', protectedMiddleware, postRoutes);
 app.use('/api/profiles', protectedMiddleware, profileRoutes);
 app.use('/api/search', protectedMiddleware, searchRoutes);
 app.use('/api/notifications', protectedMiddleware, notificationRoutes);
+app.use('/api/chats', protectedMiddleware, chatRoutes);
 
 // 7. 404 Handler
 app.use((req, res) => {

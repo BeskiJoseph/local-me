@@ -156,15 +156,16 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
       
       String? coverImageUrl;
       if (_coverImage != null) {
-        coverImageUrl = await MediaUploadService.uploadPostMedia(
+        final uploadResult = await MediaUploadService.uploadPostMedia(
           postId: '${user.uid}_${DateTime.now().millisecondsSinceEpoch}',
           data: await _coverImage!.readAsBytes(),
           fileExtension: 'jpg',
           mediaType: 'image',
         );
+        coverImageUrl = uploadResult?['url'] as String?;
       }
 
-      final createdEventId = await PostService.createEvent(
+      final post = await PostService.createEvent(
         title: _titleController.text.trim(),
         description: '', // Can be improved if we add a description field
         eventType: 'Classic',
@@ -181,16 +182,8 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
 
       if (!mounted) return;
 
-      final createdPostResp = await BackendService.getPost(createdEventId);
-      if (!mounted) return;
-
-      if (createdPostResp.success && createdPostResp.data != null) {
-        final post = Post.fromJson(createdPostResp.data!);
-        PostService.emit(FeedEvent(FeedEventType.postCreated, post));
-        
-        if (!mounted) return;
+      if (post.id.isNotEmpty) {
         // Pop back through CreateEvent → NewPostScreen → Home, then push GroupChat
-        // This ensures the home screen refreshes the feed
         Navigator.popUntil(context, (route) => route.isFirst);
         Navigator.push(
           context,
@@ -486,8 +479,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         controller: controller,
         readOnly: isReadOnly,
         onTap: onTap,
+        maxLength: 2000,
         style: const TextStyle(fontSize: 15, color: Color(0xFF334155), fontFamily: 'Inter'),
         decoration: InputDecoration(
+          counterText: '', // Hide the redundant counter for small slim inputs
           hintText: hintText,
           // CRITICAL: Prevent double borders by overriding global theme
           border: InputBorder.none,

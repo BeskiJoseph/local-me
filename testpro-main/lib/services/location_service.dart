@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'geocoding_service.dart';
@@ -9,6 +10,7 @@ class LocationService {
   static String? _cachedCountry;
   static Position? _cachedPosition;
   static bool _isDetecting = false;
+  static Completer<void>? _detectionCompleter;
 
   static String? get currentCity => _cachedCity;
   static String? get currentCountry => _cachedCountry;
@@ -16,8 +18,11 @@ class LocationService {
 
   /// Detect current location and sync with backend
   static Future<void> detectLocation({bool forceSync = false}) async {
-    if (_isDetecting) return;
+    if (_isDetecting) {
+      return _detectionCompleter?.future ?? Future.value();
+    }
     _isDetecting = true;
+    _detectionCompleter = Completer<void>();
 
     try {
       final user = AuthService.currentUser;
@@ -81,6 +86,8 @@ class LocationService {
       if (kDebugMode) debugPrint('Location service error: $e');
     } finally {
       _isDetecting = false;
+      _detectionCompleter?.complete();
+      _detectionCompleter = null;
     }
   }
 
