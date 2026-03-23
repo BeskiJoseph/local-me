@@ -1,6 +1,6 @@
 import express from 'express';
 import admin, { db } from '../config/firebase.js';
-import geoIndex from '../services/geoIndex.js';
+import { geoIndex } from '../services/geoIndex.js';
 import logger from '../utils/logger.js';
 import authenticate from '../middleware/auth.js';
 import AuditService from '../services/auditService.js';
