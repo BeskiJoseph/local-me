@@ -32,17 +32,24 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-      
+
       // 1. Critical: Initialize Firebase first
-      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-      
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+
       // 2. Non-critical: Initialize other services in parallel or background
-      unawaited(NotificationService.initialize().then((_) => NotificationDataService.initialize()));
+      unawaited(
+        NotificationService.initialize().then(
+          (_) => NotificationDataService.initialize(),
+        ),
+      );
       ConnectivityService.initialize();
       unawaited(BackendService.validateServer());
 
       if (!kDebugMode) {
-        FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+        FlutterError.onError =
+            FirebaseCrashlytics.instance.recordFlutterFatalError;
       } else {
         FlutterError.onError = (FlutterErrorDetails details) {
           FlutterError.presentError(details);
@@ -59,11 +66,17 @@ void main() {
         return true;
       };
 
-      runApp(UncontrolledProviderScope(container: container, child: const MyApp()));
+      runApp(
+        UncontrolledProviderScope(container: container, child: const MyApp()),
+      );
     },
     (error, stackTrace) {
       if (!kDebugMode) {
-        FirebaseCrashlytics.instance.recordError(error, stackTrace, fatal: true);
+        FirebaseCrashlytics.instance.recordError(
+          error,
+          stackTrace,
+          fatal: true,
+        );
       } else {
         debugPrint('🚨 Uncaught Async Error: $error');
       }
@@ -96,11 +109,15 @@ class _MyAppState extends State<MyApp> {
       }
     });
 
-    _connectivitySub = ConnectivityService.connectivityStream.listen((connected) {
+    _connectivitySub = ConnectivityService.connectivityStream.listen((
+      connected,
+    ) {
+      final context = navigatorKey.currentContext;
+      if (context == null) return;
       if (!connected) {
-        ConnectivityService.showOfflineBanner(navigatorKey.currentContext!);
+        ConnectivityService.showOfflineBanner(context);
       } else {
-        ConnectivityService.hideOfflineBanner(navigatorKey.currentContext!);
+        ConnectivityService.hideOfflineBanner(context);
       }
     });
   }
@@ -109,8 +126,8 @@ class _MyAppState extends State<MyApp> {
     debugPrint('🚨 Global Auth Failure detected! Redirecting to login.');
     AuthService.signOut();
     UserSession.clear();
-    FeedSession.instance.reset();
-    
+    FeedSession.instance.resetAll();
+
     navigatorKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const WelcomeScreen()),
       (route) => false,
