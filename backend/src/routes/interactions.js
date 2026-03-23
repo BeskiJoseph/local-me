@@ -51,6 +51,7 @@ router.post(
 
         let notificationPayload = null;
         let wasLiked = false;
+        let newCount = 0;
         try {
             await db.runTransaction(async (transaction) => {
                 const [likeDoc, postDoc] = await Promise.all([
@@ -96,7 +97,7 @@ router.post(
                 wasLiked = likeDoc.exists;
                 // Calculate new count for real-time broadcast
                 const currentCount = postDoc.data().likeCount || 0;
-                const newCount = Math.max(0, currentCount + (wasLiked ? -1 : 1));
+                newCount = Math.max(0, currentCount + (wasLiked ? -1 : 1));
 
                 // Broadcast to other users via WebSocket (Batched 2s)
                 broadcastLikeUpdate(postId, newCount, userId);
@@ -122,7 +123,11 @@ router.post(
 
             return res.json({
                 success: true,
-                data: { status: 'active' },
+                data: { 
+                    status: 'active',
+                    likeCount: newCount,
+                    isLiked: !wasLiked
+                },
                 error: null
             });
         } catch (error) {

@@ -66,7 +66,9 @@ class _PostReelsViewState extends State<PostReelsView> {
   @override
   void initState() {
     super.initState();
-    debugPrint('📽️ REELS OPENED: hasMore=${widget.initialHasMore}, seenCount=${FeedSession.instance.seenIds.length}');
+    debugPrint(
+      '📽️ REELS OPENED: hasMore=${widget.initialHasMore}, seenCount=${FeedSession.instance.getSeenIds(widget.feedType ?? 'local').length}',
+    );
     _activeTabIndex = widget.feedType == 'global' ? 1 : 0;
     _horizontalController = PageController(initialPage: _activeTabIndex);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -309,7 +311,20 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
     // 🔥 Ensure post is initialized in global state for real-time sync
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        ref.read(postInteractionProvider.notifier).initializePost(widget.post);
+        // Only initialize if data is fresh (< 1 minute old)
+        if (widget.post.createdAt != null) {
+          final age = DateTime.now().difference(widget.post.createdAt!);
+          if (age.inMinutes < 1) {
+            ref
+                .read(postInteractionProvider.notifier)
+                .initializePost(widget.post);
+          }
+        } else {
+          // If no timestamp, initialize anyway
+          ref
+              .read(postInteractionProvider.notifier)
+              .initializePost(widget.post);
+        }
       }
     });
   }
@@ -317,12 +332,12 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
   @override
   void didUpdateWidget(ReelPostItem oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
+
     // Update global state if widget post changes
     if (oldWidget.post.id != widget.post.id) {
-       ref.read(postInteractionProvider.notifier).initializePost(widget.post);
+      ref.read(postInteractionProvider.notifier).initializePost(widget.post);
     }
-    
+
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
       if (_videoController == null) {
         _initializeMedia();
@@ -380,10 +395,17 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
     try {
       final response = await BackendService.toggleLike(widget.post.id);
       if (!response.success) throw response.error ?? "Failed";
-      // Emit global event so Feed and other screens stay in sync
+
+      final data = response.data;
       if (mounted) {
-        FeedEventBus.emit(FeedEvent(
-          FeedEventType.postLiked, {
+        setState(() {
+          _isLiked = data?['isLiked'] ?? _isLiked;
+          _likeCount = data?['likeCount'] ?? _likeCount;
+        });
+
+        // Emit global event so Feed and other screens stay in sync
+        FeedEventBus.emit(
+          FeedEvent(FeedEventType.postLiked, {
             'postId': widget.post.id,
             'isLiked': _isLiked,
             'likeCount': _likeCount,
@@ -422,7 +444,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
   @override
   Widget build(BuildContext context) {
     final interaction = ref.watch(postProvider(widget.post.id));
-    
+
     // Sync with global state
     final currentIsLiked = interaction?.isLiked ?? _isLiked;
     final currentLikeCount = interaction?.likeCount ?? _likeCount;

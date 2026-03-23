@@ -6,6 +6,7 @@ import 'package:testpro/services/media_upload_service.dart';
 import 'package:testpro/services/auth_service.dart';
 import 'package:testpro/models/api_response.dart';
 import 'package:testpro/core/auth/auth_event_stream.dart';
+import 'package:testpro/core/state/feed_session.dart';
 
 /// Facade for Backend functionality.
 /// Uses a singleton [BackendClient] to perform actual requests.
@@ -20,7 +21,7 @@ class BackendService {
   }
 
   // --- Static Proxies ---
-  static Future<ApiResponse<bool>> toggleLike(String postId) =>
+  static Future<ApiResponse<Map<String, dynamic>>> toggleLike(String postId) =>
       _instance.toggleLike(postId);
   static Future<ApiResponse<bool>> toggleFollow(String targetUserId) =>
       _instance.toggleFollow(targetUserId);
@@ -366,6 +367,13 @@ class BackendClient {
     } else if (response.statusCode == 403) {
       debugPrint('🚫 Auth 403: Forbidden. Local session might be corrupt.');
       authFailureController.add(null);
+    } else if (response.statusCode == 414 && !retried) {
+      // Request entity too large (URL too long) - clear seen IDs and retry
+      debugPrint(
+        '🔗 HTTP 414: URL too long. Clearing seenIds cache and retrying...',
+      );
+      FeedSession.instance.resetAll();
+      return await _sendRequest(requestFn, retried: true);
     }
     return response;
   }
@@ -502,7 +510,6 @@ class BackendClient {
     }
   }
 
-
   Future<ApiResponse<Map<String, dynamic>>> getProfile(String uid) async {
     try {
       final resp = await _sendRequest(
@@ -532,7 +539,7 @@ class BackendClient {
     }
   }
 
-  Future<ApiResponse<bool>> toggleLike(String postId) async {
+  Future<ApiResponse<Map<String, dynamic>>> toggleLike(String postId) async {
     try {
       final resp = await _sendRequest(
         (token) async => await _client.post(
@@ -541,7 +548,7 @@ class BackendClient {
           body: jsonEncode({'postId': postId}),
         ),
       );
-      return _processResponse(resp, (_) => true);
+      return _processResponse(resp, (d) => d as Map<String, dynamic>);
     } catch (e) {
       return ApiResponse(success: false, error: e.toString());
     }
