@@ -53,7 +53,7 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
     with AutomaticKeepAliveClientMixin {
   late final ScrollController _scrollController;
   late final PageController _pageController;
-  final FeedController _feedController = FeedController();
+  late final FeedController _feedController;
   final Map<String, bool?> _likedPostIds = {};
 
   /// Local cache of hidden post IDs — survives feed refreshes within the session
@@ -72,18 +72,22 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
   @override
   void initState() {
     super.initState();
-    debugPrint('📄 PaginatedFeedList Init: feedType=${widget.feedType}, initialHasMore=${widget.initialHasMore}');
+    debugPrint(
+      '📄 PaginatedFeedList Init: feedType=${widget.feedType}, initialHasMore=${widget.initialHasMore}',
+    );
     _scrollController = ScrollController();
+    _feedController = FeedController(feedType: widget.feedType);
     _currentIndex = widget.startIndex;
     _pageController = PageController(initialPage: widget.startIndex);
 
     if (widget.initialPosts.isNotEmpty) {
       _feedController.appendPosts(widget.initialPosts, refresh: true);
-      
+
       // ✅ Issue 4: Only mark the current viewed post as seen, not the whole batch
       if (widget.startIndex < widget.initialPosts.length) {
-        FeedSession.instance
-            .markSeen([widget.initialPosts[widget.startIndex].id]);
+        FeedSession.instance.markSeen([
+          widget.initialPosts[widget.startIndex].id,
+        ], feedType: widget.feedType);
       }
 
       if (widget.initialHasMore != null) {
@@ -141,7 +145,7 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
           lng: (pos as dynamic).longitude,
           sinceTimestamp: _feedLoadedAt.millisecondsSinceEpoch - 10000,
           maxDistance: 10.0,
-          watchedIds: FeedSession.instance.seenIdsParam,
+          watchedIds: FeedSession.instance.seenIdsParam(widget.feedType),
           sid: FeedSession.instance.sessionId,
           mediaType: widget.mediaType,
         );
@@ -152,7 +156,10 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
           final newPosts = rawPosts
               .map((json) => Post.fromJson(json as Map<String, dynamic>))
               .toList();
-          FeedSession.instance.markSeen(newPosts.map((p) => p.id).toList());
+          FeedSession.instance.markSeen(
+            newPosts.map((p) => p.id).toList(),
+            feedType: widget.feedType,
+          );
           if (mounted) {
             // ✅ BACKGROUND POLL: Do not modify historical hasMore state
             _feedController.appendPosts(newPosts, isHistorical: false);
@@ -168,7 +175,7 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
         final response = await BackendService.getNewPostsSince(
           city: widget.userCity,
           sinceTimestamp: _feedLoadedAt.millisecondsSinceEpoch - 10000,
-          watchedIds: FeedSession.instance.seenIdsParam,
+          watchedIds: FeedSession.instance.seenIdsParam(widget.feedType),
           sid: FeedSession.instance.sessionId,
         );
         if (response.success && response.data != null) {
@@ -177,7 +184,10 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
           final newPosts = rawPosts
               .map((json) => Post.fromJson(json as Map<String, dynamic>))
               .toList();
-          FeedSession.instance.markSeen(newPosts.map((p) => p.id).toList());
+          FeedSession.instance.markSeen(
+            newPosts.map((p) => p.id).toList(),
+            feedType: widget.feedType,
+          );
           if (mounted) {
             // ✅ BACKGROUND POLL: Do not modify historical hasMore state
             _feedController.appendPosts(newPosts, isHistorical: false);
@@ -205,7 +215,10 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
           for (var p in newPosts) {
             container.read(postInteractionProvider.notifier).initializePost(p);
           }
-          FeedSession.instance.markSeen(newPosts.map((p) => p.id).toList());
+          FeedSession.instance.markSeen(
+            newPosts.map((p) => p.id).toList(),
+            feedType: widget.feedType,
+          );
           // ✅ BACKGROUND POLL: Do not modify historical hasMore state
           _feedController.appendPosts(newPosts, isHistorical: false);
           _feedLoadedAt = DateTime.now();
@@ -326,12 +339,14 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
     // ✅ FIX 2: Only check for new posts (polling) if we are NOT in the middle of a pagination load
     // and if we have a reasonable amount of history to warrant idling.
     if (_feedController.isLoading) return;
-    
+
     // If we have less than 20 items, ignore hasMore=false and keep trying to prime the feed
     if (!_feedController.hasMore && _feedController.posts.length < 20) {
-       debugPrint('♻️ hasMore is false but list is short. Retrying load instead of polling.');
-       _loadMorePosts();
-       return;
+      debugPrint(
+        '♻️ hasMore is false but list is short. Retrying load instead of polling.',
+      );
+      _loadMorePosts();
+      return;
     }
 
     if (!_feedController.hasMore) {
@@ -341,59 +356,63 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
     if (refresh) {
       _feedController.clear(notify: false);
       _likedPostIds.clear();
-      // NOTE: We NO LONGER reset FeedSession here. 
+      // NOTE: We NO LONGER reset FeedSession here.
       // This ensures that fresh queries still skip posts the user has already seen.
       _feedLoadedAt = DateTime.now(); // Reset polling anchor too
     }
 
-    debugPrint('🚀 _loadMorePosts called: hasMore=${_feedController.hasMore}, isLoading=${_feedController.isLoading}');
+    debugPrint(
+      '🚀 _loadMorePosts called: hasMore=${_feedController.hasMore}, isLoading=${_feedController.isLoading}',
+    );
     _feedController.setLoading(true);
     _feedController.setError(null);
 
     final isLocal = widget.feedType == 'local';
 
     try {
-      final watchedParam = FeedSession.instance.seenIdsParam;
+      final watchedParam = FeedSession.instance.seenIdsParam(widget.feedType);
 
       final response = await PostService.getPostsPaginated(
         feedType: widget.feedType,
         userCity: widget.userCity,
         userCountry: widget.userCountry,
         // Local/global: rely on seenIds only; no distance cursors
-        watchedIds: FeedSession.instance.seenIdsParam,
+        watchedIds: FeedSession.instance.seenIdsParam(widget.feedType),
         limit: 10,
         mediaType: widget.mediaType,
       );
 
       final data = response.data;
-      debugPrint('✅ Received ${data.length} posts from API (hasMore: ${response.hasMore})');
-      
-      // ✅ FIX 4: Removing bulk markSeen from API response. 
+      debugPrint(
+        '✅ Received ${data.length} posts from API (hasMore: ${response.hasMore})',
+      );
+
+      // ✅ FIX 4: Removing bulk markSeen from API response.
       // We ONLY mark as seen when the user actually VIEWS the item.
       // FeedSession.instance.markSeen(data.map((p) => p.id).toList());
 
-        if (mounted) {
-          final container = GlobalProviderContainer.instance;
-          for (var p in data) {
-            _likedPostIds[p.id] = p.isLiked;
-            container.read(postInteractionProvider.notifier).initializePost(p);
-          }
-
-          // 🚀 PRELOAD TOP-3 COMMENTS for instant-feel UX
-          if (refresh || _feedController.posts.isEmpty) {
-            for (int i = 0; i < data.length && i < 3; i++) {
-              ref.read(commentCacheProvider.notifier).preload(data[i].id);
-            }
-          }
-
-          _feedController.appendPosts(
-            data,
-            refresh: refresh,
-            hasMore: response.hasMore,
-          );
-          _feedLoadedAt =
-              DateTime.now(); // ⚓ Fix: Update polling anchor to current refresh time
+      if (mounted) {
+        final container = GlobalProviderContainer.instance;
+        for (var p in data) {
+          _likedPostIds[p.id] = p.isLiked;
+          container.read(postInteractionProvider.notifier).initializePost(p);
         }
+
+        // 🚀 PRELOAD TOP-3 COMMENTS for instant-feel UX
+        if (refresh || _feedController.posts.isEmpty) {
+          for (int i = 0; i < data.length && i < 3; i++) {
+            ref.read(commentCacheProvider.notifier).preload(data[i].id);
+          }
+        }
+
+        _feedController.appendPosts(
+          data,
+          refresh: refresh,
+          hasMore: response.hasMore,
+        );
+        _feedLoadedAt =
+            DateTime.now(); // ⚓ Fix: Update polling anchor to current refresh time
+      }
     } catch (e) {
       debugPrint('Error loading posts: $e');
       if (mounted) _feedController.setError(e.toString());
@@ -440,8 +459,10 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList>
             onPageChanged: (index) {
               if (mounted) {
                 setState(() => _currentIndex = index);
-                
-                debugPrint('🎞️ Reel swiped to index: $index (total: ${posts.length}, hasMore: ${_feedController.hasMore}, loading: ${_feedController.isLoading})');
+
+                debugPrint(
+                  '🎞️ Reel swiped to index: $index (total: ${posts.length}, hasMore: ${_feedController.hasMore}, loading: ${_feedController.isLoading})',
+                );
 
                 // ✅ 1. Mark as seen when viewed (User's specific fix 🥇 1)
                 if (index < posts.length) {

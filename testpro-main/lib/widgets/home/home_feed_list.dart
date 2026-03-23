@@ -215,12 +215,13 @@ class _HomeFeedListState extends State<HomeFeedList>
             feedType: widget.feedType,
             userCity: widget.userCity,
             userCountry: widget.userCountry,
-            watchedIds: FeedSession.instance.seenIdsParam,
+            watchedIds: FeedSession.instance.seenIdsParam(widget.feedType),
             limit: 20, // Initial load limit
           ).then((response) {
             // Track seen posts for cross-feed deduplication
             FeedSession.instance.markSeen(
               response.data.map((p) => p.id).toList(),
+              feedType: widget.feedType,
             );
 
             // Populate liked posts map

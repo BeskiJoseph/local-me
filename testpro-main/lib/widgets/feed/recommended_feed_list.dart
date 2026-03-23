@@ -114,7 +114,7 @@ class _RecommendedFeedListState extends State<RecommendedFeedList>
       final newResponse = await PostService.getPostsPaginated(
         feedType: 'global',
         limit: 10,
-        watchedIds: FeedSession.instance.seenIdsParam,
+        watchedIds: FeedSession.instance.seenIdsParam('global'),
         sid: _sessionId,
       );
       final newPosts = newResponse.data;

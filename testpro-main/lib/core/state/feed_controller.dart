@@ -4,9 +4,12 @@ import 'feed_session.dart';
 
 /// Lightweight feed controller for abstracting mutable list operations
 class FeedController extends ChangeNotifier {
+  final String feedType;
   final List<Post> _posts = [];
   final Set<String> _tombstones = {}; // Memory layer for optimistic deletions
   // Local feed state moved to seenIds-based flow; remove distance cursor state
+
+  FeedController({this.feedType = 'global'});
 
   List<Post> get posts => List.unmodifiable(_posts);
   bool isLoading = false;
@@ -42,10 +45,12 @@ class FeedController extends ChangeNotifier {
 
     // Post-shipment: rely on provided hasMore flag from repo when available
 
-    if (false) {
+    if (this.hasMore == false && !isCycling && _posts.length >= 10) {
       isCycling = true;
-      hasMore = true;
-      FeedSession.instance.reset();
+      this.hasMore = true; // Allow loading from the beginning
+      FeedSession.instance.reset(
+        feedType,
+      ); // Transparently reset seen state for cycling
     }
 
     notifyListeners();

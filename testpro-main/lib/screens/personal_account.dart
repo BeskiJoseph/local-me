@@ -197,7 +197,7 @@ class _PersonalAccountState extends State<PersonalAccount>
         authorId: profileUserId,
         // Remove cursor; rely on seenIds-based per-user state downstream
         limit: 10,
-        watchedIds: FeedSession.instance.seenIdsParam,
+        watchedIds: FeedSession.instance.seenIdsParam('global'),
       );
 
       if (!mounted) return;

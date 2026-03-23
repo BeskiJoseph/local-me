@@ -37,13 +37,13 @@ class _ArtizonePageState extends State<ArtizonePage> {
         feedType: 'global',
         authorId: widget.userId,
         limit: 20,
-        watchedIds: FeedSession.instance.seenIdsParam,
+        watchedIds: FeedSession.instance.seenIdsParam('global'),
       );
 
       if (!mounted) return;
 
       final List<Post> newPosts = response.data;
-      
+
       setState(() {
         for (var p in newPosts) {
           _likedPostIds[p.id] = p.isLiked;
@@ -98,17 +98,18 @@ class _ArtizonePageState extends State<ArtizonePage> {
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: [
-                            Color(0xFF2E7D6A),
-                            Color(0xFF1B4E41),
-                          ],
+                          colors: [Color(0xFF2E7D6A), Color(0xFF1B4E41)],
                         ),
                       ),
                     ),
                     const Positioned(
                       right: -30,
                       top: -20,
-                      child: Icon(Icons.article, size: 150, color: Colors.white10),
+                      child: Icon(
+                        Icons.article,
+                        size: 150,
+                        color: Colors.white10,
+                      ),
                     ),
                     const Positioned(
                       left: 20,
@@ -130,7 +131,7 @@ class _ArtizonePageState extends State<ArtizonePage> {
                 onPressed: () => Navigator.pop(context),
               ),
             ),
-            
+
             if (_isLoading && _posts.isEmpty)
               const SliverFillRemaining(
                 child: Center(child: CircularProgressIndicator()),
@@ -146,38 +147,38 @@ class _ArtizonePageState extends State<ArtizonePage> {
               )
             else
               SliverPadding(
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 0),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 0,
+                ),
                 sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      if (index == mediaPosts.length) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          _loadPosts();
-                        });
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(24.0),
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        );
-                      }
-                      final post = mediaPosts[index];
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12.0),
-                        child: NextdoorStylePostCard(
-                          post: post,
-                          initialIsLiked: _likedPostIds[post.id],
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ArticleReadingScreen(article: post),
-                            ),
-                          ),
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    if (index == mediaPosts.length) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        _loadPosts();
+                      });
+                      return const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24.0),
+                          child: CircularProgressIndicator(strokeWidth: 2),
                         ),
                       );
-                    },
-                    childCount: mediaPosts.length + (_hasMore ? 1 : 0),
-                  ),
+                    }
+                    final post = mediaPosts[index];
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12.0),
+                      child: NextdoorStylePostCard(
+                        post: post,
+                        initialIsLiked: _likedPostIds[post.id],
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ArticleReadingScreen(article: post),
+                          ),
+                        ),
+                      ),
+                    );
+                  }, childCount: mediaPosts.length + (_hasMore ? 1 : 0)),
                 ),
               ),
           ],
