@@ -44,6 +44,7 @@ dependencies:
   connectivity_plus: ^6.1.1
   hooks_riverpod: ^2.5.1
   flutter_hooks: ^0.20.5
+  uuid: ^4.0.0
 
 dev_dependencies:
   flutter_test:

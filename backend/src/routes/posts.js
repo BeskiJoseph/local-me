@@ -602,7 +602,10 @@ router.get('/', authenticate, async (req, res, next) => {
             return res.json({
                 success: true,
                 data: finalPosts,
-                hasMore: responseData.hasMore || finalPosts.length >= pageSize // ✅ Fix 3: Safer hasMore
+                pagination: {
+                    cursor: finalPosts.length > 0 ? finalPosts[finalPosts.length - 1].id : null,
+                    hasMore: responseData.hasMore || finalPosts.length >= pageSize
+                }
             });
         }
 
