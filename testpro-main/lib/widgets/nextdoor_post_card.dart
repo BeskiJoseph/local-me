@@ -128,18 +128,20 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
     try {
       final response = await BackendService.toggleLike(widget.post.id);
       if (!response.success) throw response.error ?? "Toggle failed";
+      
+      final data = response.data;
       if (mounted) {
         setState(() {
-          // Commit optimistic state instantly for smooth UX
-          _isLiked = newTarget;
-          _likeCount = _optimisticLikeCount ?? _likeCount;
+          // Commit server data if available for ultimate source of truth
+          _isLiked = data?['isLiked'] ?? newTarget;
+          _likeCount = data?['likeCount'] ?? (_optimisticLikeCount ?? _likeCount);
           _optimisticLiked = null;
           _optimisticLikeCount = null;
         });
         // Emit global event for sync across feeds
         FeedEventBus.emit(FeedEvent(
           FeedEventType.postLiked, 
-          {'postId': widget.post.id, 'isLiked': newTarget, 'likeCount': _likeCount}
+          {'postId': widget.post.id, 'isLiked': _isLiked, 'likeCount': _likeCount}
         ));
       }
     } catch (e) {

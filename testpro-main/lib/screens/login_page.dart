@@ -60,11 +60,9 @@ class _LoginScreenState extends State<LoginScreen> {
             name: user.displayName,
             avatar: user.photoURL,
           );
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const WelcomeScreen()),
-            );
+          // No manual navigation needed - StreamBuilder in main.dart handles it
+          if (mounted && Navigator.canPop(context)) {
+            Navigator.pop(context);
           }
         } else {
           // User not verified
@@ -138,11 +136,9 @@ class _LoginScreenState extends State<LoginScreen> {
              name: user.displayName,
              avatar: user.photoURL,
            );
-           if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (context) => const WelcomeScreen()),
-            );
+           // No manual navigation needed - StreamBuilder in main.dart handles it
+           if (mounted && Navigator.canPop(context)) {
+            Navigator.pop(context);
            }
         } else {
            if (mounted) {

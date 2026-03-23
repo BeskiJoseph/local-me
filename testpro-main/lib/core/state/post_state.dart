@@ -65,7 +65,19 @@ class PostInteractionNotifier extends StateNotifier<Map<String, PostInteraction>
 
   void updateLike(String postId, {bool? isLiked, int? likeCount}) {
     final existing = state[postId];
-    if (existing == null) return;
+    if (existing == null) {
+      // 🚀 Auto-initialize if missing (e.g. background event for post being scrolled into view)
+      state = {
+        ...state,
+        postId: PostInteraction(
+          postId: postId,
+          likeCount: likeCount ?? 0,
+          commentCount: 0, // Placeholder
+          isLiked: isLiked ?? false,
+        ),
+      };
+      return;
+    }
     state = {
       ...state,
       postId: existing.copyWith(
