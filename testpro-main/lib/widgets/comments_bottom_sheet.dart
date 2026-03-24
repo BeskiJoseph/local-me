@@ -297,16 +297,26 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
             }
           });
         }
-        // Broadcast updated comment count to the feed
-        _addedCommentCount++;
-        FeedEventBus.emit(FeedEvent(
-          FeedEventType.commentAdded,
-          {
-            'postId': widget.post.id, 
-            'commentCount': widget.post.commentCount + _addedCommentCount,
-            'newComment': realComment.toJson() // 🔥 Pass for global sync
-          },
-        ));
+        // 🚀 Global State Sync: Update comment count in PostStore
+        if (mounted) {
+          final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
+          final newCount = postInStore.commentCount + 1;
+          
+          ref.read(postStoreProvider.notifier).updatePostPartially(
+            widget.post.id, 
+            {'commentCount': newCount}
+          );
+
+          // Broadcast for legacy observers
+          FeedEventBus.emit(FeedEvent(
+            FeedEventType.commentAdded,
+            {
+              'postId': widget.post.id, 
+              'commentCount': newCount,
+              'newComment': realComment.toJson()
+            },
+          ));
+        }
       } else {
         throw Exception(response.error);
       }

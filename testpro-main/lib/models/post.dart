@@ -32,6 +32,7 @@ class Post {
   final double? trendingScore; // For global feed trending sort
   final int viewCount; // View count for posts
   final bool isFollowing; // Whether current user follows author
+  final bool isBookmarked; // Whether current user has saved this post
 
   Post({
     required this.id,
@@ -65,6 +66,7 @@ class Post {
     this.trendingScore,
     this.viewCount = 0,
     this.isFollowing = false,
+    this.isBookmarked = false,
   });
 
   factory Post.fromJson(Map<String, dynamic> json) {
@@ -125,6 +127,7 @@ class Post {
       trendingScore: (json['trendingScore'] as num?)?.toDouble(),
       viewCount: json['viewCount'] as int? ?? 0,
       isFollowing: json['isFollowing'] ?? false,
+      isBookmarked: json['isBookmarked'] ?? false,
     );
   }
 
@@ -162,6 +165,7 @@ class Post {
       'isLiked': isLiked,
       'viewCount': viewCount,
       'isFollowing': isFollowing,
+      'isBookmarked': isBookmarked,
     };
   }
 
@@ -197,6 +201,7 @@ class Post {
     double? trendingScore,
     int? viewCount,
     bool? isFollowing,
+    bool? isBookmarked,
   }) {
     return Post(
       id: id ?? this.id,
@@ -230,6 +235,7 @@ class Post {
       trendingScore: trendingScore ?? this.trendingScore,
       viewCount: viewCount ?? this.viewCount,
       isFollowing: isFollowing ?? this.isFollowing,
+      isBookmarked: isBookmarked ?? this.isBookmarked,
     );
   }
 }

@@ -9,7 +9,6 @@ import { cleanPayload } from '../utils/sanitizer.js';
 import { enforceLikeVelocity, enforceFollowVelocity } from '../middleware/interactionVelocity.js';
 import { buildDisplayName } from '../utils/userDisplayName.js';
 import { updateUserContextCache, getUserContext } from '../services/userContextService.js';
-import { invalidateFeedCache } from './posts.js';
 import { broadcastLikeUpdate, broadcastCommentUpdate } from '../services/socketService.js';
 import NotificationService from '../services/notificationService.js';
 import { filterContent } from '../utils/contentFilter.js';

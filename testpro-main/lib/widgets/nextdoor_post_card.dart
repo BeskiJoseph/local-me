@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:testpro/models/post.dart';
@@ -54,26 +55,15 @@ class NextdoorStylePostCard extends ConsumerStatefulWidget {
 }
 
 class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
-  bool _isLiked = false;
-  int _likeCount = 0;
-  bool? _optimisticLiked;
-  int? _optimisticLikeCount;
-  bool _isTogglingLike = false;
-  bool _isBookmarked = false;
-  bool _bookmarkLoading = false;
-  StreamSubscription? _eventSub;
   final List<Key> _activeHearts = [];
 
   @override
   void initState() {
     super.initState();
-    _likeCount = widget.post.likeCount;
-    _isLiked = widget.initialIsLiked ?? widget.post.isLiked;
-    
-    // 🔥 Ensure post is initialized in global state for real-time sync
+    // Register post in store on load
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        ref.read(postInteractionProvider.notifier).initializePost(widget.post);
+        ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
       }
     });
   }
@@ -81,82 +71,90 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
   @override
   void didUpdateWidget(NextdoorStylePostCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    
-    // Update global state if widget post changes
     if (oldWidget.post.id != widget.post.id) {
-       ref.read(postInteractionProvider.notifier).initializePost(widget.post);
-    }
-    
-    // Only sync from outside if we're NOT in the middle of a user interaction
-    if (!_isTogglingLike && _optimisticLiked == null && _optimisticLikeCount == null) {
-      final newLiked = widget.initialIsLiked ?? widget.post.isLiked;
-      final newCount = widget.post.likeCount;
-      if (newLiked != _isLiked || newCount != _likeCount) {
-        setState(() {
-          _isLiked = newLiked;
-          _likeCount = newCount;
-        });
-      }
+       ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
     }
   }
 
   @override
   void dispose() {
+    if (mounted) {
+       ref.read(postStoreProvider.notifier).setVisible(widget.post.id, false);
+    }
     super.dispose();
   }
 
 
 
-  Future<void> _handleLike() async {
-    if (_isTogglingLike) return;
-    final user = AuthService.currentUser;
-    if (user == null) return;
+  void _handleLike() async {
+    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    final bool isLiked = post.isLiked;
+    final int likeCount = post.likeCount;
+    final bool newTarget = !isLiked;
+    final int newCount = (likeCount + (newTarget ? 1 : -1)).clamp(0, 1 << 30);
 
-    _isTogglingLike = true;
-    final currentLiked = _optimisticLiked ?? _isLiked;
-    final newTarget = !currentLiked;
-    final currentCount = _optimisticLikeCount ?? _likeCount;
-
-    // Feedback
     if (newTarget) HapticService.medium();
 
-    setState(() {
-      _optimisticLiked = newTarget;
-      _optimisticLikeCount = (currentCount + (newTarget ? 1 : -1)).clamp(0, 1 << 30);
+    final version = DateTime.now().millisecondsSinceEpoch;
+    final postId = widget.post.id;
+
+    // 1. Optimistic Update in Global Store
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.setActionVersion(postId, 'like', version);
+    notifier.updatePostPartially(postId, {
+      'isLiked': newTarget,
+      'likeCount': newCount,
     });
 
     try {
-      final response = await BackendService.toggleLike(widget.post.id);
-      if (!response.success) throw response.error ?? "Toggle failed";
+      final response = await BackendService.toggleLike(postId);
       
-      final data = response.data;
-      if (mounted) {
-        setState(() {
-          // Commit server data if available for ultimate source of truth
-          _isLiked = data?['isLiked'] ?? newTarget;
-          _likeCount = data?['likeCount'] ?? (_optimisticLikeCount ?? _likeCount);
-          _optimisticLiked = null;
-          _optimisticLikeCount = null;
+      if (!mounted) return;
+
+      // 2. Race Condition Check
+      final latestVersion = ref.read(postActionVersionProvider((postId, 'like')));
+      if (latestVersion != version) return;
+
+      if (!response.success) {
+        // Rollback
+        notifier.updatePostPartially(postId, {
+          'isLiked': isLiked,
+          'likeCount': likeCount,
         });
-        // Emit global event for sync across feeds
-        FeedEventBus.emit(FeedEvent(
-          FeedEventType.postLiked, 
-          {'postId': widget.post.id, 'isLiked': _isLiked, 'likeCount': _likeCount}
-        ));
+        _showSnackbarError("Unable to update like. Please try again.");
+      } else {
+        // Confirm with server response if possible
+        final data = response.data;
+        if (data != null) {
+          notifier.updatePostPartially(postId, {
+            'isLiked': data['isLiked'],
+            'likeCount': data['likeCount'],
+          });
+        }
+        
+        // FeedEventBus sync for legacy subscribers
+        FeedEventBus.emit(FeedEvent(FeedEventType.postLiked, {
+          'postId': postId,
+          'isLiked': data?['isLiked'] ?? newTarget,
+          'likeCount': data?['likeCount'] ?? newCount,
+        }));
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          // Roll back on failure
-          _optimisticLiked = null;
-          _optimisticLikeCount = null;
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isTogglingLike = false);
-      }
+       if (mounted) {
+         notifier.updatePostPartially(postId, {
+           'isLiked': isLiked,
+           'likeCount': likeCount,
+         });
+         _showSnackbarError("An error occurred.");
+       }
     }
+  }
+
+  void _showSnackbarError(String msg) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
+    );
   }
 
   Future<void> _handleDelete() async {
@@ -196,149 +194,150 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
     }
   }
 
+  void _handleSave() async {
+    final postId = widget.post.id;
+    final post = ref.read(postProvider(postId)) ?? widget.post;
+    final bool isBookmarked = post.isBookmarked;
+    final bool newTarget = !isBookmarked;
+
+    HapticFeedback.selectionClick();
+
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.updatePostPartially(postId, {'isBookmarked': newTarget});
+
+    try {
+      final response = newTarget 
+          ? await BackendService.savePost(postId)
+          : await BackendService.unsavePost(postId);
+      
+      if (!mounted) return;
+
+      if (!response.success) {
+        notifier.updatePostPartially(postId, {'isBookmarked': isBookmarked});
+        _showSnackbarError("Unable to update save. Please try again.");
+      }
+    } catch (e) {
+       if (mounted) {
+         notifier.updatePostPartially(postId, {'isBookmarked': isBookmarked});
+         _showSnackbarError("An error occurred.");
+       }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final interaction = ref.watch(postProvider(widget.post.id));
-    
-    // Prioritize Riverpod state, then optimistic state, then widget property
-    final currentIsLiked = interaction?.isLiked ?? (_optimisticLiked ?? _isLiked);
-    final currentLikeCount = interaction?.likeCount ?? (_optimisticLikeCount ?? _likeCount);
-    final currentCommentCount = interaction?.commentCount ?? widget.post.commentCount;
-
-    final post = widget.post;
+    final interactionPost = ref.watch(postProvider(widget.post.id));
+    final post = interactionPost ?? widget.post;
     final user = AuthService.currentUser;
 
-    return ValueListenableBuilder<UserSessionData?>(
-      valueListenable: UserSession.current,
-      builder: (context, sessionData, _) {
-        final isMe = UserSession.isMe(post.authorId);
-        final displayName = isMe 
-            ? (sessionData?.displayName ?? post.authorName) 
-            : ((post.authorName.isEmpty || post.authorName == 'User') ? 'User' : post.authorName);
+    // These are now fully reactive from the global store
+    final currentIsLiked = post.isLiked;
+    final currentLikeCount = post.likeCount;
+    final currentCommentCount = post.commentCount;
+    final currentIsBookmarked = post.isBookmarked;
 
-        return GestureDetector(
-          onTap: widget.onTap, // Ensure parent manages navigation or use default toggle?
-          child: ColoredBox(
-            color: Colors.white,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-            child: _PostHeader(
-              post: post,
-              user: user,
-              onDelete: _handleDelete,
-            ),
-          ),
-
-          // ── Media ────────────────────────────────────────────
-          if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
-            _PostMedia(
-              post: post, 
-              activeHearts: _activeHearts,
-              onDoubleTap: () {
-                if (!currentIsLiked) {
-                  _handleLike();
-                }
-                final heartKey = UniqueKey();
-                setState(() => _activeHearts.add(heartKey));
-                Future.delayed(const Duration(milliseconds: 800), () {
-                  if (mounted) setState(() => _activeHearts.remove(heartKey));
-                });
-              },
-            ),
-            const SizedBox(height: 6),
-          ],
-
-          // ── Reaction Row ──────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: _ReactionRow(
-              post: post,
-              isLiked: currentIsLiked,
-              likeCount: currentLikeCount,
-              commentCount: currentCommentCount,
-              isBookmarked: _isBookmarked,
-              onLike: user != null ? _handleLike : null,
-              onComment: () => CommentsBottomSheet.show(context, post),
-              onBookmark: () {
-                if (_bookmarkLoading) return;
-                HapticService.light();
-                final newState = !_isBookmarked;
-                setState(() => _isBookmarked = newState);
-                _bookmarkLoading = true;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(newState ? 'Post saved' : 'Post unsaved'),
-                    duration: const Duration(milliseconds: 1500),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-                () async {
-                  try {
-                    final resp = newState
-                        ? await BackendService.savePost(post.id)
-                        : await BackendService.unsavePost(post.id);
-                    if (!resp.success && mounted) {
-                      setState(() => _isBookmarked = !newState);
-                    }
-                  } catch (_) {
-                    if (mounted) setState(() => _isBookmarked = !newState);
-                  } finally {
-                    _bookmarkLoading = false;
-                  }
-                }();
-              },
-            ),
-          ),
-
-          // ── Post Content (Caption) ───────────────────────────
-          if (post.title.isNotEmpty || post.body.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: ExpandableText(
-                text: post.title.isNotEmpty ? post.title : post.body,
-                maxLines: 2,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF333333),
-                  decoration: post.computedStatus == 'archived' ? TextDecoration.lineThrough : null,
+    return VisibilityDetector(
+      key: ValueKey('post_card_visibility_${post.id}'),
+      onVisibilityChanged: (info) {
+        if (mounted) {
+          ref.read(postStoreProvider.notifier).setVisible(post.id, info.visibleFraction > 0.1);
+        }
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: ColoredBox(
+          color: Colors.white,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                child: _PostHeader(
+                  post: post,
+                  user: user,
+                  onDelete: _handleDelete,
                 ),
               ),
-            ),
 
-          // ── Event Dates ──────────────────────────────────
-          if (post.isEvent && post.eventStartDate != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.calendar_today_rounded,
-                    size: 14,
-                    color: post.computedStatus == 'archived' ? const Color(0xFFC0C0C0) : AppTheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    _formatEventDateRange(post.eventStartDate!, post.eventEndDate),
+              // ── Media ────────────────────────────────────────────
+              if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
+                _PostMedia(
+                  post: post,
+                  activeHearts: _activeHearts,
+                  onDoubleTap: () {
+                    if (!currentIsLiked) {
+                      _handleLike();
+                    }
+                    final heartKey = UniqueKey();
+                    setState(() => _activeHearts.add(heartKey));
+                    Future.delayed(const Duration(milliseconds: 800), () {
+                      if (mounted) setState(() => _activeHearts.remove(heartKey));
+                    });
+                  },
+                ),
+                const SizedBox(height: 6),
+              ],
+
+              // ── Reaction Row ──────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: _ReactionRow(
+                  post: post,
+                  isLiked: currentIsLiked,
+                  likeCount: currentLikeCount,
+                  commentCount: currentCommentCount,
+                  isBookmarked: currentIsBookmarked,
+                  onLike: user != null ? _handleLike : null,
+                  onComment: () => CommentsBottomSheet.show(context, post),
+                  onBookmark: _handleSave,
+                ),
+              ),
+
+              // ── Post Content (Caption) ───────────────────────────
+              if (post.title.isNotEmpty || post.body.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: ExpandableText(
+                    text: post.title.isNotEmpty ? post.title : post.body,
+                    maxLines: 2,
                     style: TextStyle(
-                      fontFamily: AppTheme.fontFamily,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF4A4A4A),
+                      fontSize: 14,
+                      color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF333333),
+                      decoration: post.computedStatus == 'archived' ? TextDecoration.lineThrough : null,
                     ),
                   ),
-                ],
-              ),
-            ),
-          ],
+                ),
+
+              // ── Event Dates ──────────────────────────────────
+              if (post.isEvent && post.eventStartDate != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.calendar_today_rounded,
+                        size: 14,
+                        color: post.computedStatus == 'archived' ? const Color(0xFFC0C0C0) : AppTheme.primary,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _formatEventDateRange(post.eventStartDate!, post.eventEndDate),
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontFamily,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF4A4A4A),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
-  },
-);
-}
+  }
 
   String _formatEventDateRange(DateTime start, DateTime? end) {
     if (end == null) {
@@ -368,7 +367,7 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
 // ─────────────────────────────────────────────────────────────
 // Header: avatar | name + location | follow | time | ···
 // ─────────────────────────────────────────────────────────────
-class _PostHeader extends StatefulWidget {
+class _PostHeader extends ConsumerStatefulWidget {
   final Post post;
   final dynamic user;
   final VoidCallback? onDelete;
@@ -376,56 +375,54 @@ class _PostHeader extends StatefulWidget {
   const _PostHeader({required this.post, this.user, this.onDelete});
 
   @override
-  State<_PostHeader> createState() => _PostHeaderState();
+  ConsumerState<_PostHeader> createState() => _PostHeaderState();
 }
 
-class _PostHeaderState extends State<_PostHeader> {
-  bool _isFollowing = false;
+class _PostHeaderState extends ConsumerState<_PostHeader> {
   bool _isBusy = false;
-  StreamSubscription? _subscription;
-
-  @override
-  void initState() {
-    super.initState();
-    _isFollowing = widget.post.isFollowing;
-    _subscription = FeedEventBus.events.listen(
-(event) {
-      if (event.type == FeedEventType.userFollowed) {
-        final data = event.data as Map<String, dynamic>;
-        if (data['userId'] == widget.post.authorId) {
-          if (mounted) setState(() => _isFollowing = data['isFollowing']);
-        }
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _subscription?.cancel();
-    super.dispose();
-  }
-
 
   Future<void> _toggleFollow() async {
     if (_isBusy) return;
-    setState(() => _isBusy = true);
-    final newState = !_isFollowing;
     
-    // Optimistic
-    setState(() => _isFollowing = newState);
-    FeedEventBus.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': newState}));
+    final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    final bool currentFollowing = postInStore.isFollowing;
+    final bool newState = !currentFollowing;
+
+    HapticFeedback.selectionClick();
+    
+    final version = DateTime.now().millisecondsSinceEpoch;
+    final postId = widget.post.id;
+    final authorId = widget.post.authorId;
+
+    // 1. Optimistic
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.setActionVersion(postId, 'follow', version);
+    notifier.updatePostPartially(postId, {'isFollowing': newState});
+
+    setState(() => _isBusy = true);
 
     try {
-      final res = await BackendService.toggleFollow(widget.post.authorId);
-      if (!res.success && mounted) {
+      final res = await BackendService.toggleFollow(authorId);
+      
+      if (!mounted) return;
+
+      // 2. Race Check
+      final latestVersion = ref.read(postActionVersionProvider((postId, 'follow')));
+      if (latestVersion != version) return;
+
+      if (!res.success) {
         // Rollback
-        setState(() => _isFollowing = !newState);
-        PostService.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': !newState}));
+        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
+      } else {
+        // Legacy Event Sync
+        FeedEventBus.emit(FeedEvent(FeedEventType.userFollowed, {
+          'userId': authorId, 
+          'isFollowing': newState
+        }));
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _isFollowing = !newState);
-        PostService.emit(FeedEvent(FeedEventType.userFollowed, {'userId': widget.post.authorId, 'isFollowing': !newState}));
+        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
       }
     } finally {
       if (mounted) setState(() => _isBusy = false);
@@ -434,6 +431,8 @@ class _PostHeaderState extends State<_PostHeader> {
 
   @override
   Widget build(BuildContext context) {
+    final postInStore = ref.watch(postProvider(widget.post.id)) ?? widget.post;
+    final isFollowing = postInStore.isFollowing;
     return ValueListenableBuilder<UserSessionData?>(
       valueListenable: UserSession.current,
       builder: (context, sessionData, _) {
@@ -509,9 +508,9 @@ class _PostHeaderState extends State<_PostHeader> {
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 child: Text(
-                  _isFollowing ? 'Following' : 'Follow',
+                  isFollowing ? 'Following' : 'Follow',
                   style: TextStyle(
-                    color: _isFollowing ? const Color(0xFF8A8A8A) : AppTheme.primary,
+                    color: isFollowing ? const Color(0xFF8A8A8A) : AppTheme.primary,
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
                     fontFamily: AppTheme.fontFamily,

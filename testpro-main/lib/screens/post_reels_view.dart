@@ -290,41 +290,17 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
     with SingleTickerProviderStateMixin {
   VideoPlayerController? _videoController;
   bool _isInitialized = false;
-  bool _isLiked = false;
-  int _likeCount = 0;
-  int _commentCount = 0;
-  bool _isLikeBusy = false;
-  bool _isFollowed = false;
-  bool _isFollowBusy = false;
   final List<Key> _activeHearts = [];
-  StreamSubscription? _eventSub;
 
   @override
   void initState() {
     super.initState();
-    _isLiked = widget.post.isLiked;
-    _likeCount = widget.post.likeCount;
-    _commentCount = widget.post.commentCount;
-    _isFollowed = widget.post.isFollowing;
     if (widget.isCurrentPage) _initializeMedia();
 
     // 🔥 Ensure post is initialized in global state for real-time sync
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        // Only initialize if data is fresh (< 1 minute old)
-        if (widget.post.createdAt != null) {
-          final age = DateTime.now().difference(widget.post.createdAt!);
-          if (age.inMinutes < 1) {
-            ref
-                .read(postInteractionProvider.notifier)
-                .initializePost(widget.post);
-          }
-        } else {
-          // If no timestamp, initialize anyway
-          ref
-              .read(postInteractionProvider.notifier)
-              .initializePost(widget.post);
-        }
+        ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
       }
     });
   }
@@ -335,7 +311,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
 
     // Update global state if widget post changes
     if (oldWidget.post.id != widget.post.id) {
-      ref.read(postInteractionProvider.notifier).initializePost(widget.post);
+      ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
     }
 
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
@@ -374,7 +350,9 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
   }
 
   void _handleDoubleTap() async {
-    if (!_isLiked) _toggleLike();
+    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    if (!post.isLiked) _toggleLike();
+    
     final heartKey = UniqueKey();
     setState(() => _activeHearts.add(heartKey));
     Future.delayed(const Duration(milliseconds: 800), () {
@@ -383,72 +361,108 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
   }
 
   Future<void> _toggleLike() async {
-    if (_isLikeBusy) return;
-    final user = AuthService.currentUser;
-    if (user == null) return;
-    setState(() {
-      _isLikeBusy = true;
-      _isLiked = !_isLiked;
-      _likeCount += _isLiked ? 1 : -1;
+    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    final bool isLiked = post.isLiked;
+    final int likeCount = post.likeCount;
+    final bool newTarget = !isLiked;
+    final int newCount = (likeCount + (newTarget ? 1 : -1)).clamp(0, 1 << 30);
+
+    if (newTarget) HapticService.medium();
+
+    final version = DateTime.now().millisecondsSinceEpoch;
+    final postId = widget.post.id;
+
+    // 1. Optimistic Update
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.setActionVersion(postId, 'like', version);
+    notifier.updatePostPartially(postId, {
+      'isLiked': newTarget,
+      'likeCount': newCount,
     });
-    if (_isLiked) HapticService.medium();
+
     try {
-      final response = await BackendService.toggleLike(widget.post.id);
-      if (!response.success) throw response.error ?? "Failed";
+      final response = await BackendService.toggleLike(postId);
+      if (!mounted) return;
 
-      final data = response.data;
-      if (mounted) {
-        setState(() {
-          _isLiked = data?['isLiked'] ?? _isLiked;
-          _likeCount = data?['likeCount'] ?? _likeCount;
+      // 2. Race Check
+      final latestVersion = ref.read(postActionVersionProvider((postId, 'like')));
+      if (latestVersion != version) return;
+
+      if (!response.success) {
+        // Rollback
+        notifier.updatePostPartially(postId, {
+          'isLiked': isLiked,
+          'likeCount': likeCount,
         });
-
-        // Emit global event so Feed and other screens stay in sync
-        FeedEventBus.emit(
-          FeedEvent(FeedEventType.postLiked, {
-            'postId': widget.post.id,
-            'isLiked': _isLiked,
-            'likeCount': _likeCount,
-          }),
-        );
+      } else {
+         // Sync legacy observers
+         FeedEventBus.emit(FeedEvent(FeedEventType.postLiked, {
+           'postId': postId,
+           'isLiked': newTarget,
+           'likeCount': newCount,
+         }));
       }
     } catch (e) {
-      if (mounted)
-        setState(() {
-          _isLiked = !_isLiked;
-          _likeCount += _isLiked ? 1 : -1;
+      if (mounted) {
+        notifier.updatePostPartially(postId, {
+          'isLiked': isLiked,
+          'likeCount': likeCount,
         });
-    } finally {
-      if (mounted) setState(() => _isLikeBusy = false);
+      }
     }
   }
 
   Future<void> _toggleFollow() async {
-    if (_isFollowBusy) return;
-    final user = AuthService.currentUser;
-    if (user == null) return;
-    setState(() {
-      _isFollowBusy = true;
-      _isFollowed = !_isFollowed;
-    });
+    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    final bool currentFollowing = post.isFollowing;
+    final bool newState = !currentFollowing;
+
+    HapticFeedback.selectionClick();
+
+    final version = DateTime.now().millisecondsSinceEpoch;
+    final postId = widget.post.id;
+    final authorId = widget.post.authorId;
+
+    // 1. Optimistic
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.setActionVersion(postId, 'follow', version);
+    notifier.updatePostPartially(postId, {'isFollowing': newState});
+
     try {
-      final response = await BackendService.toggleFollow(widget.post.authorId);
-      if (!response.success) throw response.error ?? "Failed";
-    } catch (e) {
-      if (mounted) setState(() => _isFollowed = !_isFollowed);
-    } finally {
-      if (mounted) setState(() => _isFollowBusy = false);
+      final res = await BackendService.toggleFollow(authorId);
+      if (!mounted) return;
+
+      // 2. Race Check
+      final latestVersion = ref.read(postActionVersionProvider((postId, 'follow')));
+      if (latestVersion != version) return;
+
+      if (!res.success) {
+        // Rollback
+        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
+      } else {
+        // Sync legacy observers
+        FeedEventBus.emit(FeedEvent(FeedEventType.userFollowed, {
+          'userId': authorId,
+          'isFollowing': newState,
+        }));
+      }
+    } catch (_) {
+      if (mounted) {
+        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final interaction = ref.watch(postProvider(widget.post.id));
+    final interactionPost = ref.watch(postProvider(widget.post.id));
+    final post = interactionPost ?? widget.post;
 
     // Sync with global state
-    final currentIsLiked = interaction?.isLiked ?? _isLiked;
-    final currentLikeCount = interaction?.likeCount ?? _likeCount;
-    final currentCommentCount = interaction?.commentCount ?? _commentCount;
+    final currentIsLiked = post.isLiked;
+    final currentLikeCount = post.likeCount;
+    final currentCommentCount = post.commentCount;
+    final isFollowing = post.isFollowing;
 
     final category = widget.post.category.toLowerCase();
     final isArticle = category == 'article' || category == 'artizone';
@@ -456,6 +470,11 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
     return VisibilityDetector(
       key: ValueKey('reel_${widget.post.id}'),
       onVisibilityChanged: (info) {
+        if (mounted) {
+          // 🔥 Core Fix: Track visibility for global memory pruning
+          ref.read(postStoreProvider.notifier).setVisible(widget.post.id, info.visibleFraction > 0.1);
+        }
+        
         if (info.visibleFraction == 0 && mounted) {
           _videoController?.pause();
         } else if (info.visibleFraction > 0.8 &&
@@ -642,12 +661,12 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
                               width: 1,
                             ),
                             borderRadius: BorderRadius.circular(6),
-                            color: _isFollowed
+                            color: isFollowing
                                 ? (isArticle ? Colors.black12 : Colors.white24)
                                 : Colors.transparent,
                           ),
                           child: Text(
-                            _isFollowed ? 'Following' : 'Follow',
+                            isFollowing ? 'Following' : 'Follow',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,

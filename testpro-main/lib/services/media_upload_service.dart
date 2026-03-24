@@ -32,7 +32,7 @@ class MediaUploadService {
     
     // 1. Resolve base URL from environment variable or default
     // Using 10.0.2.2 for Android emulators, or use your computer's local network IP for physical devices (e.g. 192.168.1.X)
-    const String defaultBaseUrl = 'http://18.61.65.8:4000'; 
+    const String defaultBaseUrl = 'http://localhost:4000'; 
     String url = const String.fromEnvironment('API_URL', defaultValue: defaultBaseUrl);
     
     // 2. Automatic Android emulator loopback detection (ONLY if using localhost)

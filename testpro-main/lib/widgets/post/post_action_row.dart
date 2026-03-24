@@ -1,125 +1,101 @@
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
-import '../../services/social_service.dart';
 import '../../services/backend_service.dart';
-import 'package:testpro/services/post_service.dart';
 import 'package:testpro/utils/safe_error.dart';
 import '../comments_bottom_sheet.dart';
+import 'package:testpro/core/events/feed_events.dart';
+import 'package:testpro/core/state/post_state.dart';
+import 'package:testpro/services/haptic_service.dart';
 import 'dart:async';
 
-class PostActionRow extends StatefulWidget {
+class PostActionRow extends ConsumerStatefulWidget {
   final Post post;
   final String? currentUserId;
-  final Stream<bool>? isLikedStream;
-  final Future<bool> Function(String)? onLikeToggle;
 
   const PostActionRow({
     super.key,
     required this.post,
     this.currentUserId,
-    this.isLikedStream,
-    this.onLikeToggle,
   });
 
   @override
-  State<PostActionRow> createState() => _PostActionRowState();
+  ConsumerState<PostActionRow> createState() => _PostActionRowState();
 }
 
-class _PostActionRowState extends State<PostActionRow> {
-  bool _liked = false;
-  int _likeCount = 0;
-  bool _isLikeBusy = false;
-  bool? _optimisticLiked;
-  int? _optimisticLikeCount;
-  StreamSubscription? _subscription;
+class _PostActionRowState extends ConsumerState<PostActionRow> {
   Timer? _debounceTimer;
+  bool _isLikeBusy = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _liked = widget.post.isLiked;
-    _likeCount = widget.post.likeCount;
+  void _toggleLike(String userId, Post latestPost) async {
+    if (_isLikeBusy) return;
+
+    final bool isLiked = latestPost.isLiked;
+    final int likeCount = latestPost.likeCount;
     
-    // Sync with global post events for real-time consistency
-    _subscription = FeedEventBus.events.listen((event) {
-      if (!mounted) return;
-      if (event.type == FeedEventType.postLiked) {
-        final data = event.data as Map<String, dynamic>;
-        if (data['postId'] == widget.post.id) {
-          setState(() {
-            _liked = data['isLiked'];
-            _likeCount = data['likeCount'];
-            _optimisticLiked = null;
-            _optimisticLikeCount = null;
-            _isLikeBusy = false;
-          });
-        }
-      }
-    });
-  }
+    final bool newTarget = !isLiked;
+    final int newCount = likeCount + (newTarget ? 1 : -1);
 
-  void _toggleLike(String userId, bool streamLiked, int streamCount) {
-    final bool currentOptimistic = _optimisticLiked ?? _liked;
-    final bool newTarget = !currentOptimistic;
-
-    final int newCount = _likeCount + (newTarget ? 1 : -1);
-
-    // Instagram-level feedback
     if (newTarget) HapticService.medium();
 
-    setState(() {
-      _isLikeBusy = true;
-      _optimisticLiked = newTarget;
-      _optimisticLikeCount = newCount;
+    final int version = DateTime.now().millisecondsSinceEpoch;
+    final String postId = latestPost.id;
+
+    // 1. Optimistic Update in Global Store
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.setActionVersion(postId, 'like', version);
+    notifier.updatePostPartially(postId, {
+      'isLiked': newTarget,
+      'likeCount': newCount,
     });
 
-    // YouTube-style Debounce (300ms)
+    setState(() => _isLikeBusy = true);
+
+    // 2. Debounced API Call
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 300), () async {
       try {
-        final toggleFuture = widget.onLikeToggle != null
-            ? widget.onLikeToggle!(widget.post.id)
-            : BackendService.toggleLike(widget.post.id);
-
-        final response = await toggleFuture;
-        final bool success = response is bool ? response : (response as dynamic).success;
-
+        final response = await BackendService.toggleLike(postId);
+        
         if (!mounted) return;
 
-        if (success) {
-          setState(() {
-            _liked = newTarget;
-            _likeCount = newCount;
-            _optimisticLiked = null;
-            _optimisticLikeCount = null;
-            _isLikeBusy = false;
-          });
+        // 3. Stale Response Check (Race Condition Protection)
+        final latestVersion = ref.read(postActionVersionProvider((postId, 'like')));
+        if (latestVersion != version) {
+          // A newer action has been started, ignore this result
+          return;
+        }
 
-          // Emit global event to sync other widgets showing this post
-          FeedEventBus.emit(FeedEvent(
-            FeedEventType.postLiked, {
-            'postId': widget.post.id,
-            'isLiked': _liked,
-            'likeCount': _likeCount,
-          }));
-        } else {
-          _rollback();
+        if (!response.success) {
+          _rollback(postId, isLiked, likeCount);
           _showError("Action failed. Check connection.");
+        } else {
+          // Success: Sync with server data if needed, or just clear busy state
+          setState(() => _isLikeBusy = false);
+          
+          // Emit global event for any legacy listeners
+          FeedEventBus.emit(FeedEvent(FeedEventType.postLiked, {
+            'postId': postId,
+            'isLiked': newTarget,
+            'likeCount': newCount,
+          }));
         }
       } catch (e) {
-        _rollback();
-        _showError("An error occurred.");
+        if (mounted) {
+          _rollback(postId, isLiked, likeCount);
+          _showError("An error occurred.");
+        }
+      } finally {
+        if (mounted) setState(() => _isLikeBusy = false);
       }
     });
   }
 
-  void _rollback() {
-    if (!mounted) return;
-    setState(() {
-      _optimisticLiked = null;
-      _optimisticLikeCount = null;
-      _isLikeBusy = false;
+  void _rollback(String postId, bool originalLiked, int originalCount) {
+    ref.read(postStoreProvider.notifier).updatePostPartially(postId, {
+      'isLiked': originalLiked,
+      'likeCount': originalCount,
     });
   }
 
@@ -132,125 +108,107 @@ class _PostActionRowState extends State<PostActionRow> {
 
   @override
   void dispose() {
-    _subscription?.cancel();
     _debounceTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Dependency Injection: Use provided props or fallback to global services
     final userId = widget.currentUserId ?? AuthService.currentUser?.uid;
-    final stream = widget.isLikedStream ?? Stream.value(widget.post.isLiked);
+    
+    // 🔥 Reactive Subscription: Watch the specific post state in the store
+    final post = ref.watch(postProvider(widget.post.id)) ?? widget.post;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      child: StreamBuilder<bool>(
-        stream: stream,
-        initialData: widget.post.isLiked,
-        builder: (context, snapshot) {
-          final streamLiked = snapshot.data ?? widget.post.isLiked;
-          final streamCount = widget.post.likeCount;
-
-          if (!_isLikeBusy && snapshot.hasData) {
-            _liked = snapshot.data ?? _liked;
-          }
-
-          final isLiked = _optimisticLiked ?? _liked;
-          final displayCount = _optimisticLikeCount ?? _likeCount;
-
-          return Row(
-            children: [
-              // Like Action
-              InkWell(
-                onTap: userId == null
-                    ? null
-                    : () => _toggleLike(userId, streamLiked, streamCount),
-                borderRadius: BorderRadius.circular(20),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isLiked ? Icons.favorite : Icons.favorite_border,
-                        size: 20,
-                        color: isLiked
-                            ? const Color(0xFFE53935)
+      child: Row(
+        children: [
+          // Like Action
+          InkWell(
+            onTap: userId == null ? null : () => _toggleLike(userId, post),
+            borderRadius: BorderRadius.circular(20),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                children: [
+                  Icon(
+                    post.isLiked ? Icons.favorite : Icons.favorite_border,
+                    size: 20,
+                    color: post.isLiked
+                        ? const Color(0xFFE53935)
+                        : const Color(0xFF8E8E93),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    post.isLiked ? 'Liked' : 'Like',
+                    style: TextStyle(
+                      color: post.isLiked
+                          ? const Color(0xFFE53935)
+                          : const Color(0xFF3A3A3C),
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                  if (post.likeCount > 0) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      post.likeCount.toString(),
+                      style: TextStyle(
+                        color: post.isLiked 
+                            ? const Color(0xFFE53935) 
                             : const Color(0xFF8E8E93),
+                        fontWeight: FontWeight.w400,
+                        fontSize: 12,
+                        fontFamily: 'Inter',
                       ),
-                      const SizedBox(width: 6),
-                      Text(
-                        isLiked ? 'Liked' : 'Like',
-                        style: TextStyle(
-                          color: isLiked
-                              ? const Color(0xFFE53935)
-                              : const Color(0xFF3A3A3C),
-                          fontWeight: FontWeight.w500,
-                          fontSize: 13,
-                          fontFamily: 'Inter',
-                        ),
-                      ),
-                      if (displayCount > 0) ...[
-                        const SizedBox(width: 4),
-                        Text(
-                          displayCount.toString(),
-                          style: TextStyle(
-                            color: isLiked 
-                                ? const Color(0xFFE53935) 
-                                : const Color(0xFF8E8E93),
-                            fontWeight: FontWeight.w400,
-                            fontSize: 12,
-                            fontFamily: 'Inter',
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
+                    ),
+                  ],
+                ],
               ),
+            ),
+          ),
 
-              const SizedBox(width: 8),
+          const SizedBox(width: 8),
 
-              // Comment Action
-              InkWell(
-                onTap: () => CommentsBottomSheet.show(context, widget.post),
-                borderRadius: BorderRadius.circular(20),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.chat_bubble_outline,
-                        size: 22,
-                        color: Color(0xFF8E8E93),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        widget.post.commentCount.toString(),
-                        style: const TextStyle(
-                          color: Color(0xFF3A3A3C),
-                          fontWeight: FontWeight.w500,
-                          fontSize: 13,
-                          fontFamily: 'Inter',
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'Replies',
-                        style: TextStyle(
-                          color: Color(0xFF3A3A3C),
-                          fontWeight: FontWeight.w500,
-                          fontSize: 13,
-                          fontFamily: 'Inter',
-                        ),
-                      ),
-                    ],
+          // Comment Action
+          InkWell(
+            onTap: () => CommentsBottomSheet.show(context, post),
+            borderRadius: BorderRadius.circular(20),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.chat_bubble_outline,
+                    size: 22,
+                    color: Color(0xFF8E8E93),
                   ),
-                ),
+                  const SizedBox(width: 6),
+                  Text(
+                    post.commentCount.toString(),
+                    style: const TextStyle(
+                      color: Color(0xFF3A3A3C),
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Replies',
+                    style: TextStyle(
+                      color: Color(0xFF3A3A3C),
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                ],
               ),
-            ],
-          );
-        },
+            ),
+          ),
+        ],
       ),
     );
   }
