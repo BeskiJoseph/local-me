@@ -8,9 +8,12 @@ import 'socket_service.dart';
 
 class AuthService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
-  static final GoogleSignIn _googleSignIn = kIsWeb 
-    ? GoogleSignIn(clientId: '869861670780-64hg1hemqte17odvlu6r6gk3mikdbdps.apps.googleusercontent.com') 
-    : GoogleSignIn();
+  static final GoogleSignIn _googleSignIn = kIsWeb
+      ? GoogleSignIn(
+          clientId:
+              '869861670780-64hg1hemqte17odvlu6r6gk3mikdbdps.apps.googleusercontent.com',
+        )
+      : GoogleSignIn();
 
   // Get current user
   static User? get currentUser => _auth.currentUser;
@@ -27,7 +30,10 @@ class AuthService {
   static Stream<User?> get authStateChanges => _auth.authStateChanges();
 
   // Sign up with email and password
-  static Future<UserCredential?> signUpWithEmail(String email, String password) async {
+  static Future<UserCredential?> signUpWithEmail(
+    String email,
+    String password,
+  ) async {
     try {
       UserCredential result = await _auth.createUserWithEmailAndPassword(
         email: email,
@@ -42,7 +48,10 @@ class AuthService {
   }
 
   // Sign in with email and password
-  static Future<UserCredential?> signInWithEmail(String email, String password) async {
+  static Future<UserCredential?> signInWithEmail(
+    String email,
+    String password,
+  ) async {
     try {
       UserCredential result = await _auth.signInWithEmailAndPassword(
         email: email,
@@ -60,13 +69,12 @@ class AuthService {
   static Future<UserCredential?> signInWithGoogle() async {
     try {
       GoogleSignInAccount? googleUser;
-      
+
       if (kIsWeb) {
         try {
           googleUser = await _googleSignIn.signInSilently();
-        } catch (e) {
-        }
-        
+        } catch (e) {}
+
         if (googleUser == null) {
           try {
             googleUser = await _googleSignIn.signIn();
@@ -80,13 +88,14 @@ class AuthService {
       } else {
         googleUser = await _googleSignIn.signIn();
       }
-      
+
       if (googleUser == null) {
         return null;
       }
 
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-      
+      final GoogleSignInAuthentication googleAuth =
+          await googleUser.authentication;
+
       final AuthCredential credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
@@ -116,7 +125,7 @@ class AuthService {
       // 2. Clear all in-memory session state
       UserSession.clear();
       BackendClient.clearSession();
-      FeedSession.instance.reset();
+      FeedSession.instance.resetAll();
 
       // 3. Sign out of identity providers
       await _googleSignIn.signOut();
@@ -144,7 +153,10 @@ class AuthService {
   }
 
   // Update user profile
-  static Future<void> updateProfile({String? displayName, String? photoURL}) async {
+  static Future<void> updateProfile({
+    String? displayName,
+    String? photoURL,
+  }) async {
     try {
       await _auth.currentUser?.updateDisplayName(displayName);
       await _auth.currentUser?.updatePhotoURL(photoURL);
@@ -161,8 +173,7 @@ class AuthService {
   static Future<void> reloadUser() async {
     try {
       await _auth.currentUser?.reload();
-    } on FirebaseAuthException {
-    }
+    } on FirebaseAuthException {}
   }
 
   // Send email verification
