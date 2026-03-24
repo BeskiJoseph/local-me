@@ -2,6 +2,14 @@ import admin from 'firebase-admin';
 import { db } from '../src/config/firebase.js';
 import ngeohash from 'ngeohash';
 
+// SAFETY: Only allow in development/test environments
+if (process.env.NODE_ENV === 'production') {
+    console.error('❌ SAFETY BLOCK: Cannot run seed script in PRODUCTION environment');
+    console.error('This script is for development/testing only.');
+    console.error('Set NODE_ENV to "development" or "test" to proceed.');
+    process.exit(1);
+}
+
 const KANYAKUMARI_LAT = 8.0823795;
 const KANYAKUMARI_LNG = 77.527002;
 

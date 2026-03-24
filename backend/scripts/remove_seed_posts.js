@@ -1,5 +1,13 @@
 import { db } from '../src/config/firebase.js';
 
+// SAFETY: Only allow in development/test environments
+if (process.env.NODE_ENV === 'production') {
+    console.error('❌ SAFETY BLOCK: Cannot run cleanup script in PRODUCTION environment');
+    console.error('This script is for development/testing only.');
+    console.error('Set NODE_ENV to "development" or "test" to proceed.');
+    process.exit(1);
+}
+
 async function removeSeedPosts() {
     console.log('Searching for seed posts (authorId: seed_bot)...');
     
