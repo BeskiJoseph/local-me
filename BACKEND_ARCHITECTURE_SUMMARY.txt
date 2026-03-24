@@ -1,0 +1,244 @@
+================================================================================
+PHASE 3 CURSOR PAGINATION - BACKEND ARCHITECTURE EXPLORATION
+================================================================================
+
+EXPLORATION COMPLETED: March 24, 2026
+
+================================================================================
+1. CORE FILE LOCATIONS (Absolute Paths)
+================================================================================
+
+FeedService:
+  Path: C:\Users\beski\Downloads\testpro-main (1)\backend\src\services\feedService.js
+  Lines: 244 total
+  Purpose: Business logic for feed generation, filtering, enrichment
+
+PostRepository:
+  Path: C:\Users\beski\Downloads\testpro-main (1)\backend\src\repositories\postRepository.js
+  Lines: 428 total
+  Purpose: Single source of truth for all post database queries
+
+PostController:
+  Path: C:\Users\beski\Downloads\testpro-main (1)\backend\src\controllers\postController.js
+  Lines: 394 total
+  Purpose: HTTP request/response handling, parameter parsing
+
+Post Model:
+  Path: C:\Users\beski\Downloads\testpro-main (1)\backend\src\models\post.model.js
+  Lines: 133 total
+  Purpose: Type definitions, schema, validation logic
+
+Pagination Helper:
+  Path: C:\Users\beski\Downloads\testpro-main (1)\backend\src\utils\paginationHelper.js
+  Lines: 60 total
+  Purpose: Pagination utilities (mostly legacy)
+
+Posts Routes:
+  Path: C:\Users\beski\Downloads\testpro-main (1)\backend\src\routes\posts.js
+  Lines: 501 total
+  Purpose: Route definitions, session management, middleware
+
+================================================================================
+2. CURRENT PAGINATION ARCHITECTURE
+================================================================================
+
+3-Layer Design Pattern:
+  
+  HTTP Request (routes/posts.js)
+       ↓
+  PostController (controllers/postController.js)
+       ↓
+  FeedService (services/feedService.js)
+       ↓
+  PostRepository (repositories/postRepository.js)
+       ↓
+  Firestore Database
+
+Key Principles:
+  • Separation of Concerns (each layer has single responsibility)
+  • Single Source of Truth (all queries via PostRepository)
+  • Centralized Sorting (createdAt DESC + __name__ DESC)
+  • Composite Cursors ({ createdAt, postId } objects)
+
+================================================================================
+3. FEEDSERVICE - THREE FEED TYPES
+================================================================================
+
+A. LOCAL FEED (getLocalFeed)
+   - Filters by geographic location (geohash-based)
+   - Parameters: latitude, longitude, geoHashMin, geoHashMax
+   - Returns: posts with cursor, hasMore, seenIds
+
+B. GLOBAL FEED (getGlobalFeed)
+   - No geographic filtering
+   - Implements trending algorithm (72-hour window)
+   - Trending Score = (baseScore + engagement) * decay^hoursOld
+   - Returns: sorted by trending score
+
+C. FILTERED FEED (getFilteredFeed)
+   - Filters by: authorId, category, city, country, mediaType
+   - Same pagination as local/global
+   - Returns: filtered posts with cursor
+
+Common Features:
+  ✓ Enrich posts with user interaction data (isLiked, isFollowing)
+  ✓ Apply user preferences (muting)
+  ✓ Generate composite cursor: { createdAt, postId }
+  ✓ Return pagination object with hasMore flag
+
+================================================================================
+4. POSTREPOSITORY - QUERY METHODS
+================================================================================
+
+CRUD Operations:
+  • getPostById(postId) - Single post fetch
+  • createPost(postData) - Create with validation
+  • updatePost(postId, updates) - Update fields
+  • deletePost(postId) - Soft delete
+
+Feed Query Methods:
+  
+  getLocalFeed() [Lines 115-180]
+    Query: where geoHash between [min, max]
+    Ordering: createdAt DESC, __name__ DESC
+    Pagination: startAfter(DocumentSnapshot)
+    
+  getGlobalFeed() [Lines 188-254]
+    Query: where createdAt >= (72 hours ago)
+    Ordering: createdAt DESC, __name__ DESC
+    Pagination: startAfter(DocumentSnapshot)
+    
+  getFilteredFeed() [Lines 261-328]
+    Query: where authorId/category/city/country
+    Ordering: createdAt DESC, __name__ DESC
+    Pagination: startAfter(DocumentSnapshot)
+
+Cursor Handling (NEW in Phase 3):
+  
+  Input: Composite cursor { createdAt, postId }
+  Process:
+    1. Check if composite cursor (createdAt + postId + no _document)
+    2. Fetch real DocumentSnapshot from Firestore
+    3. Use query.startAfter(realDoc)
+    4. If post deleted → graceful fallback (log warning, continue)
+  Output: Deterministic pagination
+
+Critical Ordering:
+  ALL queries enforce:
+    1. .orderBy('createdAt', 'desc')   // Primary
+    2. .orderBy('__name__', 'desc')     // Secondary (tie-breaking)
+    3. .limit(pageSize + 1)             // Extra to detect hasMore
+  
+  Result: Always get same result set in same order (deterministic)
+
+Supporting Methods:
+  • getPostsByAuthor(authorId, opts)
+  • searchPosts(query, opts)
+  • incrementLikeCount(postId, delta)
+  • getPostsByIds(postIds)
+
+================================================================================
+5. POSTCONTROLLER - HTTP ENDPOINTS
+================================================================================
+
+getLocalFeed(req, res, next) [Lines 113-187]
+  HTTP: GET /api/posts?feedType=local&lat=X&lng=Y&limit=20&cursor=JSON
+  
+  Parameters:
+    - lat, lng (required): User's coordinates
+    - limit (optional): Page size, default 20, max 50
+    - cursor (optional): JSON "{"createdAt":X,"postId":"Y"}"
+    - mediaType (optional): Filter by image/video/audio
+    - sid (optional): Session ID for deduplication
+    - watchedIds (optional): Already-seen post IDs
+  
+  Flow:
+    1. Validate coordinates
+    2. Get user context (likes, follows, mutes)
+    3. Parse composite cursor
+    4. Calculate geohash bounds (precision 9)
+    5. Call feedService.getLocalFeed()
+    6. Return { success, data: [posts], pagination: {...} }
+
+getGlobalFeed(req, res, next) [Lines 192-241]
+  HTTP: GET /api/posts?feedType=global&limit=20&cursor=JSON
+  
+  Parameters:
+    - limit, cursor, mediaType (optional)
+    - sid, watchedIds (optional)
+  
+  Flow: Similar to local, no geohash needed
+
+getFilteredFeed(req, res, next) [Lines 246-301]
+  HTTP: GET /api/posts?authorId=X&category=Y&city=Z&limit=20&cursor=JSON
+  
+  Parameters:
+    - authorId, category, city, country (optional)
+    - limit, cursor, mediaType, sid, watchedIds (optional)
+  
+  Flow: Similar to local, use filters instead of geohash
+
+User Context Enrichment:
+  All feed endpoints add:
+    {
+      ...post,
+      isLiked: userContext.likedPostIds?.has(post.id) || false,
+      isFollowing: userContext.followedUserIds?.has(post.authorId) || false
+    }
+
+Other Endpoints:
+  • POST /api/posts - Create post
+  • GET /api/posts/:id - Get single post
+  • PUT /api/posts/:id - Update post
+  • DELETE /api/posts/:id - Delete post
+  • POST /api/posts/:id/view - Record view
+
+================================================================================
+6. POST MODEL STRUCTURE
+================================================================================
+
+PostSchema Fields:
+
+  Identity:
+    - id: string (Firestore doc ID)
+    - authorId: string (Firebase UID)
+    - authorName: string
+    - authorProfileImage: string|null
+
+  Content:
+    - title: string (max 2000 chars)
+    - body: string (max 5000 chars)
+    - category: string|null
+
+  Location:
+    - city: string
+    - country: string
+    - latitude: number
+    - longitude: number
+    - location: { lat, lng }
+    - geoHash: string (9 chars)
+
+  Media:
+    - mediaType: 'none'|'image'|'video'|'audio'
+    - mediaUrl: string|null
+
+  Status:
+    - status: 'active'|'archived'|'deleted'
+    - visibility: 'public'|'private'|'friends'
+
+  Engagement:
+    - likeCount: number
+    - commentCount: number
+    - viewCount: number
+    - engagementScore: number
+
+  Timestamps:
+    - createdAt: Firestore.Timestamp
+    - updatedAt: Firestore.Timestamp
+
+Validation (validatePost):
+  ✓ Title: Non-empty, string, max 2000
+  ✓ Body: Non-empty, string, max 5000
+  ✓ AuthorId: Required, string
+  ✓ Visibility: One of [public, private, friends]
+  ✓ Status: On
