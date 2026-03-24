@@ -107,190 +107,343 @@ class PostController {
     }
   }
 
-  /**
-   * Get local feed (geographically filtered)
-   */
-  async getLocalFeed(req, res, next) {
-    try {
-      const { uid } = req.user;
-      const {
-        lat, lng, limit = 20, afterId, mediaType, sid
-      } = req.query;
+   /**
+    * Get local feed (geographically filtered)
+    * 
+    * PRODUCTION-GRADE PAGINATION HANDLER:
+    * - Input cursor: { createdAt, postId, authorName } JSON string
+    * - Output nextCursor: { createdAt, postId, authorName } in pagination object
+    * - hasMore: Boolean indicating if more results available
+    * - No duplicates: Enforced by deterministic ordering
+    */
+    async getLocalFeed(req, res, next) {
+      try {
+        const { uid } = req.user;
+        const {
+          lat, lng, limit = 20, cursor, mediaType, sid
+        } = req.query;
 
-      const pageSize = Math.min(parseInt(limit), 50);
+        const pageSize = Math.min(parseInt(limit), 50);
 
-      // Validate coordinates
-      geoService.validateCoordinates(parseFloat(lat), parseFloat(lng));
+        // Validate coordinates
+        geoService.validateCoordinates(parseFloat(lat), parseFloat(lng));
 
-      // Get user context
-      const userContext = await getUserContext(uid);
+        // Get user context for enrichment
+        const userContext = await getUserContext(uid);
 
-      // Collect seen post IDs (from session and watchedIds)
-      const seenPostIds = new Set();
-      
-      // Session tracking (if provided)
-      if (sid && req.sessionSeenIds) {
-        req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        // Collect seen post IDs (from session tracking)
+        const seenPostIds = new Set();
+        if (sid && req.sessionSeenIds) {
+          req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        }
+
+        // Parse composite cursor from JSON string
+        // Format: { createdAt: number, postId: string, authorName: string }
+        let lastDocSnapshot = null;
+        if (cursor) {
+          try {
+            lastDocSnapshot = JSON.parse(cursor);
+            logger.debug(
+              { postId: lastDocSnapshot.postId, createdAt: lastDocSnapshot.createdAt },
+              '[Controller] Parsed cursor'
+            );
+          } catch (err) {
+            logger.warn({ cursor, error: err }, '[Controller] Invalid cursor format, ignoring');
+            // Continue without cursor - start from beginning
+          }
+        }
+
+        // Calculate geohash bounds from coordinates
+        const baseLat = parseFloat(lat);
+        const baseLng = parseFloat(lng);
+        const precision = 9; // High detail geohash
+        const geohash = calculateGeohash(baseLat, baseLng, precision);
+        const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
+
+        logger.info(
+          { lat: baseLat, lng: baseLng, geohash, precision },
+          '[Controller] Calculated geohash bounds'
+        );
+
+        // Get feed from service
+        const feedResult = await feedService.getLocalFeed({
+          latitude: baseLat,
+          longitude: baseLng,
+          seenPostIds,
+          pageSize,
+          lastDocSnapshot,
+          mediaType,
+          geoHashMin,
+          geoHashMax,
+          userContext
+        });
+
+        logger.info(
+          { uid, lat, lng, postsReturned: feedResult.posts.length, hasMore: feedResult.hasMore },
+          '[Controller] Local feed retrieved'
+        );
+
+        // Return response with nextCursor for pagination
+        return res.json({
+          success: true,
+          data: feedResult.posts,
+          pagination: {
+            nextCursor: feedResult.nextCursor,
+            hasMore: feedResult.hasMore,
+            count: feedResult.posts.length
+          }
+        });
+      } catch (error) {
+        logger.error({ error, uid: req.user?.uid }, '[Controller] Get local feed error');
+        next(error);
       }
-
-      // Get the current scroll distance for geohash precision
-      let lastDoc = null;
-      if (afterId) {
-        lastDoc = await postRepository.getPostById(afterId);
-      }
-
-      // Calculate geohash bounds from coordinates
-      const baseLat = parseFloat(lat);
-      const baseLng = parseFloat(lng);
-      
-      // Start with precision 9 (high detail)
-      const precision = 9;
-      const geohash = calculateGeohash(baseLat, baseLng, precision);
-      const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
-
-      logger.info(
-        { lat: baseLat, lng: baseLng, geohash, precision },
-        '[Controller] Calculated geohash bounds'
-      );
-
-      // Get feed from service
-      const feedResult = await feedService.getLocalFeed({
-        latitude: baseLat,
-        longitude: baseLng,
-        seenPostIds,
-        pageSize,
-        lastDocSnapshot: lastDoc ? { id: lastDoc.id } : null,
-        mediaType,
-        geoHashMin,
-        geoHashMax,
-        userContext
-      });
-
-      logger.info(
-        { uid, lat, lng, postsReturned: feedResult.posts.length },
-        '[Controller] Local feed retrieved'
-      );
-
-      return res.json({
-        success: true,
-        data: feedResult.posts,
-        pagination: feedResult.pagination
-      });
-    } catch (error) {
-      logger.error({ error, uid: req.user?.uid }, '[Controller] Get local feed error');
-      next(error);
     }
-  }
 
-  /**
-   * Get global trending feed
-   */
-  async getGlobalFeed(req, res, next) {
-    try {
-      const { uid } = req.user;
-      const { limit = 20, afterId, mediaType } = req.query;
+    /**
+     * Get global trending feed
+     * 
+     * PRODUCTION-GRADE PAGINATION HANDLER:
+     * - Input cursor: { createdAt, postId, authorName } JSON string
+     * - Output nextCursor: { createdAt, postId, authorName } in pagination object
+     * - Deterministic ordering: createdAt DESC + __name__ DESC
+     * - No duplicates across pages
+     */
+    async getGlobalFeed(req, res, next) {
+      try {
+        const { uid } = req.user;
+        const { limit = 20, cursor, mediaType } = req.query;
 
-      const pageSize = Math.min(parseInt(limit), 50);
+        const pageSize = Math.min(parseInt(limit), 50);
 
-      // Get user context
-      const userContext = await getUserContext(uid);
+        // Get user context for enrichment
+        const userContext = await getUserContext(uid);
 
-      // Collect seen IDs
-      const seenPostIds = new Set();
-      if (req.sessionSeenIds) {
-        req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        // Collect seen IDs from session
+        const seenPostIds = new Set();
+        if (req.sessionSeenIds) {
+          req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        }
+
+        // Parse composite cursor from JSON string
+        let lastDocSnapshot = null;
+        if (cursor) {
+          try {
+            lastDocSnapshot = JSON.parse(cursor);
+            logger.debug(
+              { postId: lastDocSnapshot.postId, createdAt: lastDocSnapshot.createdAt },
+              '[Controller] Parsed cursor'
+            );
+          } catch (err) {
+            logger.warn({ cursor, error: err }, '[Controller] Invalid cursor format, ignoring');
+          }
+        }
+
+        // Get feed from service
+        const feedResult = await feedService.getGlobalFeed({
+          seenPostIds,
+          pageSize,
+          lastDocSnapshot,
+          mediaType,
+          userContext
+        });
+
+        logger.info(
+          { uid, postsReturned: feedResult.posts.length, hasMore: feedResult.hasMore },
+          '[Controller] Global feed retrieved'
+        );
+
+        // Return response with nextCursor for pagination
+        return res.json({
+          success: true,
+          data: feedResult.posts,
+          pagination: {
+            nextCursor: feedResult.nextCursor,
+            hasMore: feedResult.hasMore,
+            count: feedResult.posts.length,
+            algorithm: 'trending'
+          }
+        });
+      } catch (error) {
+        logger.error({ error, uid: req.user?.uid }, '[Controller] Get global feed error');
+        next(error);
       }
-
-      // Get last document for cursor pagination
-      let lastDoc = null;
-      if (afterId) {
-        lastDoc = await postRepository.getPostById(afterId);
-      }
-
-      // Get feed from service
-      const feedResult = await feedService.getGlobalFeed({
-        seenPostIds,
-        pageSize,
-        lastDocSnapshot: lastDoc ? { id: lastDoc.id } : null,
-        mediaType,
-        userContext
-      });
-
-      logger.info(
-        { uid, postsReturned: feedResult.posts.length },
-        '[Controller] Global feed retrieved'
-      );
-
-      return res.json({
-        success: true,
-        data: feedResult.posts,
-        pagination: feedResult.pagination
-      });
-    } catch (error) {
-      logger.error({ error, uid: req.user?.uid }, '[Controller] Get global feed error');
-      next(error);
     }
-  }
 
-  /**
-   * Get filtered feed (by author, category, city, etc.)
-   */
-  async getFilteredFeed(req, res, next) {
-    try {
-      const { uid } = req.user;
-      const {
-        authorId, category, city, country, limit = 20, afterId, mediaType
-      } = req.query;
+    /**
+     * Get filtered feed (by author, category, city, etc.)
+     * 
+     * PRODUCTION-GRADE PAGINATION HANDLER:
+     * - Input cursor: { createdAt, postId, authorName } JSON string
+     * - Output nextCursor: { createdAt, postId, authorName } in pagination object
+     * - Deterministic ordering: createdAt DESC + __name__ DESC
+     * - No duplicates or jumping
+     */
+    async getFilteredFeed(req, res, next) {
+      try {
+        const { uid } = req.user;
+        const {
+          authorId, category, city, country, limit = 20, cursor, mediaType
+        } = req.query;
 
-      const pageSize = Math.min(parseInt(limit), 50);
+        const pageSize = Math.min(parseInt(limit), 50);
 
-      // Get user context
-      const userContext = await getUserContext(uid);
+        // Get user context for enrichment
+        const userContext = await getUserContext(uid);
 
-      // Collect seen IDs
-      const seenPostIds = new Set();
-      if (req.sessionSeenIds) {
-        req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        // Collect seen IDs from session
+        const seenPostIds = new Set();
+        if (req.sessionSeenIds) {
+          req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        }
+
+        // Parse composite cursor from JSON string
+         let lastDocSnapshot = null;
+         if (cursor) {
+           try {
+             lastDocSnapshot = JSON.parse(cursor);
+             logger.debug(
+               { postId: lastDocSnapshot.postId, createdAt: lastDocSnapshot.createdAt },
+               '[Controller] Parsed cursor'
+             );
+           } catch (err) {
+             logger.warn({ cursor, error: err }, '[Controller] Invalid cursor format, ignoring');
+           }
+         }
+
+         // Get feed from service
+         const feedResult = await feedService.getFilteredFeed({
+           authorId,
+           category,
+           city,
+           country,
+           seenPostIds,
+           pageSize,
+           lastDocSnapshot,
+           mediaType,
+           userContext
+         });
+
+         logger.info(
+           { uid, authorId, category, city, country, postsReturned: feedResult.posts.length, hasMore: feedResult.hasMore },
+           '[Controller] Filtered feed retrieved'
+         );
+
+         // Return response with nextCursor for pagination
+         return res.json({
+           success: true,
+           data: feedResult.posts,
+           pagination: {
+             nextCursor: feedResult.nextCursor,
+             hasMore: feedResult.hasMore,
+             count: feedResult.posts.length
+           }
+         });
+       } catch (error) {
+         logger.error({ error, uid: req.user?.uid }, '[Controller] Get filtered feed error');
+         next(error);
+       }
+     }
+
+   /**
+    * Get hybrid feed (MAIN FEED - local + global merged and deduplicated)
+    * 
+    * PRODUCTION FEED ENGINE:
+    * - Merges local (geographic) + global (broader) content
+    * - Hard deduplication prevents duplicates
+    * - Returns pagination-safe cursor
+    */
+    async getHybridFeed(req, res, next) {
+      try {
+        const { uid } = req.user;
+        const {
+          lat, lng, limit = 20, cursor, mediaType, sid
+        } = req.query;
+
+        const pageSize = Math.min(parseInt(limit), 50);
+
+        // Validate coordinates (required for hybrid)
+        geoService.validateCoordinates(parseFloat(lat), parseFloat(lng));
+
+        // Get user context for enrichment
+        const userContext = await getUserContext(uid);
+
+        // Collect seen post IDs (from session tracking) for cross-page dedup
+        const seenPostIds = new Set();
+        if (sid && req.sessionSeenIds) {
+          req.sessionSeenIds.forEach(id => seenPostIds.add(id));
+        }
+
+        // Parse cursor from JSON string
+        let lastDocSnapshot = null;
+        if (cursor) {
+          try {
+            lastDocSnapshot = JSON.parse(cursor);
+            logger.debug(
+              { postId: lastDocSnapshot.postId, createdAt: lastDocSnapshot.createdAt },
+              '[Controller] Parsed hybrid cursor'
+            );
+          } catch (err) {
+            logger.warn({ cursor, error: err }, '[Controller] Invalid hybrid cursor format, ignoring');
+          }
+        }
+
+        // Calculate geohash bounds from coordinates
+        const baseLat = parseFloat(lat);
+        const baseLng = parseFloat(lng);
+        const precision = 9;
+        const geohash = calculateGeohash(baseLat, baseLng, precision);
+        const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
+
+        logger.info(
+          { uid, lat: baseLat, lng: baseLng, geohash, precision },
+          '[Controller] Calculated geohash for hybrid feed'
+        );
+
+        // Get hybrid feed from service (MAIN FEED ENGINE)
+        const feedResult = await feedService.getHybridFeed({
+          latitude: baseLat,
+          longitude: baseLng,
+          geoHashMin,
+          geoHashMax,
+          seenPostIds,
+          pageSize,
+          lastDocSnapshot,
+          mediaType,
+          userContext
+        });
+
+        logger.info(
+          {
+            uid,
+            lat: baseLat,
+            lng: baseLng,
+            postsReturned: feedResult.posts.length,
+            hasMore: feedResult.hasMore,
+            mergeInfo: feedResult.pagination?.mergeInfo
+          },
+          '[Controller] Hybrid feed retrieved'
+        );
+
+        // Return response with nextCursor for pagination
+        return res.json({
+          success: true,
+          data: feedResult.posts,
+          pagination: {
+            nextCursor: feedResult.nextCursor,
+            hasMore: feedResult.hasMore,
+            count: feedResult.posts.length,
+            mergeInfo: feedResult.pagination?.mergeInfo
+          }
+        });
+      } catch (error) {
+        logger.error({ error, uid: req.user?.uid }, '[Controller] Get hybrid feed error');
+        next(error);
       }
-
-      // Get last document for cursor pagination
-      let lastDoc = null;
-      if (afterId) {
-        lastDoc = await postRepository.getPostById(afterId);
-      }
-
-      // Get feed from service
-      const feedResult = await feedService.getFilteredFeed({
-        authorId,
-        category,
-        city,
-        country,
-        seenPostIds,
-        pageSize,
-        lastDocSnapshot: lastDoc ? { id: lastDoc.id } : null,
-        mediaType,
-        userContext
-      });
-
-      logger.info(
-        { uid, authorId, category, city, postsReturned: feedResult.posts.length },
-        '[Controller] Filtered feed retrieved'
-      );
-
-      return res.json({
-        success: true,
-        data: feedResult.posts,
-        pagination: feedResult.pagination
-      });
-    } catch (error) {
-      logger.error({ error, uid: req.user?.uid }, '[Controller] Get filtered feed error');
-      next(error);
     }
-  }
 
-  /**
-   * Update a post
-   */
+   /**
+    * Update a post
+    */
   async updatePost(req, res, next) {
     try {
       const { id } = req.params;

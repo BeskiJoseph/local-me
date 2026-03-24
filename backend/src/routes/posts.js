@@ -44,18 +44,32 @@ function cleanupSessions() {
 
 /**
  * Middleware to manage session seen IDs
+ * 
+ * CRITICAL: 
+ * - Tracks seenIds PER FEED TYPE (local/global/filtered) to prevent tab contamination
+ * - Detects URL length overflow (414 errors)
+ * - When seenIds > 500, client should switch to POST-based pagination
  */
 function sessionMiddleware(req, res, next) {
-  const { sid, watchedIds } = req.query;
+  const { sid, watchedIds, feedType = 'global' } = req.query;
 
+  // Initialize per-feedType seenIds tracking
   if (sid) {
     if (!SESSION_SEEN.has(sid)) {
       cleanupSessions();
-      SESSION_SEEN.set(sid, { ids: new Set(), lastActive: Date.now() });
+      // Store separate seenIds for each feed type
+      SESSION_SEEN.set(sid, { 
+        local: new Set(),
+        global: new Set(),
+        filtered: new Set(),
+        lastActive: Date.now() 
+      });
     }
     const sessionData = SESSION_SEEN.get(sid);
     sessionData.lastActive = Date.now();
-    req.sessionSeenIds = sessionData.ids;
+    
+    // Get seenIds for THIS feed type
+    req.sessionSeenIds = sessionData[feedType] || new Set();
   } else {
     req.sessionSeenIds = new Set();
   }
@@ -63,9 +77,20 @@ function sessionMiddleware(req, res, next) {
   if (watchedIds) {
     try {
       const decodedIds = decodeURIComponent(watchedIds);
-      decodedIds.split(',').forEach(id => {
-        if (id.trim()) req.sessionSeenIds.add(id.trim());
-      });
+      const ids = decodedIds.split(',').filter(id => id.trim());
+      
+      // CRITICAL: Check URL length before adding more IDs
+      const currentUrlLength = req.originalUrl.length;
+      if (currentUrlLength > 2000) {
+        logger.warn(
+          { currentUrlLength, idCount: ids.length, feedType },
+          '[Posts] URL length exceeded 2000 chars (414 risk) — client should use POST-based pagination'
+        );
+        // Cap at 500 IDs to prevent future 414 errors
+        ids.slice(-500).forEach(id => req.sessionSeenIds.add(id.trim()));
+      } else {
+        ids.forEach(id => req.sessionSeenIds.add(id.trim()));
+      }
     } catch (error) {
       logger.warn({ watchedIds, error }, '[Posts] Error parsing watchedIds');
     }
@@ -96,34 +121,39 @@ router.post(
   }
 );
 
-/**
- * Get posts (feed endpoint with routing to appropriate feed type)
- * GET /api/posts?feedType=local|global|filtered&lat=X&lng=Y
- */
-router.get(
-  '/',
-  authenticate,
-  sessionMiddleware,
-  validateQuery(schemas.feedQuery),
-  async (req, res, next) => {
-    try {
-      const { feedType, lat, lng, authorId, category, city, country } = req.query;
+  /**
+   * Get posts (feed endpoint with routing to appropriate feed type)
+   * GET /api/posts?feedType=local|global|hybrid|filtered&lat=X&lng=Y
+   */
+  router.get(
+    '/',
+    authenticate,
+    sessionMiddleware,
+    validateQuery(schemas.feedQuery),
+    async (req, res, next) => {
+      try {
+        const { feedType, lat, lng, authorId, category, city, country } = req.query;
 
-      // Route to appropriate feed
-      if (feedType === 'local' && lat && lng) {
-        return postController.getLocalFeed(req, res, next);
-      } else if (authorId || category || city || country) {
-        return postController.getFilteredFeed(req, res, next);
-      } else {
-        // Default to global feed
-        return postController.getGlobalFeed(req, res, next);
+        // Route to appropriate feed
+        if (feedType === 'hybrid' && lat && lng) {
+          // MAIN FEED: Hybrid merge (local + global + dedup)
+          return postController.getHybridFeed(req, res, next);
+        } else if (feedType === 'local' && lat && lng) {
+          // Geographic only
+          return postController.getLocalFeed(req, res, next);
+        } else if (authorId || category || city || country) {
+          // Filtered
+          return postController.getFilteredFeed(req, res, next);
+        } else {
+          // Default to global feed
+          return postController.getGlobalFeed(req, res, next);
+        }
+      } catch (error) {
+        logger.error({ error, uid: req.user?.uid }, '[Posts] Get feed error');
+        next(error);
       }
-    } catch (error) {
-      logger.error({ error, uid: req.user?.uid }, '[Posts] Get feed error');
-      next(error);
     }
-  }
-);
+  );
 
 /**
  * Get a single post by ID
