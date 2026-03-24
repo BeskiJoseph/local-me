@@ -13,6 +13,7 @@
 import feedService from '../services/feedService.js';
 import postRepository from '../repositories/postRepository.js';
 import geoService from '../services/geoService.js';
+import { calculateGeohash, getGeohashBounds, getGeohashBoundsFromCoordinates } from '../utils/geohashHelper.js';
 import {
   getUserContext,
   updateUserContextCache,
@@ -138,13 +139,19 @@ class PostController {
         lastDoc = await postRepository.getPostById(afterId);
       }
 
-      // Calculate geohash bounds
+      // Calculate geohash bounds from coordinates
       const baseLat = parseFloat(lat);
       const baseLng = parseFloat(lng);
       
-      // For now, use fixed precision (9) - can be enhanced with distance calculation
-      const geoHashMin = 'tke'; // Example: would be calculated from lat/lng
-      const geoHashMax = 'tkf'; // Example: would be calculated from lat/lng
+      // Start with precision 9 (high detail)
+      const precision = 9;
+      const geohash = calculateGeohash(baseLat, baseLng, precision);
+      const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
+
+      logger.info(
+        { lat: baseLat, lng: baseLng, geohash, precision },
+        '[Controller] Calculated geohash bounds'
+      );
 
       // Get feed from service
       const feedResult = await feedService.getLocalFeed({
