@@ -6,6 +6,8 @@ import '../screens/post_reels_view.dart';
 import '../main.dart';
 import 'backend_service.dart';
 import 'notification_data_service.dart';
+import '../core/state/post_state.dart';
+import '../core/state/provider_container.dart';
 
 /// Top-level background message handler for FCM.
 /// Must be top-level to work in release mode.
@@ -78,6 +80,9 @@ class NotificationService {
     final postId = data['postId'] as String?;
     
     if (postId != null && navigatorKey.currentContext != null) {
+      // 🔥 Register ID in store if possible (skeleton)
+      // GlobalProviderContainer.instance.read(postStoreProvider.notifier).registerPosts([...]);
+
       Navigator.push(
         navigatorKey.currentContext!,
         MaterialPageRoute(builder: (_) => PostReelsView(postId: postId)),

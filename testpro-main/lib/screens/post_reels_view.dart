@@ -5,7 +5,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:testpro/core/state/post_state.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'package:video_player/video_player.dart';
 import 'package:testpro/models/post.dart';
 import 'package:testpro/services/post_service.dart';
@@ -23,9 +22,8 @@ import 'package:testpro/shared/widgets/expandable_text.dart';
 import 'package:testpro/widgets/event_card/event_details_section.dart';
 import 'package:testpro/widgets/event_card/event_attendance_section.dart';
 import 'package:visibility_detector/visibility_detector.dart';
-import 'package:testpro/screens/artizone_page.dart';
-import 'package:testpro/core/state/feed_session.dart';
 import 'package:testpro/widgets/feed/paginated_feed_list.dart';
+import 'artizone_page.dart';
 
 class PostReelsView extends StatefulWidget {
   final List<Post> posts;
@@ -67,7 +65,7 @@ class _PostReelsViewState extends State<PostReelsView> {
   void initState() {
     super.initState();
     debugPrint(
-      '📽️ REELS OPENED: hasMore=${widget.initialHasMore}, seenCount=${FeedSession.instance.getSeenIds(widget.feedType ?? 'local').length}',
+      '📽️ REELS OPENED: hasMore=${widget.initialHasMore}',
     );
     _activeTabIndex = widget.feedType == 'global' ? 1 : 0;
     _horizontalController = PageController(initialPage: _activeTabIndex);
@@ -213,7 +211,7 @@ class _TabButton extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Vertical Immersive Feed (Moved from PostReelsView)
 // ─────────────────────────────────────────────────────────────
-class ReelsVerticalFeed extends StatefulWidget {
+class ReelsVerticalFeed extends ConsumerStatefulWidget {
   final String feedType;
   final List<Post> initialPosts;
   final int startIndex;
@@ -232,19 +230,53 @@ class ReelsVerticalFeed extends StatefulWidget {
     this.postId,
     this.userCity,
     this.userCountry,
-    // pagination-related fields removed
     required this.isActiveTab,
     this.initialHasMore = true,
   });
 
   @override
-  State<ReelsVerticalFeed> createState() => _ReelsVerticalFeedState();
+  ConsumerState<ReelsVerticalFeed> createState() => _ReelsVerticalFeedState();
 }
 
-class _ReelsVerticalFeedState extends State<ReelsVerticalFeed>
+class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
     with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    // 🔥 PURE ARCHITECTURE: Fetch from Screen/Controller
+    if (widget.initialPosts.isEmpty) {
+      Future.microtask(() {
+        if (!mounted) return;
+        _loadFeed();
+      });
+    } else {
+      Future.microtask(() {
+        if (!mounted) return;
+        ref.read(postStoreProvider.notifier).registerPosts(widget.initialPosts);
+      });
+    }
+  }
+
+  Future<void> _loadFeed() async {
+    try {
+      final response = await PostService.getPostsPaginated(
+        feedType: widget.feedType,
+        userCity: widget.userCity,
+        userCountry: widget.userCountry,
+        mediaType: 'video',
+        limit: 20,
+      );
+
+      if (mounted) {
+        ref.read(postStoreProvider.notifier).registerPosts(response.data);
+      }
+    } catch (e) {
+      debugPrint('Error loading Reels: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -258,6 +290,7 @@ class _ReelsVerticalFeedState extends State<ReelsVerticalFeed>
       initialPosts: widget.initialPosts,
       startIndex: widget.startIndex,
       initialHasMore: widget.initialHasMore,
+      onRefresh: _loadFeed,
       itemBuilder: (context, post, index, isCurrent) {
         return ReelPostItem(
           key: ValueKey(post.id),
@@ -394,13 +427,6 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
           'isLiked': isLiked,
           'likeCount': likeCount,
         });
-      } else {
-         // Sync legacy observers
-         FeedEventBus.emit(FeedEvent(FeedEventType.postLiked, {
-           'postId': postId,
-           'isLiked': newTarget,
-           'likeCount': newCount,
-         }));
       }
     } catch (e) {
       if (mounted) {
@@ -439,12 +465,6 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
       if (!res.success) {
         // Rollback
         notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
-      } else {
-        // Sync legacy observers
-        FeedEventBus.emit(FeedEvent(FeedEventType.userFollowed, {
-          'userId': authorId,
-          'isFollowing': newState,
-        }));
       }
     } catch (_) {
       if (mounted) {
@@ -475,12 +495,14 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
           ref.read(postStoreProvider.notifier).setVisible(widget.post.id, info.visibleFraction > 0.1);
         }
         
-        if (info.visibleFraction == 0 && mounted) {
-          _videoController?.pause();
-        } else if (info.visibleFraction > 0.8 &&
+        if (info.visibleFraction > 0.8 &&
             widget.isCurrentPage &&
             mounted) {
           _videoController?.play();
+          // 🔥 MARK AS SEEN: Trigger Soft Seen system for Reels
+          ref.read(postStoreProvider.notifier).markAsSeen(widget.post.id);
+        } else if (info.visibleFraction == 0 && mounted) {
+          _videoController?.pause();
         }
       },
       child: Stack(

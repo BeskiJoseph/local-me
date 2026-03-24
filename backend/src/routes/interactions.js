@@ -15,6 +15,16 @@ import { filterContent } from '../utils/contentFilter.js';
 
 const router = express.Router();
 
+/**
+ * Helper to safely convert Firestore Timestamp or other date formats 
+ * to a JavaScript Date object.
+ */
+const safeDate = (date) => {
+    if (!date) return new Date();
+    if (typeof date.toDate === 'function') return date.toDate();
+    return new Date(date);
+};
+
 function resolveActorDisplayName(req) {
     return buildDisplayName({
         displayName: req.user?.displayName,
@@ -547,12 +557,18 @@ async function _processMentions(text, currentUserId) {
  * @desc    Get comments for a post (Cursor-based Pagination)
  */
 router.get('/comments/:postId', authenticate, async (req, res, next) => {
+    const { postId } = req.params;
+    if (!postId) {
+        return res.status(400).json({ success: false, error: "Post ID is required" });
+    }
+
     try {
+        console.log(`💬 Fetching comments for post: ${postId}`);
         const { limit = 20, afterId, sort = 'newest' } = req.query;
         const userId = req.user.uid;
 
         let query = db.collection('comments')
-            .where('postId', '==', req.params.postId)
+            .where('postId', '==', postId)
             .where('parentId', '==', null); // Top-level only
 
         // Sorting: 'top' (likes) or 'newest' (timestamp)

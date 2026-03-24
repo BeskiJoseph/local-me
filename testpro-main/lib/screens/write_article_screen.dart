@@ -9,7 +9,6 @@ import '../services/location_service.dart';
 import '../services/auth_service.dart';
 import '../models/post.dart';
 import '../utils/safe_error.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'package:file_picker/file_picker.dart';
 import '../services/media_upload_service.dart';
 import '../utils/proxy_helper.dart';
@@ -345,8 +344,6 @@ class _WriteArticleScreenState extends State<WriteArticleScreen> {
 
       if (!mounted) return;
       setState(() => _uploadProgress = 1.0);
-      FeedEventBus.emit(FeedEvent(
-FeedEventType.postCreated, post));
       Navigator.pop(context, true);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Article posted successfully!')),

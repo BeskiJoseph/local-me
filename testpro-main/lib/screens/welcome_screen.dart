@@ -34,18 +34,14 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
 
   Future<void> _initLocation() async {
     try {
-      await LocationService.detectLocation();
+      // 🔥 FORCE high-accuracy GPS on app start to prevent "Sulur" stale data
+      await LocationService.detectLocation(forceSync: true);
       
-      Position? position;
-      if (kIsWeb) {
-        position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.low);
-      } else {
-        position = await Geolocator.getLastKnownPosition() ?? 
-                   await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.low);
+      final position = LocationService.currentPosition;
+      if (position != null) {
+        data.latitude = position.latitude;
+        data.longitude = position.longitude;
       }
-      
-      data.latitude = position.latitude;
-      data.longitude = position.longitude;
     } catch (e) {
       if (kDebugMode) debugPrint("Location initialization error: $e");
     }

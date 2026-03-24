@@ -6,7 +6,6 @@ import 'package:testpro/services/auth_service.dart';
 import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/socket_service.dart';
 import 'package:testpro/core/session/user_session.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'package:testpro/shared/widgets/user_avatar.dart';
 import 'package:testpro/core/utils/time_utils.dart';
 import 'package:testpro/utils/safe_error.dart';
@@ -61,7 +60,6 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
   final Map<String, List<Comment>> _repliesMap = {};
   final Set<String> _loadingReplies = {};
   final Set<String> _expandedReplies = {};
-  StreamSubscription? _eventSub;
 
   @override
   void initState() {
@@ -90,45 +88,6 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
       _loadComments(refresh: true);
     }
     
-    _eventSub = FeedEventBus.events.listen(
-(event) {
-      if (mounted && event.type == FeedEventType.commentAdded) {
-        final data = event.data as Map<String, dynamic>;
-        if (data['postId'] == widget.post.id && data['newComment'] != null) {
-          final newComment = Comment.fromJson(data['newComment'] as Map<String, dynamic>);
-          
-          // 🔥 1. If we already have this exact ID, skip (already handled by API response)
-          if (_comments.any((c) => c.id == newComment.id)) return;
-          
-          // 🔥 2. Race Condition: If this is OUR comment arriving via socket before API response
-          // Try to find a temporary comment with matching text and replace it
-          if (newComment.authorId == AuthService.currentUser?.uid) {
-            final tempIdx = _comments.indexWhere((c) => c.id.startsWith('temp_') && c.text == newComment.text);
-            if (tempIdx != -1) {
-              setState(() => _comments[tempIdx] = newComment);
-              return;
-            }
-          }
-
-          setState(() {
-            if (newComment.parentId == null) {
-              _comments.insert(0, newComment);
-            } else {
-              _repliesMap[newComment.parentId!] ??= [];
-              if (!_repliesMap[newComment.parentId]!.any((r) => r.id == newComment.id)) {
-                _repliesMap[newComment.parentId!]!.add(newComment);
-                _expandedReplies.add(newComment.parentId!);
-              }
-            }
-          });
-
-          // 🔥 3. Sync to global cache immediately for cross-feed persistence
-          if (newComment.parentId == null) {
-            ref.read(commentCacheProvider.notifier).addComment(widget.post.id, newComment);
-          }
-        }
-      }
-    });
 
     Future.microtask(() {
       if (mounted) _commentFocus.requestFocus();
@@ -148,7 +107,6 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     _commentController.dispose();
     _commentFocus.dispose();
     _scrollController.dispose();
-    _eventSub?.cancel();
     SocketService.leavePost(widget.post.id);
     super.dispose();
   }
@@ -306,16 +264,6 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
             widget.post.id, 
             {'commentCount': newCount}
           );
-
-          // Broadcast for legacy observers
-          FeedEventBus.emit(FeedEvent(
-            FeedEventType.commentAdded,
-            {
-              'postId': widget.post.id, 
-              'commentCount': newCount,
-              'newComment': realComment.toJson()
-            },
-          ));
         }
       } else {
         throw Exception(response.error);

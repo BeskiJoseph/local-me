@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:testpro/core/state/post_state.dart';
 import 'package:testpro/services/post_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'package:testpro/models/post.dart';
 import '../../services/auth_service.dart';
 import '../../core/state/feed_controller.dart';
@@ -14,14 +15,14 @@ import '../../screens/interest_picker_screen.dart';
 import '../../screens/post_reels_view.dart';
 
 /// A specialized widget to handle the personalized recommendation feed
-class RecommendedFeedList extends StatefulWidget {
+class RecommendedFeedList extends ConsumerStatefulWidget {
   const RecommendedFeedList({super.key});
 
   @override
-  State<RecommendedFeedList> createState() => _RecommendedFeedListState();
+  ConsumerState<RecommendedFeedList> createState() => _RecommendedFeedListState();
 }
 
-class _RecommendedFeedListState extends State<RecommendedFeedList>
+class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
     with AutomaticKeepAliveClientMixin {
   final ScrollController _scrollController = ScrollController();
   final FeedController _feedController = FeedController();
@@ -29,7 +30,6 @@ class _RecommendedFeedListState extends State<RecommendedFeedList>
   final Map<String, bool?> _likedPostIds = {};
 
   Timer? _debounce;
-  StreamSubscription? _eventSubscription;
 
   @override
   bool get wantKeepAlive => true;
@@ -39,31 +39,8 @@ class _RecommendedFeedListState extends State<RecommendedFeedList>
     super.initState();
     _loadMorePosts();
     _scrollController.addListener(_onScroll);
-    _eventSubscription = FeedEventBus.events.listen(_handleFeedEvent);
   }
 
-  void _handleFeedEvent(FeedEvent event) {
-    if (!mounted) return;
-
-    switch (event.type) {
-      case FeedEventType.postDeleted:
-        _feedController.deletePost(event.data);
-        break;
-      case FeedEventType.postLiked:
-        final data = event.data as Map<String, dynamic>;
-        setState(() {
-          _likedPostIds[data['postId']] = data['isLiked'];
-        });
-        _feedController.updatePostLike(
-          data['postId'],
-          data['isLiked'],
-          data['likeCount'],
-        );
-        break;
-      default:
-        break;
-    }
-  }
 
   void _onScroll() {
     if (_debounce?.isActive ?? false) return;
@@ -83,7 +60,6 @@ class _RecommendedFeedListState extends State<RecommendedFeedList>
   @override
   void dispose() {
     _debounce?.cancel();
-    _eventSubscription?.cancel();
     _scrollController.dispose();
     _feedController.dispose();
     super.dispose();
@@ -120,6 +96,9 @@ class _RecommendedFeedListState extends State<RecommendedFeedList>
       final newPosts = newResponse.data;
 
       if (mounted) {
+        // 🔥 Register in Global Store
+        ref.read(postStoreProvider.notifier).registerPosts(newPosts);
+
         for (var p in newPosts) {
           _likedPostIds[p.id] = p.isLiked;
         }
@@ -194,6 +173,10 @@ class _RecommendedFeedListState extends State<RecommendedFeedList>
                 post: post,
                 initialIsLiked: _likedPostIds[post.id],
                 onTap: () {
+                  if (!mounted) return;
+                  // 🔥 Register before navigating
+                  ref.read(postStoreProvider.notifier).registerPosts([post]);
+                  
                   Navigator.push(
                     context,
                     MaterialPageRoute(

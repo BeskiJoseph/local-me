@@ -124,33 +124,59 @@ class FeedService {
    /**
     * Get local feed with proper filtering and curation
     */
-   async getLocalFeed({
-     latitude,
-     longitude,
-     seenPostIds = new Set(),
-     pageSize = 20,
-     lastDocSnapshot = null,
-     mediaType = null,
-     geoHashMin,
-     geoHashMax,
-     userContext = null // {likedPostIds, followedUserIds, mutedUserIds}
-   }) {
+    async getLocalFeed({
+      latitude,
+      longitude,
+      pageSize = 20,
+      lastDocSnapshot = null,
+      mediaType = null,
+      geoHashMin,
+      geoHashMax,
+      userContext = null
+    }) {
      try {
        // Fetch from repository
-       const result = await postRepository.getLocalFeed({
-         geoHashMin,
-         geoHashMax,
-         seenPostIds,
-         pageSize,
-         lastDocSnapshot,
-         mediaType
-       });
+        const result = await postRepository.getLocalFeed({
+          geoHashMin,
+          geoHashMax,
+          pageSize,
+          lastDocSnapshot,
+          mediaType
+        });
+        // Apply user preferences (muting, etc.)
+        let posts = result.posts;
+        if (userContext && userContext.mutedUserIds) {
+          posts = posts.filter(p => !userContext.mutedUserIds.has(p.authorId));
+        }
 
-       // Apply user preferences (muting, etc.)
-       let posts = result.posts;
-       if (userContext && userContext.mutedUserIds) {
-         posts = posts.filter(p => !userContext.mutedUserIds.has(p.authorId));
-       }
+        // 1. CALCULATE DISTANCE AND SCORE
+        const userLocation = { latitude, longitude };
+        posts = posts.map(post => {
+          let distance = 999999;
+          if (post.latitude && post.longitude) {
+            distance = this.calculateDistance(
+              latitude,
+              longitude,
+              post.latitude,
+              post.longitude
+            );
+          }
+          return {
+            ...post,
+            distance,
+            score: this.computeScore(post, userLocation)
+          };
+        });
+
+        // 2. EXPLICIT SORT: Distance (ASC) then createdAt (DESC)
+        posts.sort((a, b) => {
+          if (Math.abs(a.distance - b.distance) > 0.1) { // 100m tolerance for stable buckets
+            return a.distance - b.distance;
+          }
+          const timeA = a.createdAt?.toMillis?.() || a.createdAt || 0;
+          const timeB = b.createdAt?.toMillis?.() || b.createdAt || 0;
+          return timeB - timeA;
+        });
 
         // Enrich with user interaction data
         if (userContext) {
@@ -176,7 +202,6 @@ class FeedService {
           pagination: {
             nextCursor,
             hasMore: result.hasMore,
-            seenIds: Array.from(seenPostIds).slice(-500)
           }
         };
      } catch (error) {
@@ -194,31 +219,39 @@ class FeedService {
     * Trending will be handled in Phase 4 (DB-level or precomputed).
     * For now: Keep createdAt DESC ordering for consistency.
     */
-   async getGlobalFeed({
-     seenPostIds = new Set(),
-     pageSize = 20,
-     lastDocSnapshot = null,
-     mediaType = null,
-     userContext = null
-   }) {
+    async getGlobalFeed({
+      pageSize = 20,
+      lastDocSnapshot = null,
+      mediaType = null,
+      userContext = null
+    }) {
      try {
        // Calculate time window (last 72 hours)
        const cutoffTime = new Date(Date.now() - TRENDING_WINDOW_MS);
 
-       // Fetch posts from last 72 hours, already sorted by createdAt DESC + __name__ DESC
-       const result = await postRepository.getGlobalFeed({
-         seenPostIds,
-         pageSize,
-         lastDocSnapshot,
-         mediaType,
-         afterDate: cutoffTime
-       });
+        // Fetch posts from last 72 hours, already sorted by createdAt DESC + __name__ DESC
+        const result = await postRepository.getGlobalFeed({
+          pageSize,
+          lastDocSnapshot,
+          mediaType,
+          afterDate: cutoffTime
+        });
 
-       // Apply user preferences (muting)
-       let posts = result.posts;
-       if (userContext && userContext.mutedUserIds) {
-         posts = posts.filter(p => !userContext.mutedUserIds.has(p.authorId));
-       }
+        // Apply user preferences (muting)
+        let posts = result.posts;
+        if (userContext && userContext.mutedUserIds) {
+          posts = posts.filter(p => !userContext.mutedUserIds.has(p.authorId));
+        }
+
+        // 1. CALCULATE TRENDING SCORES
+        // Score = ((likes * 2) + (comments * 3)) * timeDecay
+        posts = posts.map(post => ({
+          ...post,
+          score: this.calculateTrendingScore(post)
+        }));
+
+        // 2. EXPLICIT SORT: Score (DESC)
+        posts.sort((a, b) => b.score - a.score);
 
         // Enrich with user interaction data
         if (userContext) {
@@ -243,8 +276,7 @@ class FeedService {
           hasMore: result.hasMore,
           pagination: {
             nextCursor,
-            hasMore: result.hasMore,
-            seenIds: Array.from(seenPostIds).slice(-500)
+            hasMore: result.hasMore
           }
         };
      } catch (error) {
@@ -258,28 +290,26 @@ class FeedService {
    /**
     * Get filtered feed (author, category, city, etc.)
     */
-   async getFilteredFeed({
-     authorId = null,
-     category = null,
-     city = null,
-     country = null,
-     seenPostIds = new Set(),
-     pageSize = 20,
-     lastDocSnapshot = null,
-     mediaType = null,
-     userContext = null
-   }) {
+    async getFilteredFeed({
+      authorId = null,
+      category = null,
+      city = null,
+      country = null,
+      pageSize = 20,
+      lastDocSnapshot = null,
+      mediaType = null,
+      userContext = null
+    }) {
      try {
-       const result = await postRepository.getFilteredFeed({
-         authorId,
-         category,
-         city,
-         country,
-         seenPostIds,
-         pageSize,
-         lastDocSnapshot,
-         mediaType
-       });
+        const result = await postRepository.getFilteredFeed({
+          authorId,
+          category,
+          city,
+          country,
+          pageSize,
+          lastDocSnapshot,
+          mediaType
+        });
 
        // Apply user preferences
        let posts = result.posts;
@@ -310,8 +340,7 @@ class FeedService {
           hasMore: result.hasMore,
           pagination: {
             nextCursor,
-             hasMore: result.hasMore,
-             seenIds: Array.from(seenPostIds).slice(-500)
+             hasMore: result.hasMore
            }
          };
       } catch (error) {
@@ -367,122 +396,70 @@ class FeedService {
     * 
     * This is the MAIN FEED ENGINE.
     */
-   async getHybridFeed({
-     latitude,
-     longitude,
-     geoHashMin,
-     geoHashMax,
-     seenPostIds = new Set(),
-     pageSize = 20,
-     lastDocSnapshot = null,
-     mediaType = null,
-     userContext = null
-   }) {
-     try {
-       logger.info(
-         { lat: latitude, lng: longitude, pageSize, seenCount: seenPostIds.size },
-         '[FeedService] Starting hybrid feed generation'
-       );
-
-       // STEP 1: Fetch local feed (geographic priority)
-       const localResult = await this.getLocalFeed({
-         latitude,
-         longitude,
-         geoHashMin,
-         geoHashMax,
-         seenPostIds,
-         pageSize: pageSize * 2, // Fetch more since we'll merge + dedup
-         lastDocSnapshot: null, // Don't use cursor for local in merge
-         mediaType,
-         userContext
-       });
-
-       // STEP 2: Fetch global feed (fallback content)
-       const globalResult = await this.getGlobalFeed({
-         seenPostIds,
-         pageSize: pageSize * 2,
-         lastDocSnapshot: null, // Don't use cursor for global in merge
-         mediaType,
-         userContext
-       });
-
-       // STEP 3: Merge strategy
-       // Local posts first (geographic content prioritized)
-       // Then global posts (to fill rest of feed)
-       const merged = [
-         ...localResult.posts,
-         ...globalResult.posts
-       ];
-
-       logger.info(
-         { local: localResult.posts.length, global: globalResult.posts.length, merged: merged.length },
-         '[FeedService] Merged local + global feeds'
-       );
-
-        // STEP 4: HARD DEDUPLICATION
-        const dedupedPosts = this.deduplicatePosts(merged, seenPostIds);
-
-        // STEP 5: RANKING (PHASE 4)
-        // Apply ranking ONLY to merged batch (safe, in-memory)
-        // NOT affecting DB queries or pagination order
-        const userLocation = { latitude, longitude };
-        const rankedPosts = dedupedPosts
-          .map(post => ({
-            ...post,
-            score: this.computeScore(post, userLocation)
-          }))
-          .sort((a, b) => b.score - a.score);
-
-        logger.debug(
-          { topScores: rankedPosts.slice(0, 5).map(p => ({ id: p.id, score: p.score.toFixed(3) })) },
-          '[FeedService] Ranked posts (top 5 scores)'
+    async getHybridFeed({
+      latitude,
+      longitude,
+      geoHashMin,
+      geoHashMax,
+      pageSize = 20,
+      lastDocSnapshot = null,
+      mediaType = null,
+      userContext = null
+    }) {
+      try {
+        logger.info(
+          { lat: latitude, lng: longitude, pageSize },
+          '[FeedService] Starting hybrid feed interleaving'
         );
 
-        // STEP 6: LIMIT AFTER RANKING (not before)
-        const finalPosts = rankedPosts.slice(0, pageSize);
+        // STEP 1: Fetch sources separately
+        // We fetch enough to satisfy the interleave pattern roughly
+        const localCount = Math.ceil(pageSize * 0.75) + 5;
+        const globalCount = Math.ceil(pageSize * 0.25) + 5;
 
-        // STEP 7: Build next cursor from final merged posts
-        // IMPORTANT: Cursor based on createdAt + postId (NOT score)
+        const [localResult, globalResult] = await Promise.all([
+          this.getLocalFeed({
+            latitude, longitude, geoHashMin, geoHashMax,
+            pageSize: localCount, lastDocSnapshot, mediaType, userContext
+          }),
+          this.getGlobalFeed({
+            pageSize: globalCount, lastDocSnapshot, mediaType, userContext
+          })
+        ]);
+
+        // STEP 2: Interleave pattern [L, L, L, G]
+        const finalPosts = [];
+        const localQueue = [...localResult.posts];
+        const globalQueue = [...globalResult.posts];
+
+        while (finalPosts.length < pageSize && (localQueue.length > 0 || globalQueue.length > 0)) {
+          // Add up to 3 local posts
+          for (let i = 0; i < 3 && localQueue.length > 0 && finalPosts.length < pageSize; i++) {
+            finalPosts.push(localQueue.shift());
+          }
+          // Add 1 global post
+          if (globalQueue.length > 0 && finalPosts.length < pageSize) {
+            finalPosts.push(globalQueue.shift());
+          }
+        }
+
+        // STEP 3: Deterministic Cursor from the absolute last post
         const lastPost = finalPosts.length > 0 ? finalPosts[finalPosts.length - 1] : null;
         const nextCursor = lastPost ? {
           createdAt: lastPost.createdAt ? lastPost.createdAt.toMillis?.() || lastPost.createdAt : Date.now(),
-          postId: lastPost.id,
-          authorName: lastPost.authorName || ''
+          postId: lastPost.id
         } : null;
-
-        // STEP 8: Update seenIds for cross-page dedup
-        const updatedSeenIds = new Set(seenPostIds);
-        finalPosts.forEach(post => updatedSeenIds.add(post.id));
-        const seenIdsArray = Array.from(updatedSeenIds).slice(-500);
-
-        // STEP 9: Determine hasMore
-        // hasMore = true if either source had more
-        const hasMore = localResult.hasMore || globalResult.hasMore || dedupedPosts.length > pageSize;
-
-        logger.info(
-          { returned: finalPosts.length, hasMore, cursor: nextCursor?.postId },
-          '[FeedService] Hybrid feed generation complete (with ranking)'
-        );
 
         return {
           posts: finalPosts,
           nextCursor,
-          hasMore,
+          hasMore: localResult.hasMore || globalResult.hasMore,
           pagination: {
             nextCursor,
-            hasMore,
-            seenIds: seenIdsArray,
-            mergeInfo: {
-              localPosts: localResult.posts.length,
-              globalPosts: globalResult.posts.length,
-              mergedTotal: merged.length,
-              dedupedTotal: dedupedPosts.length,
-              rankedTotal: rankedPosts.length,
-              finalTotal: finalPosts.length
-            }
+            hasMore: localResult.hasMore || globalResult.hasMore
           }
         };
-     } catch (error) {
+      } catch (error) {
        logger.error(
          { latitude, longitude, error },
          '[FeedService] Error getting hybrid feed'
@@ -490,6 +467,60 @@ class FeedService {
        throw error;
      }
    }
+
+   /**
+    * Get explore grid content (MIXED RATIO)
+    * 
+    * RATIO: 
+    * - 40% Trending (Global)
+    * - 30% Nearby (Local)
+    * - 30% New/Random (Global without score)
+    */
+   async getExploreGrid({
+     latitude,
+     longitude,
+     geoHashMin,
+     geoHashMax,
+     pageSize = 30,
+     userContext = null
+   }) {
+     try {
+       const countTrending = Math.ceil(pageSize * 0.4);
+       const countNearby = Math.ceil(pageSize * 0.3);
+       const countRandom = pageSize - countTrending - countNearby;
+
+       // Fetch sources in parallel
+       const [trending, nearby, recent] = await Promise.all([
+         this.getGlobalFeed({ pageSize: countTrending, userContext }),
+         (latitude && longitude && geoHashMin && geoHashMax) 
+           ? this.getLocalFeed({ latitude, longitude, geoHashMin, geoHashMax, pageSize: countNearby, userContext })
+           : { posts: [] },
+         this.getGlobalFeed({ pageSize: countRandom * 2, userContext }) // Fetch more for variety
+       ]);
+
+       // Merge and shuffle slightly for that "explore" feel
+       let mixed = [
+         ...trending.posts,
+         ...nearby.posts,
+         ...recent.posts.slice(0, countRandom)
+       ];
+
+       // Deduplicate
+       mixed = this.deduplicatePosts(mixed);
+
+       // Sort: Mix them up but keep trending somewhat high
+       mixed.sort((a, b) => (b.score || 0) * (0.8 + Math.random() * 0.4) - (a.score || 0) * (0.8 + Math.random() * 0.4));
+
+       return {
+         posts: mixed.slice(0, pageSize),
+         hasMore: trending.hasMore || nearby.hasMore || recent.hasMore
+       };
+     } catch (error) {
+       logger.error({ error }, '[FeedService] Error getting explore grid');
+       throw error;
+     }
+   }
 }
 
 export default new FeedService();
+;

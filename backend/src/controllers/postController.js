@@ -530,6 +530,54 @@ class PostController {
       next(error);
     }
   }
+
+  /**
+   * Get explore grid content
+   */
+  async getExploreGrid(req, res, next) {
+    try {
+      const { uid } = req.user;
+      const { 
+        lat, lng, limit = 30 
+      } = req.query;
+
+      const pageSize = Math.min(parseInt(limit), 60);
+      const userContext = await getUserContext(uid);
+
+      // Optional geohash for nearby content
+      let geoHashMin, geoHashMax;
+      if (lat && lng) {
+        const baseLat = parseFloat(lat);
+        const baseLng = parseFloat(lng);
+        const precision = 7; // Broader for explore
+        const geohash = calculateGeohash(baseLat, baseLng, precision);
+        const bounds = getGeohashBounds(geohash);
+        geoHashMin = bounds.min;
+        geoHashMax = bounds.max;
+      }
+
+      const result = await feedService.getExploreGrid({
+        latitude: lat ? parseFloat(lat) : null,
+        longitude: lng ? parseFloat(lng) : null,
+        geoHashMin,
+        geoHashMax,
+        pageSize,
+        userContext
+      });
+
+      return res.json({
+        success: true,
+        data: result.posts,
+        pagination: {
+          hasMore: result.hasMore,
+          count: result.posts.length
+        }
+      });
+    } catch (error) {
+      logger.error({ error, uid: req.user?.uid }, '[Controller] Get explore grid error');
+      next(error);
+    }
+  }
 }
 
 export default new PostController();

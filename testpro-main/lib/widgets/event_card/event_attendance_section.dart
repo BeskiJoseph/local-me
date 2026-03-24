@@ -3,7 +3,6 @@ import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../../services/post_service.dart';
 import '../../services/backend_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 
 class EventAttendanceSection extends StatefulWidget {
   final Post post;
@@ -164,7 +163,6 @@ class _EventAttendanceSectionState extends State<EventAttendanceSection> {
                           } else {
                             final response = await BackendService.toggleEventJoin(widget.post.id);
                             if (!response.success) throw response.error ?? "Toggle failed";
-                            FeedEventBus.emit(FeedEvent(FeedEventType.eventMembershipChanged, widget.post.id));
                           }
                         } catch (e) {
                         if (mounted) {

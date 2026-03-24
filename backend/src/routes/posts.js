@@ -155,6 +155,23 @@ router.post(
     }
   );
 
+  /**
+   * Get explore grid content
+   * GET /api/posts/explore
+   */
+  router.get(
+    '/explore',
+    authenticate,
+    async (req, res, next) => {
+      try {
+        await postController.getExploreGrid(req, res, next);
+      } catch (error) {
+        logger.error({ error, uid: req.user?.uid }, '[Posts] Get explore error');
+        next(error);
+      }
+    }
+  );
+
 /**
  * Get a single post by ID
  * GET /api/posts/:id

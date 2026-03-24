@@ -11,6 +11,9 @@ import 'post_reels_view.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
 import '../services/notification_data_service.dart';
+import '../core/state/post_state.dart';
+import '../core/state/provider_container.dart';
+import '../models/post.dart';
 
 class ActivityScreen extends StatefulWidget {
   const ActivityScreen({super.key});
@@ -277,6 +280,12 @@ class _ActivityScreenState extends State<ActivityScreen>
     if (!mounted) return;
     
     if (notification.postId != null) {
+      // 🔥 Ensure post exists in store (even as a skeleton if needed, but here we just register the ID)
+      // If we had the full post, we'd register it here. 
+      // For now, we rely on PostReelsView to fetch if missing, 
+      // but we register the ID to avoid "no posts" logic if possible.
+      // However, the best practice is to register the full post if available.
+      
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => PostReelsView(postId: notification.postId!)),

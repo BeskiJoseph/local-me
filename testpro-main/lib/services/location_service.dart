@@ -28,26 +28,23 @@ class LocationService {
       final user = AuthService.currentUser;
       if (user == null) return;
 
-      // 1. Fetch current profile
+      // 1. Fetch current profile to see what's already saved
       final response = await BackendService.getProfile(user.uid);
-      String? existingLocation;
+      String? existingCity;
+      String? existingCountry;
       if (response.success && response.data != null) {
-        existingLocation = response.data!['location'] as String?;
+        final existingLocation = response.data!['location'] as String?;
+        if (existingLocation != null && existingLocation.isNotEmpty) {
+           final parts = existingLocation.split(',');
+           existingCity = parts[0].trim();
+           if (parts.length > 1) existingCountry = parts[1].trim();
+        }
       }
       
-      // UX Hardening: If location already exists and not forceSync, we still need coordinates
-      // for the geo-feed, but we won't overwrite the city name in the profile unless forced.
-      if (existingLocation != null && existingLocation.isNotEmpty && !forceSync) {
-        final parts = existingLocation.split(',');
-        _cachedCity = parts[0].trim();
-        if (parts.length > 1) _cachedCountry = parts[1].trim();
-
-        // If we already have coordinates, we can truly skip
-        if (_cachedPosition != null) {
-           if (kDebugMode) debugPrint('📍 Location and coordinates already cached. Skipping.');
-           return;
-        }
-        if (kDebugMode) debugPrint('📍 Location set to "$existingLocation" but missing coordinates. Fetching GPS...');
+      // If we already have coordinates AND a city, and no forceSync, we can skip
+      if (_cachedPosition != null && _cachedCity != null && !forceSync) {
+         if (kDebugMode) debugPrint('📍 Location and coordinates already cached. Skipping.');
+         return;
       }
 
       // 2. Check permissions
@@ -62,17 +59,17 @@ class LocationService {
 
       if (permission == LocationPermission.deniedForever) return;
 
-      // 3. Get accurate position
+      // 3. Get accurate position (High Accuracy for reliability)
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 10),
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 15),
       );
       _cachedPosition = position;
 
-      // 4. Geocode
+      // 4. Geocode to get fresh city name
       final place = await GeocodingService.getPlace(position.latitude, position.longitude);
-      _cachedCity = place['city'] ?? _cachedCity;
-      _cachedCountry = place['country'] ?? _cachedCountry;
+      _cachedCity = place['city'] ?? existingCity;
+      _cachedCountry = place['country'] ?? existingCountry;
 
       // 5. Sync to backend
       if (_cachedCity != null) {

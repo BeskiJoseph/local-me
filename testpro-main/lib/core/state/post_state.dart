@@ -3,7 +3,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:testpro/models/post.dart';
 import 'package:testpro/models/comment.dart';
 import 'package:testpro/services/backend_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/models/api_response.dart';
 
 /// Central state for the entire app's post data.
 class PostStoreState {
@@ -15,12 +16,15 @@ class PostStoreState {
   /// Tracks which posts are currently on-screen to prevent memory pruning.
   final Set<String> visibleIds;
   final List<String> postIds;
+  final Map<String, DateTime> seenIds;
 
   PostStoreState({
     this.posts = const {},
     this.actionVersions = const {},
     this.visibleIds = const {},
     this.postIds = const [],
+    this.seenIds = const {},
+    this.lastCursors = const {},
   });
 
   PostStoreState copyWith({
@@ -28,55 +32,34 @@ class PostStoreState {
     Map<String, Map<String, int>>? actionVersions,
     Set<String>? visibleIds,
     List<String>? postIds,
+    Map<String, DateTime>? seenIds,
+    Map<String, Map<String, dynamic>>? lastCursors,
   }) {
     return PostStoreState(
       posts: posts ?? this.posts,
       actionVersions: actionVersions ?? this.actionVersions,
       visibleIds: visibleIds ?? this.visibleIds,
       postIds: postIds ?? this.postIds,
+      seenIds: seenIds ?? this.seenIds,
+      lastCursors: lastCursors ?? this.lastCursors,
     );
   }
+  
+  /// tracks the last cursors returned by the backend for each feed type
+  final Map<String, Map<String, dynamic>> lastCursors;
 }
 
 class PostStoreNotifier extends StateNotifier<PostStoreState> {
-  PostStoreNotifier() : super(PostStoreState()) {
-    _listenToEvents();
-  }
+  PostStoreNotifier() : super(PostStoreState());
 
   bool _isBatching = false;
   PostStoreState? _batchState;
+  bool _isLoadingMore = false;
+  bool get isLoadingMore => _isLoadingMore;
+  
+  /// Session-level buffer to prevent redundant state updates within the same session.
+  final Set<String> _sessionSeenBuffer = {};
 
-  void _listenToEvents() {
-    FeedEventBus.events.listen((event) {
-      switch (event.type) {
-        case FeedEventType.postLiked:
-          final data = event.data as Map<String, dynamic>;
-          updatePostPartially(data['postId'], {
-            'isLiked': data['isLiked'],
-            'likeCount': data['likeCount'],
-          });
-          break;
-        case FeedEventType.userFollowed:
-          final data = event.data as Map<String, dynamic>;
-          updatePostPartiallyByAuthor(data['userId'], {'isFollowing': data['isFollowing']});
-          break;
-        case FeedEventType.commentAdded:
-          final data = event.data as Map<String, dynamic>;
-          incrementCommentCount(data['postId']);
-          break;
-        case FeedEventType.postDeleted:
-          final postId = event.data is String ? event.data as String : event.data.toString();
-          removePost(postId);
-          break;
-        case FeedEventType.postUpdated:
-          final data = event.data as Map<String, dynamic>;
-          updatePostPartially(data['postId'], data['updates']);
-          break;
-        default:
-          break;
-      }
-    });
-  }
 
   // --- Batching Support ---
 
@@ -148,6 +131,49 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     });
   }
 
+  /// Centralized pagination trigger. 
+  /// Managed by PostStore to ensure architectural decoupling as requested.
+  Future<void> loadMore({
+    required String feedType,
+    String? mediaType,
+    double? latitude,
+    double? longitude,
+  }) async {
+    if (_isLoadingMore) return;
+    _isLoadingMore = true;
+    
+    try {
+      final currentCursors = state.lastCursors[feedType] ?? {};
+      
+      final response = await PostService.getPostsPaginated(
+        feedType: feedType,
+        limit: 15,
+        lastCursors: currentCursors,
+        mediaType: mediaType,
+        latitude: latitude,
+        longitude: longitude,
+      );
+      
+      if (response.data.isNotEmpty) {
+        batchUpdate(() {
+          registerPosts(response.data);
+          
+          // Update cursors for this specific feedType
+          final updatedCursors = Map<String, Map<String, dynamic>>.from(state.lastCursors);
+          if (response.cursor != null) {
+            updatedCursors[feedType] = response.cursor!;
+          }
+          
+          _updateState(state.copyWith(lastCursors: updatedCursors));
+        });
+      }
+    } catch (e) {
+      // Errors handled by UI layer (e.g. snackbars)
+    } finally {
+      _isLoadingMore = false;
+    }
+  }
+
   bool _hasPendingAction(String postId, String actionType) {
     final versions = _isBatching ? _batchState!.actionVersions : state.actionVersions;
     return (versions[postId]?[actionType] ?? 0) > 0;
@@ -204,10 +230,21 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
   }
 
   void removePost(String postId) {
-    final currentPosts = _isBatching ? _batchState!.posts : state.posts;
-    final updated = Map<String, Post>.from(currentPosts);
-    updated.remove(postId);
-    _updateState((_isBatching ? _batchState! : state).copyWith(posts: updated));
+    batchUpdate(() {
+      final currentPosts = _isBatching ? _batchState!.posts : state.posts;
+      if (!currentPosts.containsKey(postId)) return;
+      
+      final updatedPosts = Map<String, Post>.from(currentPosts);
+      updatedPosts.remove(postId);
+      
+      final updatedIds = List<String>.from(_isBatching ? _batchState!.postIds : state.postIds);
+      updatedIds.remove(postId);
+
+      _updateState((_isBatching ? _batchState! : state).copyWith(
+        posts: updatedPosts,
+        postIds: updatedIds,
+      ));
+    });
   }
 
   // --- Action Versioning (Race Condition Protection) ---
@@ -219,6 +256,57 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     postVersions[actionType] = version;
     versions[postId] = postVersions;
     _updateState((_isBatching ? _batchState! : state).copyWith(actionVersions: versions));
+  }
+
+  // --- Seen Tracking (Soft Seen System) ---
+
+  void markAsSeen(String postId) {
+    // PROTECT: Skip if already marked in this session to prevent redundant state noise.
+    if (_sessionSeenBuffer.contains(postId)) return;
+    _sessionSeenBuffer.add(postId);
+
+    batchUpdate(() {
+      final currentSeen = _isBatching ? _batchState!.seenIds : state.seenIds;
+      
+      // OPTIMIZATION: Only update if not already seen in the last 60 mins (Soft Seen)
+      final existingAt = currentSeen[postId];
+      if (existingAt != null && DateTime.now().difference(existingAt).inMinutes < 60) {
+        return;
+      }
+
+      final updatedSeen = Map<String, DateTime>.from(currentSeen);
+      updatedSeen[postId] = DateTime.now();
+      
+      _updateState((_isBatching ? _batchState! : state).copyWith(seenIds: updatedSeen));
+      
+      if (updatedSeen.length % 50 == 0) {
+        _cleanupOldSeen();
+      }
+    });
+  }
+
+  void _cleanupOldSeen() {
+    final now = DateTime.now();
+    final currentSeen = _isBatching ? _batchState!.seenIds : state.seenIds;
+    final updatedSeen = Map<String, DateTime>.from(currentSeen);
+    
+    updatedSeen.removeWhere((id, timestamp) => 
+      now.difference(timestamp).inHours > 24);
+      
+    _updateState((_isBatching ? _batchState! : state).copyWith(seenIds: updatedSeen));
+  }
+
+  void clearSeen() {
+    _updateState((_isBatching ? _batchState! : state).copyWith(seenIds: const {}));
+  }
+
+  /// Returns whether a post should be hidden based on "Soft Seen" logic (e.g. 60 min window)
+  bool isSoftSeen(String postId) {
+    final seenAt = state.seenIds[postId];
+    if (seenAt == null) return false;
+    
+    // Hidden for 60 minutes
+    return DateTime.now().difference(seenAt).inMinutes < 60;
   }
 
   // --- Memory Management ---
@@ -312,7 +400,7 @@ class CommentCacheNotifier extends StateNotifier<Map<String, CommentCache>> {
 
   Future<void> preload(String postId) async {
     try {
-      final response = await BackendService.instance.getComments(postId);
+      final response = await BackendService.getComments(postId);
       if (response.success && response.data != null) {
         final comments = (response.data as List).map((c) => Comment.fromJson(c)).toList();
         updateCache(postId, comments, nextCursor: response.pagination?.cursor);

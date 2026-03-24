@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:testpro/services/post_service.dart';
 import 'package:testpro/services/backend_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'package:testpro/core/state/feed_controller.dart';
 import 'package:testpro/core/state/feed_session.dart';
 import 'package:flutter/foundation.dart';
@@ -43,7 +42,6 @@ class HomeFeedList extends StatefulWidget {
 class _HomeFeedListState extends State<HomeFeedList>
     with AutomaticKeepAliveClientMixin {
   late final ScrollController _scrollController;
-  StreamSubscription<FeedEvent>? _eventSubscription;
   static final Map<String, bool?> _likedPostIds = {};
 
   Future<PaginatedResponse<Post>>? _feedFuture;
@@ -78,91 +76,11 @@ class _HomeFeedListState extends State<HomeFeedList>
       _futureCountry = widget.userCountry;
     }
 
-    // Listen for post creation and deletion events for optimistic updates
-    _eventSubscription = FeedEventBus.events.listen((event) {
-      debugPrint('📬 HomeFeedList received event: ${event.type}');
-      if (!mounted) {
-        debugPrint('⚠️ HomeFeedList not mounted, skipping event');
-        return;
-      }
-      if (event.type == FeedEventType.postCreated) {
-        debugPrint('📬 Post created event received');
-        final postData = event.data;
-        if (postData is Post) {
-          debugPrint('➕ Processing post: ${postData.id}');
-          _processPostCreated(postData);
-        } else if (postData is String) {
-          debugPrint('➕ Processing postId: $postData');
-          // Fetch the full post object if only ID was emitted
-          BackendService.getPost(postData).then((response) {
-            if (response.success && response.data != null && mounted) {
-              final post = Post.fromJson(response.data!);
-              _processPostCreated(post);
-            }
-          });
-        } else {
-          debugPrint(
-            '⚠️ Event data is not a Post or String: ${postData.runtimeType}',
-          );
-        }
-      } else if (event.type == FeedEventType.postDeleted) {
-        debugPrint('📬 Post deleted event received');
-        final postId = event.data;
-        if (postId is String) {
-          debugPrint('➖ Removing temporary post: $postId');
-          // Remove temporary post
-          setState(() {
-            _tempPosts.removeWhere((p) => p.id == postId);
-            _deletedPostIds.add(postId);
-          });
-          debugPrint(
-            '➖ Temporary post removed and tombstoned. Current count: ${_tempPosts.length}',
-          );
-        }
-      } else if (event.type == FeedEventType.postLiked) {
-        debugPrint('📬 Post liked event received');
-        final data = event.data as Map<String, dynamic>;
-        final String postId = data['postId'];
-        final bool? isLiked = data['isLiked'];
-        final int likeCount = data['likeCount'];
-
-        if (mounted) {
-          setState(() {
-            if (isLiked != null) {
-              _likedPostIds[postId] = isLiked;
-            }
-
-            // Update the count in the cache as well so it doesn't revert on rebuild
-            for (var cacheKey in _postsCache.keys) {
-              final cachedResponse = _postsCache[cacheKey]!;
-              final posts = cachedResponse.data;
-              final index = posts.indexWhere((p) => p.id == postId);
-              if (index != -1) {
-                posts[index] = posts[index].copyWith(
-                  isLiked: isLiked ?? posts[index].isLiked,
-                  likeCount: likeCount,
-                );
-              }
-            }
-
-            // Also update temporary posts
-            final tempIndex = _tempPosts.indexWhere((p) => p.id == postId);
-            if (tempIndex != -1) {
-              _tempPosts[tempIndex] = _tempPosts[tempIndex].copyWith(
-                isLiked: isLiked ?? _tempPosts[tempIndex].isLiked,
-                likeCount: likeCount,
-              );
-            }
-          });
-        }
-      }
-    });
   }
 
   @override
   void dispose() {
     _scrollController.dispose();
-    _eventSubscription?.cancel();
     super.dispose();
   }
 

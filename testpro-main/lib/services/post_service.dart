@@ -9,8 +9,7 @@ import 'package:testpro/core/state/feed_session.dart';
 import 'package:testpro/core/state/post_state.dart';
 import 'package:testpro/core/state/provider_container.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-
-import 'package:testpro/core/events/feed_events.dart';
+import 'backend_service.dart';
 
 class _PostInteraction {
   final bool? isLiked;
@@ -30,45 +29,9 @@ class _PostInteraction {
 class PostService {
   static PostRepository _repository = PostRepository();
 
-  static Stream<FeedEvent> get events => FeedEventBus.events;
-
   // Session interaction cache — ensures likes/comments survive refresh
   static final Map<String, _PostInteraction> _interactionCache = {};
 
-  // Hidden initializer for the sync listener
-  static final bool _initialized = _initSyncListener();
-
-  static bool _initSyncListener() {
-    events.listen((event) {
-      if (event.type == FeedEventType.postLiked) {
-        final data = event.data as Map<String, dynamic>;
-        final id = data['postId']?.toString();
-        if (id == null) return;
-        final existing = _interactionCache[id] ?? const _PostInteraction();
-        _interactionCache[id] = existing.merge(
-          _PostInteraction(
-            isLiked: data['isLiked'],
-            likeCount: data['likeCount'],
-          ),
-        );
-      } else if (event.type == FeedEventType.commentAdded) {
-        final data = event.data as Map<String, dynamic>;
-        final id = data['postId']?.toString();
-        if (id == null) return;
-        final existing = _interactionCache[id] ?? const _PostInteraction();
-        _interactionCache[id] = existing.merge(
-          _PostInteraction(commentCount: data['commentCount']),
-        );
-      }
-    });
-    return true;
-  }
-
-  static void emit(FeedEvent event) {
-    // Ensure initialized
-    if (!_initialized) {}
-    FeedEventBus.emit(event);
-  }
 
   static PostRepository get repository => _repository;
 
@@ -76,10 +39,7 @@ class PostService {
     _repository = repo;
   }
 
-  /// Overlay session interactions onto fresh API data
   static Post mergeInteractions(Post post) {
-    // Ensure initialized
-    if (!_initialized) {}
     final cached = _interactionCache[post.id];
     if (cached == null) return post;
     return post.copyWith(
@@ -116,13 +76,11 @@ class PostService {
       mediaType: mediaType,
       thumbnailUrl: thumbnailUrl,
     );
-    emit(FeedEvent(FeedEventType.postCreated, post));
     return post;
   }
 
   static Future<void> deletePost(String postId) async {
     await _repository.deletePost(postId);
-    emit(FeedEvent(FeedEventType.postDeleted, postId));
   }
 
   static Future<void> updatePost(
@@ -130,38 +88,59 @@ class PostService {
     Map<String, dynamic> updates,
   ) async {
     await _repository.updatePost(postId, updates);
-    emit(
-      FeedEvent(FeedEventType.postUpdated, {
-        'postId': postId,
-        'updates': updates,
-      }),
-    );
   }
 
   static Future<PaginatedResponse<Post>> getPostsPaginated({
     required String feedType,
+    int? limit,
+    Map<String, dynamic>? lastCursors,
+    String? mediaType,
+    double? latitude,
+    double? longitude,
     String? userCity,
     String? userCountry,
-    String? watchedIds,
-    String? authorId,
-    String? category,
-    String? mediaType,
-    int limit = 10,
-    String? sid,
   }) async {
     final response = await _repository.getPostsPaginated(
       feedType: feedType,
+      limit: limit ?? 15,
+      lastCursors: lastCursors,
+      mediaType: mediaType,
+      latitude: latitude,
+      longitude: longitude,
       userCity: userCity,
       userCountry: userCountry,
-      watchedIds: watchedIds,
-      authorId: authorId,
-      category: category,
-      mediaType: mediaType,
-      limit: limit,
-      sid: sid ?? FeedSession.instance.sessionId,
     );
 
     // Transparently merge session interactions before returning
+    final mergedPosts = response.data.map(mergeInteractions).toList();
+    return response.copyWith(data: mergedPosts);
+  }
+
+  /// Dedicated method for filtered results (Author, Category, etc.)
+  /// This keeps the main getPostsPaginated pure and stateless.
+  static Future<PaginatedResponse<Post>> getFilteredPostsPaginated({
+    String? authorId,
+    String? category,
+    String? city,
+    String? country,
+    int limit = 15,
+    Map<String, dynamic>? lastCursors,
+  }) async {
+    final response = await _repository.getFilteredPostsPaginated(
+      authorId: authorId,
+      category: category,
+      city: city,
+      country: country,
+      limit: limit,
+      lastCursors: lastCursors,
+    );
+
+    final mergedPosts = response.data.map(mergeInteractions).toList();
+    return response.copyWith(data: mergedPosts);
+  }
+
+  static Future<PaginatedResponse<Post>> getExplorePosts({int limit = 30}) async {
+    final response = await _repository.getExplorePosts(limit: limit);
     final mergedPosts = response.data.map(mergeInteractions).toList();
     return response.copyWith(data: mergedPosts);
   }
@@ -192,9 +171,7 @@ class PostService {
   }
 
   static Future<void> toggleEventAttendance(String eventId, String userId) {
-    return _repository.toggleEventAttendance(eventId, userId).then((_) {
-      emit(FeedEvent(FeedEventType.eventMembershipChanged, eventId));
-    });
+    return _repository.toggleEventAttendance(eventId, userId);
   }
 
   static Future<Post> createEvent({
@@ -225,7 +202,6 @@ class PostService {
       mediaUrl: mediaUrl,
       isFree: isFree,
     );
-    emit(FeedEvent(FeedEventType.postCreated, post));
     return post;
   }
 

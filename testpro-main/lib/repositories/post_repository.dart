@@ -62,45 +62,85 @@ class PostRepository {
     if (!response.success) throw response.error ?? 'Failed to update post';
   }
 
-  // ─────────────────────────────────────────────
-  // Get Posts Paginated
-  // Supported both Global (afterId) and Local (distance) cursors
-  // ─────────────────────────────────────────────
   Future<PaginatedResponse<Post>> getPostsPaginated({
     required String feedType,
+    int limit = 15,
+    Map<String, dynamic>? lastCursors,
+    String? mediaType,
+    double? latitude,
+    double? longitude,
     String? userCity,
     String? userCountry,
-    String? watchedIds,
-    String? authorId,
-    String? category,
-    String? mediaType,
-    int limit = 20,
-    String? sid,
   }) async {
-    var pos = LocationService.currentPosition;
-    final isLocal = feedType == 'local';
-
-    if (isLocal && pos == null) {
-      await LocationService.detectLocation();
-      pos = LocationService.currentPosition;
-    }
-
     final response = await BackendService.getPosts(
-      // No cursor-based fetch; rely on seenIds on client side
+      feedType: feedType,
       limit: limit,
-      lat: pos?.latitude,
-      lng: pos?.longitude,
+      cursor: lastCursors,
+      mediaType: mediaType,
+      lat: latitude,
+      lng: longitude,
       city: userCity,
       country: userCountry,
-      feedType: feedType,
-      watchedIds: watchedIds,
-      authorId: authorId,
-      category: category,
-      mediaType: mediaType,
-      sid: sid,
     );
 
     if (!response.success) throw response.error ?? 'Failed to fetch feed';
+
+    final data = response.data ?? [];
+    final posts = data
+        .map((json) => Post.fromJson(json as Map<String, dynamic>))
+        .toList();
+
+    return PaginatedResponse<Post>(
+      data: posts,
+      hasMore: response.pagination?.hasMore ?? false,
+      cursor: response.pagination?.cursor != null 
+          ? {'id': response.pagination!.cursor} 
+          : null,
+    );
+  }
+
+  Future<PaginatedResponse<Post>> getFilteredPostsPaginated({
+    String? authorId,
+    String? category,
+    String? city,
+    String? country,
+    int limit = 15,
+    Map<String, dynamic>? lastCursors,
+  }) async {
+    final response = await BackendService.getFilteredPosts(
+      authorId: authorId,
+      category: category,
+      city: city,
+      country: country,
+      limit: limit,
+      cursor: lastCursors,
+    );
+
+    if (!response.success) throw response.error ?? 'Failed to fetch filtered feed';
+
+    final data = response.data ?? [];
+    final posts = data
+        .map((json) => Post.fromJson(json as Map<String, dynamic>))
+        .toList();
+
+    return PaginatedResponse<Post>(
+      data: posts,
+      hasMore: response.pagination?.hasMore ?? false,
+      cursor: response.pagination?.cursor != null 
+          ? {'id': response.pagination!.cursor} 
+          : null,
+    );
+  }
+
+  Future<PaginatedResponse<Post>> getExplorePosts({int limit = 30}) async {
+    final pos = LocationService.currentPosition;
+    final response = await BackendService.getExplore(
+      lat: pos?.latitude,
+      lng: pos?.longitude,
+      limit: limit,
+    );
+
+    if (!response.success) throw response.error ?? 'Failed to fetch explore';
 
     final data = response.data ?? [];
     final posts = data
@@ -121,7 +161,7 @@ class PostRepository {
   }
 
   Stream<List<Post>> _postsByAuthorInternal(String authorId) async* {
-    final response = await BackendService.getPosts(authorId: authorId);
+    final response = await BackendService.getFilteredPosts(authorId: authorId);
     if (response.success) {
       final data = response.data ?? [];
       final posts = data
@@ -181,7 +221,7 @@ class PostRepository {
   }
 
   Stream<List<Post>> _postsByScopeInternal(String scope) async* {
-    final response = await BackendService.getPosts(category: scope);
+    final response = await BackendService.getFilteredPosts(category: scope);
     if (response.success) {
       final data = response.data ?? [];
       final posts = data

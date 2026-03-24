@@ -18,19 +18,19 @@ import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
 import '../core/session/user_session.dart';
 import 'package:testpro/services/backend_service.dart';
-import 'package:testpro/services/post_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
-import 'package:testpro/core/state/feed_session.dart';
+import 'package:testpro/services/location_service.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:testpro/core/state/post_state.dart';
 import '../utils/safe_error.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   String? _currentCity;
   String? _currentCountry;
   bool _isLoadingLocation = true;
@@ -50,132 +50,45 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Incrementing forces HomeFeedList recreation → fresh feed fetch
   int _feedRevision = 0;
-  StreamSubscription? _eventSubscription;
 
   @override
   void initState() {
-    super.initState();
     // Activate custom backend session layer (bridging Firebase Auth)
     BackendService.syncCustomTokens();
-    _detectLocation();
+    _initApp();
     // Fetch initial notification badge count (fire-and-forget)
     NotificationDataService.fetchNotifications();
-
-    // Instant Post: Listen for creation events across the app
-    _eventSubscription = FeedEventBus.events.listen((event) {
-      if (event.type == FeedEventType.postCreated) {
-        if (kDebugMode) debugPrint('🆕 Global post event detected, refreshing home feed');
-        _refreshFeeds();
-      }
-    });
   }
 
-  Future<void> _detectLocation() async {
-    setState(() {
-      _isLoadingLocation = true;
-      _locationError = null;
-    });
-
+  Future<void> _initApp() async {
     try {
-      // Priority 1: Instant load from session or cached profile
-      final userId = AuthService.currentUser?.uid;
-      if (userId != null) {
-        final session = UserSession.current.value;
-        if (session != null && session.location != null && session.location!.isNotEmpty) {
-           final parts = session.location!.split(',');
-           if (mounted) {
-            setState(() {
-              _currentCity = parts[0].trim();
-              if (parts.length > 1) _currentCountry = parts[1].trim();
-              _isLoadingLocation = false;
-            });
-           }
-        } else {
-          _cachedProfile = await UserService.getUserProfile(userId);
-          if (_cachedProfile?.location != null && _cachedProfile!.location!.isNotEmpty) {
-            final parts = _cachedProfile.location!.split(',');
-            if (mounted) {
-              setState(() {
-                _currentCity = parts[0].trim();
-                if (parts.length > 1) _currentCountry = parts[1].trim();
-                _isLoadingLocation = false; // Allow feed to start loading with cached location
-              });
-            }
-            // Sync cached profile location to session for other screens
-            UserSession.update(id: userId, location: _cachedProfile.location);
-          }
-        }
-      }
-
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (!mounted) return;
-        setState(() {
-          _isLoadingLocation = false;
-          _locationError = 'Location services are disabled.';
-        });
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (!mounted) return;
-          setState(() {
-            _isLoadingLocation = false;
-            _locationError = 'Location permissions are denied.';
-          });
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        if (!mounted) return;
-        setState(() {
-          _isLoadingLocation = false;
-          _locationError = 'Location permissions are permanently denied.';
-        });
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition();
-      final place = await GeocodingService.getPlace(position.latitude, position.longitude);
-
-      if (!mounted) return;
-      setState(() {
-        _currentCity = place['city'] ?? 'Unknown City';
-        _currentCountry = place['country'] ?? 'Unknown Country';
-        _isLoadingLocation = false;
-      });
-
-      // Sync to backend profile AND session to avoid redundant requests in other screens (like "Me")
-      if (userId != null && _currentCity != null) {
-        final locationStr = _currentCountry != null 
-            ? '$_currentCity, $_currentCountry' 
-            : _currentCity!;
-        
-        // Update session immediately so other screens can access location without waiting
-        UserSession.update(id: userId, location: locationStr);
-            
-        // Optimization: Only update if different from cached profile location
-        final cachedLocation = _cachedProfile?.location;
-        if (cachedLocation != locationStr) {
-          UserService.updateUserProfile(
-            userId: userId,
-            location: locationStr,
-          ).catchError((e) => kDebugMode ? debugPrint('Silent error syncing location: $e') : null);
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error detecting location: $e');
+      await LocationService.detectLocation(forceSync: true);
       if (mounted) {
         setState(() {
-          _isLoadingLocation = false;
-          _locationError = safeErrorMessage(e, fallback: 'Could not detect your location.');
+           _currentCity = LocationService.currentCity;
+           _currentCountry = LocationService.currentCountry;
+           _isLoadingLocation = false;
         });
+        ref.read(postStoreProvider.notifier).loadMore(feedType: 'local');
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('Error initializing app location: $e');
+      if (mounted) {
+        setState(() => _isLoadingLocation = false);
       }
     }
+  }
+
+
+  Future<void> _refreshFeeds() async {
+    if (kDebugMode) debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
+    
+    // Clear the store's cursors and seen IDs for a fresh start on refresh
+    ref.read(postStoreProvider.notifier).clearSeen();
+    
+    setState(() {
+      _feedRevision++;
+    });
   }
 
   void _onNavTap(int index) {
@@ -203,13 +116,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _eventSubscription?.cancel();
     super.dispose();
   }
 
-  void _refreshFeeds() {
-    if (kDebugMode) debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
-    setState(() => _feedRevision++);
+  void _refreshFeedsInternal() {
+    _refreshFeeds();
   }
 
 
@@ -223,6 +134,9 @@ class _HomeScreenState extends State<HomeScreen> {
           onToggleChanged: (i) => setState(() {
             _feedToggleIndex = i;
             _visitedFeedIndexes.add(i);
+            if (i == 1 && _visitedFeedIndexes.length == 2) {
+                ref.read(postStoreProvider.notifier).loadMore(feedType: 'global');
+            }
           }),
           onNotificationTap: () => Navigator.push(
             context,
@@ -239,20 +153,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   : _locationError != null
                       ? _LocationErrorState(
                           error: _locationError!,
-                          onRetry: _detectLocation,
+                          onRetry: _initApp,
                         )
                       : PaginatedFeedList(
                           key: ValueKey('nearby_$_feedRevision'),
                           feedType: 'local',
                           userCity: _currentCity,
                           userCountry: _currentCountry,
+                          onRefresh: _refreshFeeds,
                         ),
               _visitedFeedIndexes.contains(1)
                   ? PaginatedFeedList(
                       key: ValueKey('global_$_feedRevision'),
                       feedType: 'global',
-                      userCity: null,
-                      userCountry: null,
+                      onRefresh: _refreshFeeds,
                     )
                   : const SizedBox.shrink(),
             ],

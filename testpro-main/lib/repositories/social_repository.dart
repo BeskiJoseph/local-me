@@ -2,7 +2,6 @@ import 'dart:async';
 import '../models/post.dart';
 import '../models/user_profile.dart';
 import '../services/backend_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 
 /// Repository for handling Social Interactions (Likes, Follows).
 class SocialRepository {
@@ -20,13 +19,6 @@ class SocialRepository {
     final response = await BackendService.checkLikeState(postId);
     bool current = response.success && response.data!['liked'] == true;
     yield current;
-    
-    await for (final event in FeedEventBus.events) {
-      if (event.type == FeedEventType.postLiked && event.data['postId'] == postId) {
-        current = event.data['isLiked'];
-        yield current;
-      }
-    }
   }
   
   /// Future version - use this when you only need the value once
@@ -50,13 +42,6 @@ class SocialRepository {
     final response = await BackendService.checkFollowState(targetUserId);
     bool current = response.success && response.data! == true;
     yield current;
-    
-    await for (final event in FeedEventBus.events) {
-      if (event.type == FeedEventType.userFollowed && event.data['userId'] == targetUserId) {
-        current = event.data['isFollowing'];
-        yield current;
-      }
-    }
   }
   
   /// Future version - use this when you only need the value once

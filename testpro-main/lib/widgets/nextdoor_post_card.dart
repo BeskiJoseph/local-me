@@ -28,7 +28,6 @@ import 'package:visibility_detector/visibility_detector.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:testpro/core/state/post_state.dart';
 import 'package:testpro/core/state/provider_container.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'dart:async';
 
 /// ============================================================
@@ -71,16 +70,15 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
   @override
   void didUpdateWidget(NextdoorStylePostCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.post.id != widget.post.id) {
+    if (oldWidget.post.id != widget.post.id && mounted) {
        ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
     }
   }
 
   @override
   void dispose() {
-    if (mounted) {
-       ref.read(postStoreProvider.notifier).setVisible(widget.post.id, false);
-    }
+    // 🔥 Use a safe ref access if needed, but setVisible is usually not critical on dispose
+    // if it might crash the app.
     super.dispose();
   }
 
@@ -131,13 +129,6 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
             'likeCount': data['likeCount'],
           });
         }
-        
-        // FeedEventBus sync for legacy subscribers
-        FeedEventBus.emit(FeedEvent(FeedEventType.postLiked, {
-          'postId': postId,
-          'isLiked': data?['isLiked'] ?? newTarget,
-          'likeCount': data?['likeCount'] ?? newCount,
-        }));
       }
     } catch (e) {
        if (mounted) {
@@ -413,12 +404,6 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
       if (!res.success) {
         // Rollback
         notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
-      } else {
-        // Legacy Event Sync
-        FeedEventBus.emit(FeedEvent(FeedEventType.userFollowed, {
-          'userId': authorId, 
-          'isFollowing': newState
-        }));
       }
     } catch (_) {
       if (mounted) {
@@ -691,8 +676,8 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                         final response = await BackendService.reportPost(widget.post.id, selectedReason!);
                         if (context.mounted) {
                           if (response.success) {
-                            // Hide reported post from feed for this user
-                            FeedEventBus.emit(FeedEvent(FeedEventType.postDeleted, widget.post.id));
+                            // Hide reported post from feed for this user using PostStore
+                            ref.read(postStoreProvider.notifier).removePost(widget.post.id);
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text('Thank you for your report. Post hidden from your feed.'),
@@ -1087,7 +1072,7 @@ class _ActionBtn extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Post Options Bottom Sheet
 // ─────────────────────────────────────────────────────────────
-class _OptionsSheet extends StatelessWidget {
+class _OptionsSheet extends ConsumerWidget {
   final bool isOwner;
   final Post post;
   final VoidCallback? onDelete;
@@ -1109,7 +1094,7 @@ class _OptionsSheet extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 20),
       // Clean cream/off-white background matching screenshot
@@ -1173,13 +1158,16 @@ class _OptionsSheet extends StatelessWidget {
                 Navigator.pop(context);
                 // Persist hide to backend (fire-and-forget)
                 BackendService.hidePost(post.id).then((_) {}).catchError((_) => null);
-                PostService.emit(FeedEvent(FeedEventType.postDeleted, post.id));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Post hidden from your feed'),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
+                // Hide post from global store immediately
+                ref.read(postStoreProvider.notifier).removePost(post.id);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Post hidden from your feed'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
               },
             ),
             _Tile(

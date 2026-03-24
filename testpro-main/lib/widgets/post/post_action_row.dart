@@ -5,7 +5,6 @@ import '../../services/auth_service.dart';
 import '../../services/backend_service.dart';
 import 'package:testpro/utils/safe_error.dart';
 import '../comments_bottom_sheet.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'package:testpro/core/state/post_state.dart';
 import 'package:testpro/services/haptic_service.dart';
 import 'dart:async';
@@ -73,13 +72,6 @@ class _PostActionRowState extends ConsumerState<PostActionRow> {
         } else {
           // Success: Sync with server data if needed, or just clear busy state
           setState(() => _isLikeBusy = false);
-          
-          // Emit global event for any legacy listeners
-          FeedEventBus.emit(FeedEvent(FeedEventType.postLiked, {
-            'postId': postId,
-            'isLiked': newTarget,
-            'likeCount': newCount,
-          }));
         }
       } catch (e) {
         if (mounted) {
@@ -100,6 +92,7 @@ class _PostActionRowState extends ConsumerState<PostActionRow> {
   }
 
   void _showError(String msg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),

@@ -117,7 +117,6 @@ class PostRepository {
    async getLocalFeed({
      geoHashMin,
      geoHashMax,
-     seenPostIds = new Set(),
      pageSize = 20,
      lastDocSnapshot = null,
      mediaType = null
@@ -129,63 +128,61 @@ class PostRepository {
          .where('geoHash', '>=', geoHashMin)
          .where('geoHash', '<=', geoHashMax);
 
-       if (mediaType) {
-         query = query.where('mediaType', '==', mediaType);
-       }
+        if (mediaType && mediaType !== 'all') {
+          query = query.where('mediaType', '==', mediaType);
+        }
 
-       // DETERMINISTIC ORDERING: createdAt DESC + __name__ DESC
+       // DETERMINISTIC ORDERING: createdAt DESC
        // This ensures:
        // - Same result order on every call
        // - Stable pagination (no jumping/duplicates)
        query = query
          .orderBy('createdAt', 'desc')
-         .orderBy('__name__', 'desc')
          .limit(pageSize + 1); // Fetch one extra to determine hasMore
 
-       // CURSOR PAGINATION: Convert composite cursor to real DocumentSnapshot
-       if (lastDocSnapshot) {
-         // If it's a composite cursor object { createdAt, postId, authorName }
-         if (lastDocSnapshot.createdAt && lastDocSnapshot.postId && !lastDocSnapshot._document) {
-           try {
-             const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
-             if (realDoc.exists) {
-               // Use Firestore's real DocumentSnapshot for accurate pagination
-               query = query.startAfter(realDoc);
-             } else {
-               // Graceful fallback: If cursor post was deleted, start from beginning
-               logger.warn(
-                 { postId: lastDocSnapshot.postId },
-                 '[PostRepo] Cursor post deleted, starting from page beginning'
-               );
-             }
-           } catch (err) {
-             logger.warn(
-               { cursor: lastDocSnapshot, error: err },
-               '[PostRepo] Error resolving cursor, starting from page beginning'
-             );
-           }
-         } else if (lastDocSnapshot._document) {
-           // Already a real DocumentSnapshot (from earlier result)
-           query = query.startAfter(lastDocSnapshot);
-         }
-       }
+        // CURSOR PAGINATION: Convert composite cursor or document snapshot
+        if (lastDocSnapshot) {
+          if (lastDocSnapshot._document) {
+            // Case 1: Real DocumentSnapshot (Ideal)
+            query = query.startAfter(lastDocSnapshot);
+          } else if (lastDocSnapshot.createdAt && lastDocSnapshot.postId) {
+            // Case 2: Composite object { createdAt, postId }
+            // Try to resolve the document first for the most accurate cursor
+            try {
+              const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
+              if (realDoc.exists) {
+                query = query.startAfter(realDoc);
+              } else {
+                // FALLBACK: Use field values for deterministic pagination even if doc is deleted
+                // Firestore allows startAfter(value1, value2...) matching the orderBy sequence
+                const createdAtDate = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
+                  ? lastDocSnapshot.createdAt 
+                  : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+                  
+                query = query.startAfter(createdAtDate);
+                logger.info({ postId: lastDocSnapshot.postId }, '[PostRepo] Cursor doc missing, fell back to createdAt value');
+              }
+            } catch (err) {
+              logger.warn({ err }, '[PostRepo] Error resolving cursor doc, falling back to values');
+              const createdAtDate = admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+              query = query.startAfter(createdAtDate);
+            }
+          }
+        }
 
-       const snapshot = await query.get();
-       const docs = snapshot.docs;
+        const snapshot = await query.get();
+        const docs = snapshot.docs;
 
-       // NO DUPLICATES: Determine hasMore by fetching pageSize+1
-       const hasMore = docs.length > pageSize;
-       const posts = docs.slice(0, pageSize).map(doc => mapDocToPost(doc));
+        // Determine hasMore by fetching pageSize+1
+        const hasMore = docs.length > pageSize;
+        const posts = docs.slice(0, pageSize).map(doc => mapDocToPost(doc));
 
-       // Filter out already-seen posts from session
-       const filteredPosts = posts.filter(post => !seenPostIds.has(post.id));
-
-       return {
-         posts: filteredPosts,
-         lastDoc: docs.length > 0 ? docs[pageSize - 1] : null,
-         hasMore,
-         totalFetched: posts.length
-       };
+        return {
+          posts,
+          lastDoc: docs.length > 0 ? docs[Math.min(docs.length - 1, pageSize - 1)] : null,
+          hasMore,
+          totalFetched: posts.length
+        };
      } catch (error) {
        logger.error({ geoHashMin, geoHashMax, error }, '[PostRepo] Error fetching local feed');
        throw error;
@@ -196,13 +193,11 @@ class PostRepository {
      * Get global trending feed (no location filter)
      * 
      * PRODUCTION-GRADE PAGINATION:
-     *   - Ordering: createdAt DESC (primary) + __name__ DESC (secondary)
      *   - Cursor Format: { createdAt, postId, authorName }
      *   - Uses Firestore startAfter with real DocumentSnapshot
      *   - Deterministic ordering prevents duplicates across pages
      */
     async getGlobalFeed({
-      seenPostIds = new Set(),
       pageSize = 20,
       lastDocSnapshot = null,
       mediaType = null,
@@ -213,7 +208,7 @@ class PostRepository {
           .where('visibility', '==', 'public')
           .where('status', '==', 'active');
 
-        if (mediaType) {
+        if (mediaType && mediaType !== 'all') {
           query = query.where('mediaType', '==', mediaType);
         }
 
@@ -222,51 +217,44 @@ class PostRepository {
           query = query.where('createdAt', '>=', afterDate);
         }
 
-        // DETERMINISTIC ORDERING: createdAt DESC + __name__ DESC
+        // DETERMINISTIC ORDERING: createdAt DESC
         query = query
           .orderBy('createdAt', 'desc')
-          .orderBy('__name__', 'desc')
           .limit(pageSize + 1);
 
-        // CURSOR PAGINATION: Convert composite cursor to real DocumentSnapshot
+        // CURSOR PAGINATION: values fallback
         if (lastDocSnapshot) {
-          // If it's a composite cursor object { createdAt, postId, authorName }
-          if (lastDocSnapshot.createdAt && lastDocSnapshot.postId && !lastDocSnapshot._document) {
+          if (lastDocSnapshot._document) {
+            query = query.startAfter(lastDocSnapshot);
+          } else if (lastDocSnapshot.createdAt && lastDocSnapshot.postId) {
             try {
               const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
               if (realDoc.exists) {
                 query = query.startAfter(realDoc);
               } else {
-                logger.warn(
-                  { postId: lastDocSnapshot.postId },
-                  '[PostRepo] Cursor post deleted, starting from page beginning'
-                );
+                const createdAtDate = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
+                  ? lastDocSnapshot.createdAt 
+                  : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+                query = query.startAfter(createdAtDate);
+                logger.info({ postId: lastDocSnapshot.postId }, '[PostRepo] Global: Cursor doc missing, fell back to value');
               }
             } catch (err) {
-              logger.warn(
-                { cursor: lastDocSnapshot, error: err },
-                '[PostRepo] Error resolving cursor, starting from page beginning'
-              );
+              const createdAtDate = admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+              query = query.startAfter(createdAtDate);
             }
-          } else if (lastDocSnapshot._document) {
-            // Already a real DocumentSnapshot
-            query = query.startAfter(lastDocSnapshot);
           }
         }
 
         const snapshot = await query.get();
         const docs = snapshot.docs;
 
-        // NO DUPLICATES: Fetch pageSize+1 to determine hasMore
+        // Determine hasMore
         const hasMore = docs.length > pageSize;
         const posts = docs.slice(0, pageSize).map(doc => mapDocToPost(doc));
 
-        // Filter out already-seen posts
-        const filteredPosts = posts.filter(post => !seenPostIds.has(post.id));
-
         return {
-          posts: filteredPosts,
-          lastDoc: docs.length > 0 ? docs[pageSize - 1] : null,
+          posts,
+          lastDoc: docs.length > 0 ? docs[Math.min(docs.length - 1, pageSize - 1)] : null,
           hasMore,
           totalFetched: posts.length
         };
@@ -290,7 +278,6 @@ class PostRepository {
       category = null,
       city = null,
       country = null,
-      seenPostIds = new Set(),
       pageSize = 20,
       lastDocSnapshot = null,
       mediaType = null
@@ -304,52 +291,45 @@ class PostRepository {
         if (category) query = query.where('category', '==', category);
         if (city) query = query.where('city', '==', city);
         if (country) query = query.where('country', '==', country);
-        if (mediaType) query = query.where('mediaType', '==', mediaType);
+        if (mediaType && mediaType !== 'all') query = query.where('mediaType', '==', mediaType);
 
-        // DETERMINISTIC ORDERING: createdAt DESC + __name__ DESC
+        // DETERMINISTIC ORDERING: createdAt DESC
         query = query
           .orderBy('createdAt', 'desc')
-          .orderBy('__name__', 'desc')
           .limit(pageSize + 1);
 
-        // CURSOR PAGINATION: Convert composite cursor to real DocumentSnapshot
+        // CURSOR PAGINATION: values fallback
         if (lastDocSnapshot) {
-          // If it's a composite cursor object { createdAt, postId, authorName }
-          if (lastDocSnapshot.createdAt && lastDocSnapshot.postId && !lastDocSnapshot._document) {
+          if (lastDocSnapshot._document) {
+            query = query.startAfter(lastDocSnapshot);
+          } else if (lastDocSnapshot.createdAt && lastDocSnapshot.postId) {
             try {
               const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
               if (realDoc.exists) {
                 query = query.startAfter(realDoc);
               } else {
-                logger.warn(
-                  { postId: lastDocSnapshot.postId },
-                  '[PostRepo] Cursor post deleted, starting from page beginning'
-                );
+                const createdAtDate = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
+                  ? lastDocSnapshot.createdAt 
+                  : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+                query = query.startAfter(createdAtDate);
+                logger.info({ postId: lastDocSnapshot.postId }, '[PostRepo] Filtered: Cursor doc missing, fell back to value');
               }
             } catch (err) {
-              logger.warn(
-                { cursor: lastDocSnapshot, error: err },
-                '[PostRepo] Error resolving cursor, starting from page beginning'
-              );
+              const createdAtDate = admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+              query = query.startAfter(createdAtDate);
             }
-          } else if (lastDocSnapshot._document) {
-            // Already a real DocumentSnapshot
-            query = query.startAfter(lastDocSnapshot);
           }
         }
 
         const snapshot = await query.get();
         const docs = snapshot.docs;
 
-        // NO DUPLICATES: Fetch pageSize+1 to determine hasMore
         const hasMore = docs.length > pageSize;
         const posts = docs.slice(0, pageSize).map(doc => mapDocToPost(doc));
 
-        const filteredPosts = posts.filter(post => !seenPostIds.has(post.id));
-
         return {
-          posts: filteredPosts,
-          lastDoc: docs.length > 0 ? docs[pageSize - 1] : null,
+          posts,
+          lastDoc: docs.length > 0 ? docs[Math.min(docs.length - 1, pageSize - 1)] : null,
           hasMore,
           totalFetched: posts.length
         };
@@ -367,7 +347,6 @@ class PostRepository {
   async getPostsByAuthor(authorId, { pageSize = 20, lastDocSnapshot = null } = {}) {
     return this.getFilteredFeed({
       authorId,
-      seenPostIds: new Set(),
       pageSize,
       lastDocSnapshot
     });
@@ -393,7 +372,6 @@ class PostRepository {
 
       query = query
         .orderBy('createdAt', 'desc')
-        .orderBy('__name__', 'desc')
         .limit(pageSize);
 
       if (lastDocSnapshot) {

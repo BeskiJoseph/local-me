@@ -9,9 +9,9 @@ import 'package:testpro/widgets/nextdoor_post_card.dart';
 import '../models/post.dart';
 import '../utils/proxy_helper.dart';
 import '../models/api_response.dart';
+import '../models/paginated_response.dart';
 import 'post_reels_view.dart';
 import '../services/post_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 
 /// Simple search screen with user and content search
 class SearchScreen extends StatefulWidget {
@@ -31,20 +31,11 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
   List<dynamic> _postResults = [];
   bool _isSearching = false;
   final Map<String, bool> _likedPostIds = {};
-  StreamSubscription? _eventSubscription;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _eventSubscription = FeedEventBus.events.listen((event) {
-      if (event.type == FeedEventType.postLiked && mounted) {
-        final data = event.data as Map<String, dynamic>;
-        setState(() {
-          _likedPostIds[data['postId']] = data['isLiked'];
-        });
-      }
-    });
   }
 
   @override
@@ -52,7 +43,6 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     _searchController.dispose();
     _tabController.dispose();
     _debounce?.cancel();
-    _eventSubscription?.cancel();
     super.dispose();
   }
 
@@ -280,18 +270,17 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
     final user = AuthService.currentUser;
     if (user == null) return const SizedBox.shrink();
 
-    return FutureBuilder<ApiResponse<List<dynamic>>>(
-      future: BackendService.getPosts(feedType: 'global', limit: 30),
+    return FutureBuilder<PaginatedResponse<Post>>(
+      future: PostService.getExplorePosts(limit: 30),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
 
         final response = snapshot.data;
-        if (response == null || !response.success || response.data == null) return _buildEmptyState();
+        if (response == null || response.data.isEmpty) return _buildEmptyState();
 
-        final data = response.data!;
-        final List<Post> allPosts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+        final List<Post> allPosts = response.data;
         
         // Explore: Show only Image/Video posts (no Events, no Articles)
         final posts = allPosts.where((post) {

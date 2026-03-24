@@ -49,30 +49,46 @@ class BackendService {
     String text,
   ) => _instance.sendEventMessage(eventId, text);
   static Future<ApiResponse<List<dynamic>>> getPosts({
+    required String feedType,
+    double? lat,
+    double? lng,
+    String? city,
+    String? country,
+    int limit = 15,
+    Map<String, dynamic>? cursor,
+    String? mediaType,
+  }) => _instance.getPosts(
+    feedType: feedType,
+    lat: lat,
+    lng: lng,
+    city: city,
+    country: country,
+    limit: limit,
+    cursor: cursor,
+    mediaType: mediaType,
+  );
+
+  static Future<ApiResponse<List<dynamic>>> getFilteredPosts({
     String? authorId,
     String? category,
     String? city,
     String? country,
-    double? lat,
-    double? lng,
-    String? feedType,
-    int limit = 20,
-    String? watchedIds,
-    String? mediaType,
-    String? sid,
-  }) => _instance.getPosts(
+    int limit = 15,
+    Map<String, dynamic>? cursor,
+  }) => _instance.getFilteredPosts(
     authorId: authorId,
     category: category,
     city: city,
     country: country,
-    lat: lat,
-    lng: lng,
-    feedType: feedType,
     limit: limit,
-    watchedIds: watchedIds,
-    mediaType: mediaType,
-    sid: sid,
+    cursor: cursor,
   );
+
+  static Future<ApiResponse<List<dynamic>>> getExplore({
+    double? lat,
+    double? lng,
+    int limit = 30,
+  }) => _instance.getExplore(lat: lat, lng: lng, limit: limit);
   static Future<ApiResponse<List<dynamic>>> getComments(
     String postId, {
     String? afterId,
@@ -686,19 +702,50 @@ class BackendClient {
   }
 
   Future<ApiResponse<List<dynamic>>> getPosts({
+    required String feedType,
+    int limit = 15,
+    double? lat,
+    double? lng,
+    String? city,
+    String? country,
+    String? watchedIds,
+    String? mediaType,
+    String? sid,
+    Map<String, dynamic>? cursor,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/posts').replace(
+        queryParameters: {
+          if (city != null) 'city': city,
+          if (country != null) 'country': country,
+          if (lat != null) 'lat': lat.toString(),
+          if (lng != null) 'lng': lng.toString(),
+          if (feedType != null) 'feedType': feedType,
+          if (watchedIds != null) 'watchedIds': watchedIds,
+          if (mediaType != null) 'mediaType': mediaType,
+          if (sid != null) 'sid': sid,
+          if (cursor != null) 'cursor': jsonEncode(cursor),
+          'limit': limit.toString(),
+        },
+      );
+      if (kDebugMode) debugPrint('🚀 API REQUEST: $uri');
+      final resp = await _sendRequest(
+        (token) async =>
+            await _client.get(uri, headers: await _getHeaders(token)),
+      );
+      return _processResponse(resp, (d) => d as List<dynamic>);
+    } catch (e) {
+      return ApiResponse(success: false, error: e.toString());
+    }
+  }
+
+  Future<ApiResponse<List<dynamic>>> getFilteredPosts({
     String? authorId,
     String? category,
     String? city,
     String? country,
-    double? lat,
-    double? lng,
-    String? feedType, // 'local' or 'global'
-    int limit = 20,
-    double? lastDistance,
-    String? lastPostId,
-    String? watchedIds,
-    String? mediaType,
-    String? sid,
+    int limit = 15,
+    Map<String, dynamic>? cursor,
   }) async {
     try {
       final uri = Uri.parse('$_baseUrl/api/posts').replace(
@@ -707,18 +754,11 @@ class BackendClient {
           if (category != null) 'category': category,
           if (city != null) 'city': city,
           if (country != null) 'country': country,
-          if (lat != null) 'lat': lat.toString(),
-          if (lng != null) 'lng': lng.toString(),
-          if (feedType != null) 'feedType': feedType,
-          if (lastDistance != null) 'lastDistance': lastDistance.toString(),
-          if (lastPostId != null) 'lastPostId': lastPostId,
-          if (watchedIds != null) 'watchedIds': watchedIds,
-          if (mediaType != null) 'mediaType': mediaType,
-          if (sid != null) 'sid': sid,
+          if (cursor != null) 'cursor': jsonEncode(cursor),
           'limit': limit.toString(),
         },
       );
-      if (kDebugMode) debugPrint('🚀 API REQUEST: $uri');
+      if (kDebugMode) debugPrint('🚀 API FILTERED REQUEST: $uri');
       final resp = await _sendRequest(
         (token) async =>
             await _client.get(uri, headers: await _getHeaders(token)),
@@ -1181,6 +1221,29 @@ class BackendClient {
       }
     } catch (e) {
       debugPrint('🚨 Backend health check error: $e');
+    }
+  }
+
+  Future<ApiResponse<List<dynamic>>> getExplore({
+    double? lat,
+    double? lng,
+    int limit = 30,
+  }) async {
+    try {
+      final uri = Uri.parse('$_baseUrl/api/posts/explore').replace(
+        queryParameters: {
+          if (lat != null) 'lat': lat.toString(),
+          if (lng != null) 'lng': lng.toString(),
+          'limit': limit.toString(),
+        },
+      );
+      final resp = await _sendRequest(
+        (token) async =>
+            await _client.get(uri, headers: await _getHeaders(token)),
+      );
+      return _processResponse(resp, (d) => d as List<dynamic>);
+    } catch (e) {
+      return ApiResponse(success: false, error: e.toString());
     }
   }
 }

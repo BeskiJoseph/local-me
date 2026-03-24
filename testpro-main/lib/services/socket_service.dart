@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:flutter/foundation.dart';
 import 'media_upload_service.dart';
-import '../core/events/feed_events.dart';
+import 'media_upload_service.dart';
 
 class SocketService {
   static IO.Socket? _socket;
@@ -53,26 +53,12 @@ class SocketService {
 
     // --- Global Metadata Listeners ---
     _socket!.on('like_update', (data) {
-      FeedEventBus.emit(FeedEvent(
-        FeedEventType.postLiked,
-        {
-          'postId': data['postId'],
-          'likeCount': data['likeCount'],
-          'isLiked': null,
-        }
-      ));
+      _roomController.add(Map<String, dynamic>.from(data));
       _roomController.add(Map<String, dynamic>.from(data));
     });
 
     _socket!.on('comment_update', (data) {
-      FeedEventBus.emit(FeedEvent(
-        FeedEventType.commentAdded,
-        {
-          'postId': data['postId'],
-          'commentCount': data['commentCount'],
-          'newComment': data['newComment'],
-        }
-      ));
+      _roomController.add(Map<String, dynamic>.from(data));
       _roomController.add(Map<String, dynamic>.from(data));
     });
 

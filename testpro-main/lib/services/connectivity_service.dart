@@ -27,6 +27,7 @@ class ConnectivityService {
 
   /// Helper to show a persistent offline banner in the current Scaffold.
   static void showOfflineBanner(BuildContext context) {
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).showMaterialBanner(
       MaterialBanner(
         content: const Row(
@@ -52,6 +53,7 @@ class ConnectivityService {
 
   /// Hide the offline banner.
   static void hideOfflineBanner(BuildContext context) {
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
   }
 }

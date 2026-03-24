@@ -15,7 +15,6 @@ import '../shared/widgets/empty_state.dart';
 import 'package:testpro/widgets/nextdoor_post_card.dart';
 import 'event_post_card.dart';
 import '../services/post_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import 'post_reels_view.dart';
 import '../core/state/feed_session.dart';
 
@@ -43,7 +42,6 @@ class _PersonalAccountState extends State<PersonalAccount>
   List<String> _myEventIds = [];
   bool _isFollowing = false;
   bool _isTogglingFollow = false;
-  StreamSubscription? _subscription;
 
   String get profileUserId {
     final uid = widget.userId ?? AuthService.currentUser?.uid;
@@ -59,32 +57,6 @@ class _PersonalAccountState extends State<PersonalAccount>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadData();
-    _subscription = FeedEventBus.events.listen((event) {
-      if (event.type == FeedEventType.postLiked && mounted) {
-        final data = event.data as Map<String, dynamic>;
-        setState(() {
-          _likedPostIds[data['postId']] = data['isLiked'];
-        });
-      } else if (event.type == FeedEventType.postUpdated && mounted) {
-        final data = event.data as Map<String, dynamic>;
-        final String postId = data['postId'];
-        final Map<String, dynamic> updates = data['updates'];
-
-        setState(() {
-          final index = _posts.indexWhere((p) => p.id == postId);
-          if (index != -1) {
-            final current = _posts[index];
-            _posts[index] = current.copyWith(
-              title: updates['title'] ?? current.title,
-              body: updates['body'] ?? updates['text'] ?? current.body,
-              city: updates['city'] ?? current.city,
-              country: updates['country'] ?? current.country,
-              category: updates['category'] ?? current.category,
-            );
-          }
-        });
-      }
-    });
   }
 
   @override
@@ -98,7 +70,6 @@ class _PersonalAccountState extends State<PersonalAccount>
   @override
   void dispose() {
     _tabController.dispose();
-    _subscription?.cancel();
     super.dispose();
   }
 
@@ -192,12 +163,9 @@ class _PersonalAccountState extends State<PersonalAccount>
     if (mounted) setState(() => _isLoadingPosts = true);
 
     try {
-      final response = await PostService.getPostsPaginated(
-        feedType: 'global',
+      final response = await PostService.getFilteredPostsPaginated(
         authorId: profileUserId,
-        // Remove cursor; rely on seenIds-based per-user state downstream
         limit: 10,
-        watchedIds: FeedSession.instance.seenIdsParam('global'),
       );
 
       if (!mounted) return;

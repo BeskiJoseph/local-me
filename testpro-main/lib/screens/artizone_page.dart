@@ -33,11 +33,9 @@ class _ArtizonePageState extends State<ArtizonePage> {
     if (mounted && refresh) setState(() => _isLoading = true);
 
     try {
-      final response = await PostService.getPostsPaginated(
-        feedType: 'global',
+      final response = await PostService.getFilteredPostsPaginated(
         authorId: widget.userId,
         limit: 20,
-        watchedIds: FeedSession.instance.seenIdsParam('global'),
       );
 
       if (!mounted) return;

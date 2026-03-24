@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
 import '../../services/post_service.dart';
-import 'package:testpro/core/events/feed_events.dart';
 import '../../config/app_theme.dart';
 import '../../services/backend_service.dart';
 import '../../shared/widgets/user_avatar.dart';
@@ -194,14 +193,6 @@ class _EventCardFooterState extends State<EventCardFooter> {
                         try {
                           final response = await BackendService.toggleLike(widget.post.id);
                           if (!response.success) throw response.error ?? "Toggle failed";
-                          
-                          // Emit event to sync other widgets
-                          FeedEventBus.emit(FeedEvent(
-FeedEventType.postLiked, {
-                            'postId': widget.post.id,
-                            'isLiked': newTarget,
-                            'likeCount': _optimisticLikeCount ?? _likeCount,
-                          }));
 
                           if (mounted) {
                             setState(() {
