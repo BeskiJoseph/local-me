@@ -19,7 +19,8 @@ class RecommendedFeedList extends ConsumerStatefulWidget {
   const RecommendedFeedList({super.key});
 
   @override
-  ConsumerState<RecommendedFeedList> createState() => _RecommendedFeedListState();
+  ConsumerState<RecommendedFeedList> createState() =>
+      _RecommendedFeedListState();
 }
 
 class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
@@ -40,7 +41,6 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
     _loadMorePosts();
     _scrollController.addListener(_onScroll);
   }
-
 
   void _onScroll() {
     if (_debounce?.isActive ?? false) return;
@@ -90,14 +90,14 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
       final newResponse = await PostService.getPostsPaginated(
         feedType: 'global',
         limit: 10,
-        watchedIds: FeedSession.instance.seenIdsParam('global'),
-        sid: _sessionId,
       );
       final newPosts = newResponse.data;
 
       if (mounted) {
         // 🔥 Register in Global Store
-        ref.read(postStoreProvider.notifier).registerPosts(newPosts);
+        ref
+            .read(postStoreProvider.notifier)
+            .registerPosts(newPosts, forFeedType: 'global');
 
         for (var p in newPosts) {
           _likedPostIds[p.id] = p.isLiked;
@@ -175,8 +175,10 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
                 onTap: () {
                   if (!mounted) return;
                   // 🔥 Register before navigating
-                  ref.read(postStoreProvider.notifier).registerPosts([post]);
-                  
+                  ref.read(postStoreProvider.notifier).registerPosts([
+                    post,
+                  ], forFeedType: 'global');
+
                   Navigator.push(
                     context,
                     MaterialPageRoute(

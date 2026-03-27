@@ -69,7 +69,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
            _currentCountry = LocationService.currentCountry;
            _isLoadingLocation = false;
         });
-        ref.read(postStoreProvider.notifier).loadMore(feedType: 'local');
+        ref.read(postStoreProvider.notifier).loadMore(
+          feedType: 'local',
+          latitude: LocationService.currentPosition?.latitude,
+          longitude: LocationService.currentPosition?.longitude,
+        );
       }
     } catch (e) {
       if (kDebugMode) debugPrint('Error initializing app location: $e');

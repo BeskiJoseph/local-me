@@ -1,0 +1,186 @@
+================================================================================
+CODEBASE STRUCTURE & FEED/POSTS ARCHITECTURE SUMMARY
+================================================================================
+Last Updated: March 24, 2026
+Total Files: ~155 files (108 Dart, 47 JavaScript/Node.js)
+
+================================================================================
+1. DIRECTORY STRUCTURE OVERVIEW
+================================================================================
+
+Root Level:
+  backend/                    - Node.js Express API server
+  testpro-main/              - Flutter mobile application
+  lib/                        - Shared Flutter lib (legacy)
+  [Documentation files]      - Phase reports and architecture docs
+
+================================================================================
+2. BACKEND STRUCTURE (Node.js/Express)
+================================================================================
+
+backend/src/
+  ├── config/                 - Firebase & environment config
+  ├── controllers/            - HTTP request/response handlers (postController.js)
+  ├── routes/                 - API endpoints (posts.js, interactions.js, etc)
+  ├── models/                 - Data models (post.model.js)
+  ├── repositories/           - SINGLE SOURCE OF TRUTH for DB queries
+  │   └── postRepository.js   - All Firestore post queries (452 lines)
+  ├── services/               - Business logic
+  │   ├── feedService.js      - FEED ENGINE (584 lines) - Main feed algorithm
+  │   ├── geoService.js       - Geographic operations
+  │   ├── userContextService.js - User preferences & cache
+  │   └── [other services]
+  ├── middleware/             - Express middleware (auth, validation, etc)
+  ├── utils/                  - Utilities (logger, geohash, pagination, etc)
+  ├── index.js                - Server entry point
+  └── app.js                  - Express app configuration
+
+KEY BACKEND FILES FOR FEED/POSTS:
+  File                              Lines  Purpose
+  ─────────────────────────────────────────────────────────────────────
+  services/feedService.js           584    FEED ENGINE - Core ranking & merge
+  repositories/postRepository.js     452    Single source of truth for queries
+  controllers/postController.js      583    HTTP request/response handlers
+  routes/posts.js                   523    API endpoints
+  models/post.model.js              ~150   Post schema validation
+  services/geoService.js             125   Geographic operations
+
+================================================================================
+3. FLUTTER APP STRUCTURE
+================================================================================
+
+testpro-main/lib/
+  ├── config/                 - App configuration
+  ├── core/                   - Core state & utilities
+  │   ├── state/              - STATE MANAGEMENT (CRITICAL)
+  │   │   ├── feed_controller.dart      - Mutable feed list operations
+  │   │   ├── feed_session.dart         - Session-level seen IDs tracking
+  │   │   ├── post_state.dart           - Central post store (Riverpod)
+  │   │   └── provider_container.dart   - Provider initialization
+  │   ├── auth/               - Authentication state
+  │   ├── events/             - Event broadcasting
+  │   ├── session/            - Session management
+  │   └── utils/              - Utilities
+  ├── models/                 - Data classes
+  │   ├── post.dart           - Post model (242 lines)
+  │   ├── paginated_response.dart - Pagination wrapper
+  │   └── api_response.dart   - API response model
+  ├── repositories/           - Data access layer
+  │   ├── post_repository.dart     - Post operations (300 lines)
+  │   ├── social_repository.dart   - Social features
+  │   └── user_repository.dart     - User operations
+  ├── services/               - Business logic & API calls
+  │   ├── backend_service.dart     - HTTP client facade (1249 lines)
+  │   ├── post_service.dart        - Post service (216 lines)
+  │   ├── auth_service.dart        - Authentication
+  │   ├── location_service.dart    - Location operations
+  │   └── [other services]
+  ├── screens/                - Full-screen UI pages
+  │   ├── feed_screen.dart         - Main feed (2540 lines)
+  │   ├── reels_feed_screen.dart   - Video feed (29080 lines)
+  │   ├── new_post_screen.dart     - Post creation
+  │   └── [other screens]
+  └── widgets/                - Reusable UI components
+      ├── feed/               - Feed components
+      │   ├── paginated_feed_list.dart - Paginated list widget
+      │   └── recommended_feed_list.dart
+      └── post/               - Post components
+          ├── post_card.dart
+          ├── post_action_row.dart
+          └── post_header.dart
+
+KEY FLUTTER FILES FOR FEED/POSTS:
+  File                                  Lines  Purpose
+  ───────────────────────────────────────────────────────────────────────
+  services/backend_service.dart         1249   HTTP client facade
+  core/state/post_state.dart             452   Central Riverpod store
+  core/state/feed_controller.dart        179   Mutable feed controller
+  repositories/post_repository.dart      300   Post data operations
+  services/post_service.dart             216   Post business logic
+  models/post.dart                       242   Post data class
+  screens/feed_screen.dart              2540   Main feed screen
+
+================================================================================
+4. FEED ENGINE ARCHITECTURE (Phase 4)
+================================================================================
+
+BACKEND HYBRID FEED PIPELINE (8 Steps):
+
+1. FETCH LOCAL POSTS (pageSize * 2)
+   └─ Query Firestore with geohash bounds
+
+2. FETCH GLOBAL POSTS (pageSize * 2)
+   └─ Query Firestore global collection
+
+3. MERGE SOURCES
+   └─ [local posts] + [global posts] = ~80 posts
+
+4. DEDUPLICATE
+   └─ Remove posts already seen by user via seenIds
+
+5. COMPUTE SCORES (Phase 4 - lightweight heuristic)
+   ├─ Recency Score (50% weight): 1/(1 + hoursOld)
+   ├─ Engagement Score (30%): (likes + comments*2 + views*0.1) / 100
+   └─ Distance Score (20%): 1/(1 + distanceKm)
+
+6. RANK BY SCORE
+   └─ Sort merged posts by computed score (descending)
+
+7. LIMIT TO PAGE SIZE
+   └─ Take top 20 posts after ranking
+
+8. BUILD CURSOR & RETURN
+   └─ nextCursor = {createdAt, postId, authorName}
+
+RANKING WEIGHTS:
+  - Recency (50%): Newer posts prioritized
+  - Engagement (30%): Likes, comments, views
+  - Distance (20%): Geographic proximity
+
+FEED TYPES:
+  - global: All users, worldwide scope, createdAt DESC + ranking
+  - local: Users within geohash, geographic bounds
+  - hybrid: local + global merged with ranking
+  - filtered: By author/category/city
+  - explore: Trending posts, engagement score DESC
+
+================================================================================
+5. DATABASE STRUCTURE (Firestore)
+================================================================================
+
+Posts Collection:
+  posts/{postId}
+    ├── authorId: string
+    ├── authorName: string
+    ├── authorProfileImage: string
+    ├── title: string
+    ├── body: string
+    ├── text: string (indexed)
+    ├── category: string (indexed)
+    ├── mediaUrl: string
+    ├── mediaType: string (image|video|none)
+    ├── scope: string (indexed) [local|global]
+    ├── latitude: number (indexed)
+    ├── longitude: number (indexed)
+    ├── geoHash: string (indexed for geo queries)
+    ├── createdAt: timestamp (indexed DESC)
+    ├── updatedAt: timestamp
+    ├── likeCount: number
+    ├── commentCount: number
+    ├── viewCount: number
+    ├── status: string [active|deleted|archived]
+    ├── isEvent: boolean
+    ├── eventStartDate: timestamp
+    ├── eventEndDate: timestamp
+    └── attendeeCount: number
+
+KEY INDEXES:
+  - createdAt DESC (primary sort for feed)
+  - scope + createdAt DESC (local feed)
+  - latitude, longitude, createdAt DESC (geo queries)
+  - authorId + createdAt DESC (author posts)
+  - category + createdAt DESC (category filter)
+
+================================================================================
+6. DEDUPLICATION STRATEGY
+===============================================================================

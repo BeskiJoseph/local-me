@@ -711,6 +711,7 @@ class _PersonalAccountState extends State<PersonalAccount>
               builder: (_) => PostReelsView(
                 posts: postOnlyItems,
                 startIndex: index,
+                authorId: profileUserId,
                 initialHasMore: _hasMore,
               ),
             ),

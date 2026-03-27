@@ -143,20 +143,18 @@ class PostController {
         if (cursor) {
           try {
             lastDocSnapshot = JSON.parse(cursor);
-            logger.debug(
-              { postId: lastDocSnapshot.postId, createdAt: lastDocSnapshot.createdAt },
-              '[Controller] Parsed cursor'
-            );
+            console.log(`[Controller] ✅ CURSOR PARSED:`, JSON.stringify(lastDocSnapshot));
           } catch (err) {
-            logger.warn({ cursor, error: err }, '[Controller] Invalid cursor format, ignoring');
-            // Continue without cursor - start from beginning
+            console.log(`[Controller] ❌ CURSOR PARSE ERROR:`, err.message);
           }
+        } else {
+          console.log(`[Controller] 📄 No cursor in request`);
         }
 
         // Calculate geohash bounds from coordinates
         const baseLat = parseFloat(lat);
         const baseLng = parseFloat(lng);
-        const precision = 9; // High detail geohash
+        const precision = 6; // Precision 6 ~ 1.2km (Better for discovery)
         const geohash = calculateGeohash(baseLat, baseLng, precision);
         const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
 
@@ -373,24 +371,47 @@ class PostController {
           req.sessionSeenIds.forEach(id => seenPostIds.add(id));
         }
 
-        // Parse cursor from JSON string
-        let lastDocSnapshot = null;
-        if (cursor) {
-          try {
-            lastDocSnapshot = JSON.parse(cursor);
-            logger.debug(
-              { postId: lastDocSnapshot.postId, createdAt: lastDocSnapshot.createdAt },
-              '[Controller] Parsed hybrid cursor'
-            );
-          } catch (err) {
-            logger.warn({ cursor, error: err }, '[Controller] Invalid hybrid cursor format, ignoring');
-          }
-        }
+         // Parse cursor from JSON string (can be single or dual cursor)
+         let dualCursor = { localCursor: null, globalCursor: null };
+         if (cursor) {
+           try {
+             const parsed = JSON.parse(cursor);
+             logger.debug(
+               { cursor: parsed },
+               '[Controller] Parsed cursor'
+             );
+             
+             // DUAL CURSOR: If it has localCursor/globalCursor fields, use as-is
+             if (parsed.localCursor || parsed.globalCursor) {
+               dualCursor = {
+                 localCursor: parsed.localCursor,
+                 globalCursor: parsed.globalCursor
+               };
+               logger.info(
+                 { localCursor: parsed.localCursor, globalCursor: parsed.globalCursor },
+                 '[Controller] Using dual cursor for pagination'
+               );
+             } 
+             // SINGLE CURSOR (backward compat): Convert old format to dual
+             else if (parsed.createdAt && parsed.id) {
+               dualCursor = {
+                 localCursor: parsed,
+                 globalCursor: parsed
+               };
+               logger.warn(
+                 { cursor: parsed },
+                 '[Controller] Converted single cursor to dual cursor (backward compatibility)'
+               );
+             }
+           } catch (err) {
+             logger.warn({ cursor, error: err }, '[Controller] Invalid cursor format, ignoring');
+           }
+         }
 
         // Calculate geohash bounds from coordinates
         const baseLat = parseFloat(lat);
         const baseLng = parseFloat(lng);
-        const precision = 9;
+        const precision = 6; // Precision 6 ~ 1.2km
         const geohash = calculateGeohash(baseLat, baseLng, precision);
         const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
 
@@ -399,18 +420,18 @@ class PostController {
           '[Controller] Calculated geohash for hybrid feed'
         );
 
-        // Get hybrid feed from service (MAIN FEED ENGINE)
-        const feedResult = await feedService.getHybridFeed({
-          latitude: baseLat,
-          longitude: baseLng,
-          geoHashMin,
-          geoHashMax,
-          seenPostIds,
-          pageSize,
-          lastDocSnapshot,
-          mediaType,
-          userContext
-        });
+         // Get hybrid feed from service (MAIN FEED ENGINE)
+         const feedResult = await feedService.getHybridFeed({
+           latitude: baseLat,
+           longitude: baseLng,
+           geoHashMin,
+           geoHashMax,
+           seenPostIds,
+           pageSize,
+           dualCursor,  // Changed from lastDocSnapshot to dualCursor
+           mediaType,
+           userContext
+         });
 
         logger.info(
           {
@@ -549,7 +570,7 @@ class PostController {
       if (lat && lng) {
         const baseLat = parseFloat(lat);
         const baseLng = parseFloat(lng);
-        const precision = 7; // Broader for explore
+        const precision = 6; // Standardized for discovery
         const geohash = calculateGeohash(baseLat, baseLng, precision);
         const bounds = getGeohashBounds(geohash);
         geoHashMin = bounds.min;

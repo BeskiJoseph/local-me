@@ -1,0 +1,142 @@
+================================================================================
+FEED ARCHITECTURE - VISUAL FLOWS
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HYBRID FEED GENERATION PIPELINE                          │
+│                     (Backend: feedService.js)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────┐
+│  User Request        │
+│  GET /posts          │
+│  feedType=global     │
+│  seenIds=[...]       │
+│  cursor={...}        │
+└──────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 1: FETCH LOCAL FEED (pageSize * 2 = 40 posts)                     │
+│   Query: WHERE geoHash in bounds AND status='active'                    │
+│           ORDER BY createdAt DESC, __name__ DESC                         │
+│   Result: 40 posts from user's geographic area                          │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 2: FETCH GLOBAL FEED (pageSize * 2 = 40 posts)                    │
+│   Query: WHERE status='active' AND createdAt < cursor.createdAt        │
+│           ORDER BY createdAt DESC, __name__ DESC                         │
+│   Result: 40 posts from all users                                        │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 3: MERGE (local first for geographic priority)                     │
+│   Result: [40 local posts] + [40 global posts] = 80 posts total        │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 4: DEDUPLICATE (remove already-seen posts)                         │
+│   For each post:                                                         │
+│     IF post.id in seenIds → SKIP                                        │
+│     ELSE → add to dedupedPosts                                          │
+│   Result: ~78 posts (2 duplicates removed)                              │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 5: COMPUTE SCORES (Phase 4 - Ranking)                             │
+│   For each post, calculate:                                             │
+│                                                                           │
+│   1. RECENCY SCORE (50% weight)                                         │
+│      recency = 1 / (1 + hoursOld)                                       │
+│      → Newer posts get higher scores                                    │
+│                                                                           │
+│   2. ENGAGEMENT SCORE (30% weight)                                      │
+│      engagement = min((likes + comments*2 + views*0.1) / 100, 1)      │
+│      → Popular posts boosted                                            │
+│                                                                           │
+│   3. DISTANCE SCORE (20% weight)                                        │
+│      distance = 1 / (1 + distanceKm)                                    │
+│      → Closer posts preferred (geographic relevance)                    │
+│                                                                           │
+│   FINAL SCORE = recency*0.5 + engagement*0.3 + distance*0.2             │
+│   Result: Each post now has a numeric score                             │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 6: SORT BY SCORE (descending)                                      │
+│   Sort 78 posts by final score (highest first)                          │
+│   Result: Posts ranked best-to-worst                                    │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 7: LIMIT TO PAGE SIZE                                              │
+│   Take top 20 posts (after ranking, after dedup)                        │
+│   Result: 20 best posts for this page                                   │
+└──────────────────────────────────────────────────────────────────────────┘
+        ↓
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Step 8: BUILD CURSOR & RETURN                                           │
+│   nextCursor = {                                                         │
+│     createdAt: lastPost.createdAt,  ← Use post time, NOT score          │
+│     postId: lastPost.id,             ← For tiebreaker                    │
+│     authorName: lastPost.authorName  ← Debug info                       │
+│   }                                                                       │
+│                                                                           │
+│   Response: {                                                            │
+│     success: true,                                                       │
+│     data: [20 posts with enrichment],                                    │
+│     pagination: {                                                        │
+│       nextCursor: {...},                                                │
+│       hasMore: true,                                                    │
+│       seenIds: [all 20 post IDs],                                       │
+│       mergeInfo: {                                                       │
+│         localPosts: 40,                                                 │
+│         globalPosts: 40,                                                │
+│         mergedTotal: 80,                                                │
+│         dedupedTotal: 78,                                               │
+│         finalTotal: 20,                                                 │
+│         rankingApplied: true                                            │
+│       }                                                                  │
+│     }                                                                    │
+│   }                                                                      │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                 CLIENT-SIDE FEED LOADING SEQUENCE                            │
+│                 (Flutter: feed_screen.dart & controller)                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ INITIAL LOAD (onScreenReady)                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+feed_screen.dart
+    ↓
+setState → FeedController.appendPosts(refresh: true)
+    ├─ _posts.clear()
+    ├─ hasMore = true
+    └─ isCycling = false
+    ↓
+PostService.getPostsPaginated(feedType: 'global', limit: 15)
+    ↓
+PostRepository.getPostsPaginated()
+    ├─ Get user location
+    ├─ Call BackendService.getPosts()
+    │   └─ GET /posts?feedType=global&limit=15&seenIds=...
+    ├─ Parse response: {data, pagination}
+    └─ Return: PaginatedResponse<Post>
+    ↓
+PostStoreNotifier.updateVisiblePosts(posts)
+    ├─ Update posts map: {postId: Post}
+    ├─ Update seenIds: {postId: DateTime}
+    ├─ Notify listeners
+    └─ Save lastCursors for pagination
+    ↓
+PaginatedFeedList rebuilds
+    ├─ ListView.builder shows 15 posts
+    ├─ Each post rendered as PostCard
+    └─ Bottom reaches "no more posts" indicator
+
+
+┌────────────────────────────

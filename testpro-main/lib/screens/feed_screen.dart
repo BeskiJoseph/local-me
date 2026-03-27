@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../config/app_theme.dart';
 import '../widgets/feed/paginated_feed_list.dart';
 import '../services/location_service.dart';
+import '../core/state/post_state.dart';
 
 /// Premium feed screen with Local and Global tabs
-class FeedScreen extends StatefulWidget {
+class FeedScreen extends ConsumerStatefulWidget {
   const FeedScreen({super.key});
 
   @override
-  State<FeedScreen> createState() => _FeedScreenState();
+  ConsumerState<FeedScreen> createState() => _FeedScreenState();
 }
 
-class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateMixin {
+class _FeedScreenState extends ConsumerState<FeedScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   int _currentTabIndex = 0;
 
@@ -21,7 +24,11 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (!_tabController.indexIsChanging) {
-        setState(() => _currentTabIndex = _tabController.index);
+        if (_currentTabIndex != _tabController.index) {
+          // 🔥 Reset seen state on tab switch to ensure fresh content perception
+          ref.read(postStoreProvider.notifier).clearSeen();
+          setState(() => _currentTabIndex = _tabController.index);
+        }
       }
     });
   }
@@ -68,13 +75,15 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
         ],
       ),
       // IndexedStack keeps both tabs alive
-      body: IndexedStack(
-        index: _currentTabIndex,
-        children: [
-          const PaginatedFeedList(feedType: 'local'),
-          const PaginatedFeedList(feedType: 'global'),
-        ],
-      ),
+      body: _currentTabIndex == 0
+          ? const PaginatedFeedList(
+              key: ValueKey('local_feed'),
+              feedType: 'local',
+            )
+          : const PaginatedFeedList(
+              key: ValueKey('global_feed'),
+              feedType: 'global',
+            ),
     );
   }
 }

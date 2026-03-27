@@ -8,7 +8,14 @@ import '../nextdoor_post_card.dart';
 
 class PostCard extends ConsumerStatefulWidget {
   final String postId;
-  const PostCard({super.key, required this.postId});
+  final String? feedType;
+
+  const PostCard({
+    super.key,
+    required this.postId,
+    this.feedType,
+  });
+
 
   @override
   ConsumerState<PostCard> createState() => _PostCardState();
@@ -31,6 +38,7 @@ class _PostCardState extends ConsumerState<PostCard> {
     return VisibilityDetector(
       key: ValueKey('post_${widget.postId}'),
       onVisibilityChanged: (info) {
+        if (!mounted) return;
         final notifier = ref.read(postStoreProvider.notifier);
         
         // 🔥 MARK AS SEEN: > 60% visibility
@@ -45,13 +53,19 @@ class _PostCardState extends ConsumerState<PostCard> {
         post: post,
         onTap: () {
           // ... existing tap logic ...
-          final allPostIds = ref.read(postStoreProvider.select((s) => s.postIds));
-          final allPosts = allPostIds
-              .map((id) => ref.read(postProvider(id)))
+          // 🔥 FIX: Use feed-specific IDs if available to avoid mixing global/local in Reels
+          final store = ref.read(postStoreProvider);
+          final List<String> feedIds = widget.feedType != null
+              ? (store.postIdsByFeedType[widget.feedType!] ?? [])
+              : store.postIds;
+          
+          final allPosts = feedIds
+              .map((id) => store.posts[id])
               .whereType<Post>()
               .toList();
               
           final index = allPosts.indexWhere((p) => p.id == post.id);
+
 
           Navigator.push(
             context,
@@ -59,7 +73,9 @@ class _PostCardState extends ConsumerState<PostCard> {
               builder: (_) => PostReelsView(
                 posts: allPosts,
                 startIndex: index >= 0 ? index : 0,
+                feedType: widget.feedType,
               ),
+
             ),
           );
         },

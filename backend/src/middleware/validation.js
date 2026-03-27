@@ -45,6 +45,7 @@ export const schemas = {
     watchedIds: Joi.string().allow(null, ''),
     mediaType: Joi.string().valid('none', 'image', 'video', 'audio').allow(null, ''),
     sid: Joi.string().allow(null, ''), // Session ID
+    cursor: Joi.string().allow(null, ''), // Composite cursor
     feedType: Joi.string().valid('local', 'global', 'filtered').allow(null, ''),
     authorId: Joi.string().allow(null, ''),
     category: Joi.string().allow(null, ''),

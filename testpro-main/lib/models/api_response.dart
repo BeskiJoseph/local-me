@@ -48,14 +48,15 @@ class ApiResponse<T> {
 
 class ApiResponsePagination {
   final bool hasMore;
-  final String? cursor;
+  final dynamic cursor;
 
   ApiResponsePagination({this.hasMore = false, this.cursor});
 
   factory ApiResponsePagination.fromJson(Map<String, dynamic> json) {
     return ApiResponsePagination(
       hasMore: json['hasMore'] as bool? ?? false,
-      cursor: json['cursor']?.toString() ?? json['nextCursor']?.toString(),
+      // Support both 'cursor' and 'nextCursor' from backend
+      cursor: json['nextCursor'] ?? json['cursor'],
     );
   }
 }

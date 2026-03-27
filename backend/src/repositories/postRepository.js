@@ -122,69 +122,64 @@ class PostRepository {
      mediaType = null
    }) {
      try {
-       let query = db.collection('posts')
-         .where('visibility', '==', 'public')
-         .where('status', '==', 'active')
-         .where('geoHash', '>=', geoHashMin)
-         .where('geoHash', '<=', geoHashMax);
+        // 🔥 CLEAN LOCAL FEED: No geoHash inequality, no distance orderBy
+        // Frontend handles ALL distance sorting — backend just returns recent posts
+        let query = db.collection('posts')
+          .where('visibility', '==', 'public')
+          .where('status', '==', 'active');
 
         if (mediaType && mediaType !== 'all') {
           query = query.where('mediaType', '==', mediaType);
         }
 
-       // DETERMINISTIC ORDERING: createdAt DESC
-       // This ensures:
-       // - Same result order on every call
-       // - Stable pagination (no jumping/duplicates)
-       query = query
-         .orderBy('createdAt', 'desc')
-         .limit(pageSize + 1); // Fetch one extra to determine hasMore
+        // ✅ ONLY these two orderBy — nothing else
+        query = query
+          .orderBy('createdAt', 'desc')
+          .orderBy(admin.firestore.FieldPath.documentId(), 'desc');
 
-        // CURSOR PAGINATION: Convert composite cursor or document snapshot
+        // Cursor pagination — MUST be applied BEFORE limit
         if (lastDocSnapshot) {
-          if (lastDocSnapshot._document) {
-            // Case 1: Real DocumentSnapshot (Ideal)
-            query = query.startAfter(lastDocSnapshot);
-          } else if (lastDocSnapshot.createdAt && lastDocSnapshot.postId) {
-            // Case 2: Composite object { createdAt, postId }
-            // Try to resolve the document first for the most accurate cursor
-            try {
-              const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
-              if (realDoc.exists) {
-                query = query.startAfter(realDoc);
-              } else {
-                // FALLBACK: Use field values for deterministic pagination even if doc is deleted
-                // Firestore allows startAfter(value1, value2...) matching the orderBy sequence
-                const createdAtDate = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
-                  ? lastDocSnapshot.createdAt 
-                  : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
-                  
-                query = query.startAfter(createdAtDate);
-                logger.info({ postId: lastDocSnapshot.postId }, '[PostRepo] Cursor doc missing, fell back to createdAt value');
-              }
-            } catch (err) {
-              logger.warn({ err }, '[PostRepo] Error resolving cursor doc, falling back to values');
-              const createdAtDate = admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
-              query = query.startAfter(createdAtDate);
+          try {
+            const createdAtValue = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
+              ? lastDocSnapshot.createdAt 
+              : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+            const docId = lastDocSnapshot.postId || lastDocSnapshot.id;
+            
+            if (createdAtValue && docId) {
+              query = query.startAfter(createdAtValue, docId);
+              console.log(`[PostRepo] ✅ CURSOR APPLIED: startAfter(${createdAtValue.toMillis()}, ${docId})`);
+            } else {
+              console.log(`[PostRepo] ⚠️ CURSOR INCOMPLETE: createdAt=${createdAtValue}, docId=${docId}`);
             }
+          } catch (err) {
+            console.log(`[PostRepo] ❌ CURSOR ERROR:`, err.message);
           }
+        } else {
+          console.log('[PostRepo] 📄 No cursor — fetching from beginning');
         }
 
+        query = query.limit(pageSize + 1);
+
         const snapshot = await query.get();
+        console.log(`[PostRepo] Local feed fetched: ${snapshot.size} posts (pageSize=${pageSize})`);
         const docs = snapshot.docs;
 
-        // Determine hasMore by fetching pageSize+1
         const hasMore = docs.length > pageSize;
-        const posts = docs.slice(0, pageSize).map(doc => mapDocToPost(doc));
+        const finalDocs = docs.slice(0, pageSize);
+        const posts = finalDocs.map(doc => mapDocToPost(doc));
+
+        // 🔥 CRITICAL: lastDoc is from FIRESTORE ORDER (createdAt DESC)
+        // NOT from any re-sorted order.
+        const lastDoc = finalDocs.length > 0 ? finalDocs[finalDocs.length - 1] : null;
 
         return {
           posts,
-          lastDoc: docs.length > 0 ? docs[Math.min(docs.length - 1, pageSize - 1)] : null,
+          lastDoc,
           hasMore,
           totalFetched: posts.length
         };
      } catch (error) {
-       logger.error({ geoHashMin, geoHashMax, error }, '[PostRepo] Error fetching local feed');
+       logger.error({ error }, '[PostRepo] Error fetching local feed');
        throw error;
      }
    }
@@ -220,32 +215,54 @@ class PostRepository {
         // DETERMINISTIC ORDERING: createdAt DESC
         query = query
           .orderBy('createdAt', 'desc')
+          .orderBy(admin.firestore.FieldPath.documentId(), 'desc') // Deterministic secondary sort
           .limit(pageSize + 1);
 
         // CURSOR PAGINATION: values fallback
         if (lastDocSnapshot) {
           if (lastDocSnapshot._document) {
-            query = query.startAfter(lastDocSnapshot);
-          } else if (lastDocSnapshot.createdAt && lastDocSnapshot.postId) {
+            // 🔥 CRITICAL: Extract field values, don't pass document snapshot alone
+            const createdAtValue = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
+              ? lastDocSnapshot.createdAt 
+              : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+            const docId = lastDocSnapshot.id;
+            query = query.startAfter(createdAtValue, docId);
+            logger.info({ docId }, '[PostRepo] 🔥 Global: Using DocumentSnapshot field values: startAfter(createdAt, docId)');
+          } else if (lastDocSnapshot.createdAt && (lastDocSnapshot.postId || lastDocSnapshot.id)) {
             try {
-              const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
+              const targetId = lastDocSnapshot.postId || lastDocSnapshot.id;
+              const realDoc = await db.collection('posts').doc(targetId).get();
               if (realDoc.exists) {
-                query = query.startAfter(realDoc);
+                // 🔥 CRITICAL: Extract field values, don't pass document snapshot
+                const createdAtValue = realDoc.get('createdAt');
+                query = query.startAfter(createdAtValue, realDoc.id);
+                logger.info({ docId: realDoc.id }, '[PostRepo] 🔥 Global: Resolved doc found - using COMPOUND startAfter(createdAt, docId)');
               } else {
+                // FALLBACK: Use COMPOUND field values matching the orderBy sequence
+                // orderBy('createdAt', 'desc').orderBy(docId, 'desc')
+                // MUST use startAfter(createdAtDate, docId) not just createdAtDate
                 const createdAtDate = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
                   ? lastDocSnapshot.createdAt 
                   : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
-                query = query.startAfter(createdAtDate);
-                logger.info({ postId: lastDocSnapshot.postId }, '[PostRepo] Global: Cursor doc missing, fell back to value');
+                
+                const docId = lastDocSnapshot.postId || lastDocSnapshot.id;
+                query = query.startAfter(createdAtDate, docId);
+                logger.info({ 
+                  postId: docId,
+                  createdAt: createdAtDate
+                }, '[PostRepo] 🔥 Global: COMPOUND startAfter(createdAt, docId)');
               }
             } catch (err) {
               const createdAtDate = admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
-              query = query.startAfter(createdAtDate);
+              const docId = lastDocSnapshot.postId || lastDocSnapshot.id;
+              query = query.startAfter(createdAtDate, docId);
+              logger.warn({ err, postId: docId }, '[PostRepo] 🔥 Global: Error resolving doc, using COMPOUND values');
             }
           }
         }
 
         const snapshot = await query.get();
+        console.log(`[PostRepo] Global feed snapshot size: ${snapshot.size}`);
         const docs = snapshot.docs;
 
         // Determine hasMore
@@ -293,30 +310,46 @@ class PostRepository {
         if (country) query = query.where('country', '==', country);
         if (mediaType && mediaType !== 'all') query = query.where('mediaType', '==', mediaType);
 
-        // DETERMINISTIC ORDERING: createdAt DESC
+        // DETERMINISTIC ORDERING: createdAt DESC + docId DESC
         query = query
           .orderBy('createdAt', 'desc')
+          .orderBy(admin.firestore.FieldPath.documentId(), 'desc')
           .limit(pageSize + 1);
 
         // CURSOR PAGINATION: values fallback
         if (lastDocSnapshot) {
           if (lastDocSnapshot._document) {
-            query = query.startAfter(lastDocSnapshot);
-          } else if (lastDocSnapshot.createdAt && lastDocSnapshot.postId) {
+            // 🔥 CRITICAL: Extract field values, don't pass document snapshot alone
+            const createdAtValue = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
+              ? lastDocSnapshot.createdAt 
+              : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
+            const docId = lastDocSnapshot.id;
+            query = query.startAfter(createdAtValue, docId);
+            logger.info({ docId }, '[PostRepo] 🔥 Filtered: Using DocumentSnapshot field values: startAfter(createdAt, docId)');
+          } else if (lastDocSnapshot.createdAt && (lastDocSnapshot.postId || lastDocSnapshot.id)) {
             try {
-              const realDoc = await db.collection('posts').doc(lastDocSnapshot.postId).get();
+              const targetId = lastDocSnapshot.postId || lastDocSnapshot.id;
+              const realDoc = await db.collection('posts').doc(targetId).get();
               if (realDoc.exists) {
-                query = query.startAfter(realDoc);
+                // 🔥 CRITICAL: Extract field values, don't pass document snapshot
+                const createdAtValue = realDoc.get('createdAt');
+                query = query.startAfter(createdAtValue, realDoc.id);
+                logger.info({ docId: realDoc.id }, '[PostRepo] 🔥 Filtered: Resolved doc found - using COMPOUND startAfter(createdAt, docId)');
               } else {
+                // FALLBACK: Use COMPOUND field values matching the orderBy sequence
                 const createdAtDate = lastDocSnapshot.createdAt instanceof admin.firestore.Timestamp 
                   ? lastDocSnapshot.createdAt 
                   : admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
-                query = query.startAfter(createdAtDate);
-                logger.info({ postId: lastDocSnapshot.postId }, '[PostRepo] Filtered: Cursor doc missing, fell back to value');
+                
+                const docId = lastDocSnapshot.postId || lastDocSnapshot.id;
+                query = query.startAfter(createdAtDate, docId);
+                logger.info({ postId: docId }, '[PostRepo] 🔥 Filtered: COMPOUND startAfter(createdAt, docId)');
               }
             } catch (err) {
               const createdAtDate = admin.firestore.Timestamp.fromMillis(Number(lastDocSnapshot.createdAt));
-              query = query.startAfter(createdAtDate);
+              const docId = lastDocSnapshot.postId || lastDocSnapshot.id;
+              query = query.startAfter(createdAtDate, docId);
+              logger.warn({ err, postId: docId }, '[PostRepo] 🔥 Filtered: Error resolving doc, using COMPOUND values');
             }
           }
         }
@@ -372,6 +405,7 @@ class PostRepository {
 
       query = query
         .orderBy('createdAt', 'desc')
+        .orderBy(admin.firestore.FieldPath.documentId(), 'desc')
         .limit(pageSize);
 
       if (lastDocSnapshot) {

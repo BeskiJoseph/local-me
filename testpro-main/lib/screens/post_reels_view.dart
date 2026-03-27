@@ -64,9 +64,7 @@ class _PostReelsViewState extends State<PostReelsView> {
   @override
   void initState() {
     super.initState();
-    debugPrint(
-      '📽️ REELS OPENED: hasMore=${widget.initialHasMore}',
-    );
+    debugPrint('📽️ REELS OPENED: hasMore=${widget.initialHasMore}');
     _activeTabIndex = widget.feedType == 'global' ? 1 : 0;
     _horizontalController = PageController(initialPage: _activeTabIndex);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -88,40 +86,55 @@ class _PostReelsViewState extends State<PostReelsView> {
 
   @override
   Widget build(BuildContext context) {
+    final isProfileMode = widget.authorId != null;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          PageView(
-            controller: _horizontalController,
-            onPageChanged: _onPageChanged,
-            children: [
-              // LOCAL TAB
-              ReelsVerticalFeed(
-                feedType: 'local',
-                initialPosts: widget.feedType == 'local' ? widget.posts : [],
-                startIndex: widget.feedType == 'local' ? widget.startIndex : 0,
-                postId: widget.feedType == 'local' ? widget.postId : null,
-                userCity: widget.userCity,
-                userCountry: widget.userCountry,
-                initialHasMore: widget.initialHasMore,
-                isActiveTab: _activeTabIndex == 0,
-              ),
-              // GLOBAL TAB
-              ReelsVerticalFeed(
-                feedType: 'global',
-                initialPosts: widget.feedType == 'global' ? widget.posts : [],
-                startIndex: widget.feedType == 'global' ? widget.startIndex : 0,
-                postId: widget.feedType == 'global' ? widget.postId : null,
-                userCity: widget.userCity,
-                userCountry: widget.userCountry,
-                initialHasMore: widget.initialHasMore,
-                isActiveTab: _activeTabIndex == 1,
-              ),
-            ],
-          ),
+          if (isProfileMode)
+            ReelsVerticalFeed(
+              feedType: 'profile', // Unique feed type for profiles
+              initialPosts: widget.posts,
+              startIndex: widget.startIndex,
+              postId: widget.postId,
+              authorId: widget.authorId,
+              initialHasMore: widget.initialHasMore,
+              isActiveTab: true,
+            )
+          else
+            PageView(
+              controller: _horizontalController,
+              onPageChanged: _onPageChanged,
+              children: [
+                // LOCAL TAB
+                ReelsVerticalFeed(
+                  feedType: 'local',
+                  initialPosts: widget.feedType == 'local' ? widget.posts : [],
+                  startIndex: widget.feedType == 'local' ? widget.startIndex : 0,
+                  postId: widget.feedType == 'local' ? widget.postId : null,
+                  userCity: widget.userCity,
+                  userCountry: widget.userCountry,
+                  initialHasMore: widget.initialHasMore,
+                  isActiveTab: _activeTabIndex == 0,
+                  authorId: widget.authorId,
+                ),
+                // GLOBAL TAB
+                ReelsVerticalFeed(
+                  feedType: 'global',
+                  initialPosts: widget.feedType == 'global' ? widget.posts : [],
+                  startIndex: widget.feedType == 'global' ? widget.startIndex : 0,
+                  postId: widget.feedType == 'global' ? widget.postId : null,
+                  userCity: widget.userCity,
+                  userCountry: widget.userCountry,
+                  initialHasMore: widget.initialHasMore,
+                  isActiveTab: _activeTabIndex == 1,
+                  authorId: widget.authorId,
+                ),
+              ],
+            ),
 
-          // Top Header (Nearby | Global)
+          // Top Header
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -135,26 +148,28 @@ class _PostReelsViewState extends State<PostReelsView> {
                     ),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
-                  const SizedBox(width: 8),
-                  _TabButton(
-                    label: 'Nearby',
-                    isActive: _activeTabIndex == 0,
-                    onTap: () => _horizontalController.animateToPage(
-                      0,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
+                  if (!isProfileMode) ...[
+                    const SizedBox(width: 8),
+                    _TabButton(
+                      label: 'Nearby',
+                      isActive: _activeTabIndex == 0,
+                      onTap: () => _horizontalController.animateToPage(
+                        0,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 24),
-                  _TabButton(
-                    label: 'Global',
-                    isActive: _activeTabIndex == 1,
-                    onTap: () => _horizontalController.animateToPage(
-                      1,
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
+                    const SizedBox(width: 24),
+                    _TabButton(
+                      label: 'Global',
+                      isActive: _activeTabIndex == 1,
+                      onTap: () => _horizontalController.animateToPage(
+                        1,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -218,6 +233,7 @@ class ReelsVerticalFeed extends ConsumerStatefulWidget {
   final String? postId;
   final String? userCity;
   final String? userCountry;
+  final String? authorId;
   final bool initialHasMore;
 
   final bool isActiveTab;
@@ -230,6 +246,7 @@ class ReelsVerticalFeed extends ConsumerStatefulWidget {
     this.postId,
     this.userCity,
     this.userCountry,
+    this.authorId,
     required this.isActiveTab,
     this.initialHasMore = true,
   });
@@ -255,23 +272,32 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
     } else {
       Future.microtask(() {
         if (!mounted) return;
-        ref.read(postStoreProvider.notifier).registerPosts(widget.initialPosts);
+        ref
+            .read(postStoreProvider.notifier)
+            .registerPosts(widget.initialPosts, forFeedType: widget.feedType);
       });
     }
   }
 
   Future<void> _loadFeed() async {
     try {
-      final response = await PostService.getPostsPaginated(
-        feedType: widget.feedType,
-        userCity: widget.userCity,
-        userCountry: widget.userCountry,
-        mediaType: 'video',
-        limit: 20,
-      );
+      final response = (widget.authorId != null)
+          ? await PostService.getFilteredPostsPaginated(
+              authorId: widget.authorId,
+              limit: 20,
+            )
+          : await PostService.getPostsPaginated(
+              feedType: widget.feedType,
+              userCity: widget.userCity,
+              userCountry: widget.userCountry,
+              mediaType: 'video',
+              limit: 20,
+            );
 
       if (mounted) {
-        ref.read(postStoreProvider.notifier).registerPosts(response.data);
+        ref
+            .read(postStoreProvider.notifier)
+            .registerPosts(response.data, forFeedType: widget.feedType);
       }
     } catch (e) {
       debugPrint('Error loading Reels: $e');
@@ -283,6 +309,7 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
     super.build(context);
     return PaginatedFeedList(
       feedType: widget.feedType,
+      authorId: widget.authorId,
       userCity: widget.userCity,
       userCountry: widget.userCountry,
       layoutType: FeedLayoutType.paged,
@@ -333,7 +360,9 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
     // 🔥 Ensure post is initialized in global state for real-time sync
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
+        ref.read(postStoreProvider.notifier).registerPosts([
+          widget.post,
+        ], forFeedType: 'reels');
       }
     });
   }
@@ -344,7 +373,9 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
 
     // Update global state if widget post changes
     if (oldWidget.post.id != widget.post.id) {
-      ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
+      ref.read(postStoreProvider.notifier).registerPosts([
+        widget.post,
+      ], forFeedType: 'reels');
     }
 
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
@@ -385,7 +416,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
   void _handleDoubleTap() async {
     final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
     if (!post.isLiked) _toggleLike();
-    
+
     final heartKey = UniqueKey();
     setState(() => _activeHearts.add(heartKey));
     Future.delayed(const Duration(milliseconds: 800), () {
@@ -418,7 +449,9 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
       if (!mounted) return;
 
       // 2. Race Check
-      final latestVersion = ref.read(postActionVersionProvider((postId, 'like')));
+      final latestVersion = ref.read(
+        postActionVersionProvider((postId, 'like')),
+      );
       if (latestVersion != version) return;
 
       if (!response.success) {
@@ -459,7 +492,9 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
       if (!mounted) return;
 
       // 2. Race Check
-      final latestVersion = ref.read(postActionVersionProvider((postId, 'follow')));
+      final latestVersion = ref.read(
+        postActionVersionProvider((postId, 'follow')),
+      );
       if (latestVersion != version) return;
 
       if (!res.success) {
@@ -492,12 +527,12 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
       onVisibilityChanged: (info) {
         if (mounted) {
           // 🔥 Core Fix: Track visibility for global memory pruning
-          ref.read(postStoreProvider.notifier).setVisible(widget.post.id, info.visibleFraction > 0.1);
+          ref
+              .read(postStoreProvider.notifier)
+              .setVisible(widget.post.id, info.visibleFraction > 0.1);
         }
-        
-        if (info.visibleFraction > 0.8 &&
-            widget.isCurrentPage &&
-            mounted) {
+
+        if (info.visibleFraction > 0.8 && widget.isCurrentPage && mounted) {
           _videoController?.play();
           // 🔥 MARK AS SEEN: Trigger Soft Seen system for Reels
           ref.read(postStoreProvider.notifier).markAsSeen(widget.post.id);

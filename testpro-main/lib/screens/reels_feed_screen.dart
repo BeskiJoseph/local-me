@@ -45,14 +45,19 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
   Future<void> _loadPosts() async {
     setState(() => _isLoading = true);
     final result = await BackendService.getPosts(
-      lat: widget.feedType == 'global' ? null : null, // Reels expansion placeholder
+      feedType: widget.feedType,
+      lat: widget.feedType == 'global'
+          ? null
+          : null, // Reels expansion placeholder
       country: widget.userCountry,
       limit: 20,
     );
-    
+
     if (result.success && mounted) {
       final data = result.data ?? [];
-      final loadedPosts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      final loadedPosts = data
+          .map((json) => Post.fromJson(json as Map<String, dynamic>))
+          .toList();
       loadedPosts.shuffle();
       setState(() {
         _posts = loadedPosts;
@@ -60,9 +65,9 @@ class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
       });
     } else if (mounted) {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(safeErrorMessage(result.error))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(safeErrorMessage(result.error))));
     }
   }
 
@@ -106,12 +111,12 @@ class _ReelPostItemState extends State<ReelPostItem> {
   bool _isLikeBusy = false;
   bool _isFollowed = false;
   bool _isFollowBusy = false;
-  
+
   // Use Future instead of Stream for one-shot data to prevent API calls on every rebuild
   Future<bool>? _isLikedFuture;
   Future<bool>? _isFollowedFuture;
   Future<List<Comment>>? _commentsFuture;
-  
+
   // Cache results to avoid redundant API calls
   bool? _cachedIsLiked;
   bool? _cachedIsFollowed;
@@ -127,16 +132,20 @@ class _ReelPostItemState extends State<ReelPostItem> {
       _initializeMedia();
     }
   }
-  
+
   void _initializeFutures() {
     final user = AuthService.currentUser;
     if (user != null && _cachedIsLiked == null) {
       _isLikedFuture = SocialService.isPostLiked(widget.post.id, user.uid)
         ..then((value) => _cachedIsLiked = value);
     }
-    if (user != null && user.uid != widget.post.authorId && _cachedIsFollowed == null) {
-      _isFollowedFuture = SocialService.isUserFollowed(user.uid, widget.post.authorId)
-        ..then((value) => _cachedIsFollowed = value);
+    if (user != null &&
+        user.uid != widget.post.authorId &&
+        _cachedIsFollowed == null) {
+      _isFollowedFuture = SocialService.isUserFollowed(
+        user.uid,
+        widget.post.authorId,
+      )..then((value) => _cachedIsFollowed = value);
     }
     if (_cachedComments == null) {
       _commentsFuture = CommentService.getComments(widget.post.id)
@@ -172,18 +181,20 @@ class _ReelPostItemState extends State<ReelPostItem> {
 
   void _initializeMedia() {
     if (widget.post.mediaType == 'video' && widget.post.mediaUrl != null) {
-      _videoController = VideoPlayerController.networkUrl(
-        Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!)),
-      )..initialize().then((_) {
-        if (!mounted) return;
-        setState(() {
-          _isInitialized = true;
-        });
-        if (widget.isCurrentPage) {
-          _videoController?.play();
-        }
-        _videoController?.setLooping(true);
-      });
+      _videoController =
+          VideoPlayerController.networkUrl(
+              Uri.parse(ProxyHelper.getUrl(widget.post.mediaUrl!)),
+            )
+            ..initialize().then((_) {
+              if (!mounted) return;
+              setState(() {
+                _isInitialized = true;
+              });
+              if (widget.isCurrentPage) {
+                _videoController?.play();
+              }
+              _videoController?.setLooping(true);
+            });
     }
   }
 
@@ -241,7 +252,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
             child: Column(
               children: [
                 const Spacer(),
-                
+
                 // Bottom content
                 Padding(
                   padding: const EdgeInsets.all(16),
@@ -258,9 +269,12 @@ class _ReelPostItemState extends State<ReelPostItem> {
                             GestureDetector(
                               onTap: () {
                                 final currentUser = AuthService.currentUser;
-                                if (currentUser != null && 
+                                if (currentUser != null &&
                                     widget.post.authorId != currentUser.uid) {
-                                  NavigationUtils.navigateToProfile(context, widget.post.authorId);
+                                  NavigationUtils.navigateToProfile(
+                                    context,
+                                    widget.post.authorId,
+                                  );
                                 }
                               },
                               child: Row(
@@ -274,7 +288,8 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           widget.post.authorName,
@@ -288,7 +303,9 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                           Text(
                                             widget.post.city!,
                                             style: TextStyle(
-                                              color: Colors.white.withValues(alpha: 0.7),
+                                              color: Colors.white.withValues(
+                                                alpha: 0.7,
+                                              ),
                                               fontSize: 12,
                                             ),
                                           ),
@@ -299,7 +316,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                               ),
                             ),
                             const SizedBox(height: 12),
-                            
+
                             // Title
                             Text(
                               widget.post.title,
@@ -312,7 +329,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 8),
-                            
+
                             // Description
                             Text(
                               widget.post.body,
@@ -324,7 +341,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 8),
-                            
+
                             // Category
                             Container(
                               padding: const EdgeInsets.symmetric(
@@ -347,9 +364,9 @@ class _ReelPostItemState extends State<ReelPostItem> {
                           ],
                         ),
                       ),
-                      
+
                       const SizedBox(width: 16),
-                      
+
                       // Right side - Action buttons
                       Column(
                         mainAxisSize: MainAxisSize.min,
@@ -429,12 +446,13 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                   borderRadius: BorderRadius.circular(2),
                                 ),
                               ),
-                              
+
                               // Header
                               Padding(
                                 padding: const EdgeInsets.all(16),
                                 child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Comments',
@@ -454,14 +472,14 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                   ],
                                 ),
                               ),
-                              
+
                               const Divider(height: 1),
-                              
+
                               // Comments list
                               Expanded(
                                 child: _buildCommentsList(scrollController),
                               ),
-                              
+
                               // Comment input
                               _buildCommentInput(),
                             ],
@@ -528,15 +546,11 @@ class _ReelPostItemState extends State<ReelPostItem> {
   Widget _buildLikeButton() {
     final user = AuthService.currentUser;
     if (user == null) {
-      return _actionButton(
-        Icons.favorite_border,
-        '0',
-        () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please login to like posts')),
-          );
-        },
-      );
+      return _actionButton(Icons.favorite_border, '0', () {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please login to like posts')),
+        );
+      });
     }
 
     return FutureBuilder<bool>(
@@ -559,12 +573,15 @@ class _ReelPostItemState extends State<ReelPostItem> {
             setState(() {
               _isLikeBusy = true;
               _isLiked = nextLiked;
-              _likeCount = (previousCount + (nextLiked ? 1 : -1)).clamp(0, 1 << 30);
+              _likeCount = (previousCount + (nextLiked ? 1 : -1)).clamp(
+                0,
+                1 << 30,
+              );
             });
             try {
               final response = await BackendService.toggleLike(widget.post.id);
               if (!response.success) throw response.error ?? "Failed";
-              
+
               // Trust the toggle response - no extra API call needed
               // The optimistic update already set the UI state
             } catch (e) {
@@ -573,9 +590,9 @@ class _ReelPostItemState extends State<ReelPostItem> {
                 _isLiked = previousLiked;
                 _likeCount = previousCount;
               });
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                SnackBar(content: Text('Error: $e')),
-              );
+              ScaffoldMessenger.of(
+                this.context,
+              ).showSnackBar(SnackBar(content: Text('Error: $e')));
             } finally {
               if (mounted) {
                 setState(() {
@@ -604,16 +621,12 @@ class _ReelPostItemState extends State<ReelPostItem> {
   }
 
   Widget _buildShareButton() {
-    return _actionButton(
-      Icons.share_outlined,
-      'Share',
-      () {
-        // TODO: Implement share functionality
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Share feature coming soon!')),
-        );
-      },
-    );
+    return _actionButton(Icons.share_outlined, 'Share', () {
+      // TODO: Implement share functionality
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Share feature coming soon!')),
+      );
+    });
   }
 
   Widget _buildFollowButton() {
@@ -642,16 +655,18 @@ class _ReelPostItemState extends State<ReelPostItem> {
               _isFollowed = !previous;
             });
             try {
-              final response = await BackendService.toggleFollow(widget.post.authorId);
+              final response = await BackendService.toggleFollow(
+                widget.post.authorId,
+              );
               if (!response.success) throw response.error ?? "Failed";
             } catch (e) {
               if (!mounted) return;
               setState(() {
                 _isFollowed = previous;
               });
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                SnackBar(content: Text('Error: $e')),
-              );
+              ScaffoldMessenger.of(
+                this.context,
+              ).showSnackBar(SnackBar(content: Text('Error: $e')));
             } finally {
               if (mounted) {
                 setState(() {
@@ -678,11 +693,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
         children: [
           Container(
             padding: const EdgeInsets.all(8),
-            child: Icon(
-              icon,
-              color: color ?? Colors.white,
-              size: 32,
-            ),
+            child: Icon(icon, color: color ?? Colors.white, size: 32),
           ),
           Text(
             label,
@@ -701,16 +712,15 @@ class _ReelPostItemState extends State<ReelPostItem> {
     return FutureBuilder<List<Comment>>(
       future: _commentsFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && _cachedComments == null) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            _cachedComments == null) {
           return const Center(child: CircularProgressIndicator());
         }
 
         final comments = snapshot.data ?? _cachedComments ?? [];
-        
+
         if (comments.isEmpty) {
-          return const Center(
-            child: Text('No comments yet. Be the first!'),
-          );
+          return const Center(child: Text('No comments yet. Be the first!'));
         }
 
         return ListView.builder(
@@ -726,7 +736,10 @@ class _ReelPostItemState extends State<ReelPostItem> {
               ),
               title: Text(
                 comment.authorName,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
               ),
               subtitle: Text(comment.text),
             );
@@ -789,29 +802,42 @@ class _ReelPostItemState extends State<ReelPostItem> {
                       postId: widget.post.id,
                       text: text,
                       authorId: user.uid,
-                      authorName: user.displayName ?? user.email?.split('@')[0] ?? 'You',
+                      authorName:
+                          user.displayName ??
+                          user.email?.split('@')[0] ??
+                          'You',
                       authorProfileImage: user.photoURL,
                       createdAt: DateTime.now(),
                     );
                     setState(() {
-                      _cachedComments = [...(_cachedComments ?? []), tempComment];
+                      _cachedComments = [
+                        ...(_cachedComments ?? []),
+                        tempComment,
+                      ];
                     });
 
-                    final response = await BackendService.addComment(widget.post.id, text);
+                    final response = await BackendService.addComment(
+                      widget.post.id,
+                      text,
+                    );
                     if (!response.success && mounted) {
                       // Remove temp comment on failure
                       setState(() {
-                        _cachedComments?.removeWhere((c) => c.id == tempComment.id);
+                        _cachedComments?.removeWhere(
+                          (c) => c.id == tempComment.id,
+                        );
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Error: ${response.error}')),
                       );
                     } else if (mounted) {
                       // Sync with server in background
-                      _commentsFuture = CommentService.getComments(widget.post.id)
-                        ..then((value) {
-                          if (mounted) setState(() => _cachedComments = value);
-                        });
+                      _commentsFuture =
+                          CommentService.getComments(widget.post.id)
+                            ..then((value) {
+                              if (mounted)
+                                setState(() => _cachedComments = value);
+                            });
                     }
                   }
                 },

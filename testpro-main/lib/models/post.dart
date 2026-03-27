@@ -17,6 +17,7 @@ class Post {
   final String? country;
   final String category;
   final String? thumbnailUrl;
+  final String? geoHash;
   
   // Event fields
   final bool isEvent;
@@ -67,12 +68,14 @@ class Post {
     this.viewCount = 0,
     this.isFollowing = false,
     this.isBookmarked = false,
+    this.geoHash,
   });
 
   factory Post.fromJson(Map<String, dynamic> json) {
     DateTime parseDate(dynamic date) {
       if (date == null) return DateTime.now();
       if (date is DateTime) return date;
+      if (date is int) return DateTime.fromMillisecondsSinceEpoch(date);
       if (date is String) return DateTime.tryParse(date) ?? DateTime.now();
       if (date is Map && date.containsKey('_seconds')) {
          return DateTime.fromMillisecondsSinceEpoch(date['_seconds'] * 1000);
@@ -128,6 +131,7 @@ class Post {
       viewCount: json['viewCount'] as int? ?? 0,
       isFollowing: json['isFollowing'] ?? false,
       isBookmarked: json['isBookmarked'] ?? false,
+      geoHash: json['geoHash'] as String?,
     );
   }
 
@@ -166,6 +170,7 @@ class Post {
       'viewCount': viewCount,
       'isFollowing': isFollowing,
       'isBookmarked': isBookmarked,
+      'geoHash': geoHash,
     };
   }
 
@@ -202,6 +207,7 @@ class Post {
     int? viewCount,
     bool? isFollowing,
     bool? isBookmarked,
+    String? geoHash,
   }) {
     return Post(
       id: id ?? this.id,
@@ -236,6 +242,7 @@ class Post {
       viewCount: viewCount ?? this.viewCount,
       isFollowing: isFollowing ?? this.isFollowing,
       isBookmarked: isBookmarked ?? this.isBookmarked,
+      geoHash: geoHash ?? this.geoHash,
     );
   }
 }

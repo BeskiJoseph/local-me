@@ -50,7 +50,8 @@ class NextdoorStylePostCard extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<NextdoorStylePostCard> createState() => _NextdoorStylePostCardState();
+  ConsumerState<NextdoorStylePostCard> createState() =>
+      _NextdoorStylePostCardState();
 }
 
 class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
@@ -59,21 +60,14 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
   @override
   void initState() {
     super.initState();
-    // Register post in store on load
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
-      }
-    });
   }
+
 
   @override
   void didUpdateWidget(NextdoorStylePostCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.post.id != widget.post.id && mounted) {
-       ref.read(postStoreProvider.notifier).registerPosts([widget.post]);
-    }
   }
+
 
   @override
   void dispose() {
@@ -81,8 +75,6 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
     // if it might crash the app.
     super.dispose();
   }
-
-
 
   void _handleLike() async {
     final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
@@ -106,11 +98,13 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
 
     try {
       final response = await BackendService.toggleLike(postId);
-      
+
       if (!mounted) return;
 
       // 2. Race Condition Check
-      final latestVersion = ref.read(postActionVersionProvider((postId, 'like')));
+      final latestVersion = ref.read(
+        postActionVersionProvider((postId, 'like')),
+      );
       if (latestVersion != version) return;
 
       if (!response.success) {
@@ -131,13 +125,13 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
         }
       }
     } catch (e) {
-       if (mounted) {
-         notifier.updatePostPartially(postId, {
-           'isLiked': isLiked,
-           'likeCount': likeCount,
-         });
-         _showSnackbarError("An error occurred.");
-       }
+      if (mounted) {
+        notifier.updatePostPartially(postId, {
+          'isLiked': isLiked,
+          'likeCount': likeCount,
+        });
+        _showSnackbarError("An error occurred.");
+      }
     }
   }
 
@@ -171,15 +165,15 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
       try {
         await PostService.deletePost(widget.post.id);
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Post deleted')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Post deleted')));
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(safeErrorMessage(e))),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(safeErrorMessage(e))));
         }
       }
     }
@@ -197,10 +191,10 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
     notifier.updatePostPartially(postId, {'isBookmarked': newTarget});
 
     try {
-      final response = newTarget 
+      final response = newTarget
           ? await BackendService.savePost(postId)
           : await BackendService.unsavePost(postId);
-      
+
       if (!mounted) return;
 
       if (!response.success) {
@@ -208,10 +202,10 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
         _showSnackbarError("Unable to update save. Please try again.");
       }
     } catch (e) {
-       if (mounted) {
-         notifier.updatePostPartially(postId, {'isBookmarked': isBookmarked});
-         _showSnackbarError("An error occurred.");
-       }
+      if (mounted) {
+        notifier.updatePostPartially(postId, {'isBookmarked': isBookmarked});
+        _showSnackbarError("An error occurred.");
+      }
     }
   }
 
@@ -227,103 +221,128 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
     final currentCommentCount = post.commentCount;
     final currentIsBookmarked = post.isBookmarked;
 
+    // Seen tracking (Soft Seen)
+    final isSeen = ref.watch(postStoreProvider.notifier).isSoftSeen(post.id);
+
     return VisibilityDetector(
       key: ValueKey('post_card_visibility_${post.id}'),
       onVisibilityChanged: (info) {
         if (mounted) {
-          ref.read(postStoreProvider.notifier).setVisible(post.id, info.visibleFraction > 0.1);
+          final notifier = ref.read(postStoreProvider.notifier);
+          notifier.setVisible(post.id, info.visibleFraction > 0.1);
+
+          // Analytics-only seen tracking (visible > 60%)
+          if (info.visibleFraction > 0.6) {
+            notifier.markAsSeen(post.id);
+          }
         }
       },
       child: GestureDetector(
         onTap: widget.onTap,
-        child: ColoredBox(
-          color: Colors.white,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-                child: _PostHeader(
-                  post: post,
-                  user: user,
-                  onDelete: _handleDelete,
-                ),
-              ),
-
-              // ── Media ────────────────────────────────────────────
-              if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
-                _PostMedia(
-                  post: post,
-                  activeHearts: _activeHearts,
-                  onDoubleTap: () {
-                    if (!currentIsLiked) {
-                      _handleLike();
-                    }
-                    final heartKey = UniqueKey();
-                    setState(() => _activeHearts.add(heartKey));
-                    Future.delayed(const Duration(milliseconds: 800), () {
-                      if (mounted) setState(() => _activeHearts.remove(heartKey));
-                    });
-                  },
-                ),
-                const SizedBox(height: 6),
-              ],
-
-              // ── Reaction Row ──────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: _ReactionRow(
-                  post: post,
-                  isLiked: currentIsLiked,
-                  likeCount: currentLikeCount,
-                  commentCount: currentCommentCount,
-                  isBookmarked: currentIsBookmarked,
-                  onLike: user != null ? _handleLike : null,
-                  onComment: () => CommentsBottomSheet.show(context, post),
-                  onBookmark: _handleSave,
-                ),
-              ),
-
-              // ── Post Content (Caption) ───────────────────────────
-              if (post.title.isNotEmpty || post.body.isNotEmpty)
+        child: Opacity(
+          opacity: isSeen ? 0.6 : 1.0,
+          child: ColoredBox(
+            color: Colors.white,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: ExpandableText(
-                    text: post.title.isNotEmpty ? post.title : post.body,
-                    maxLines: 2,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF333333),
-                      decoration: post.computedStatus == 'archived' ? TextDecoration.lineThrough : null,
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                  child: _PostHeader(
+                    post: post,
+                    user: user,
+                    onDelete: _handleDelete,
+                    isSeen: isSeen,
+                  ),
+                ),
+
+                // ── Media ────────────────────────────────────────────
+                if (post.mediaUrl != null || post.id.startsWith('temp_')) ...[
+                  _PostMedia(
+                    post: post,
+                    activeHearts: _activeHearts,
+                    onDoubleTap: () {
+                      if (!currentIsLiked) {
+                        _handleLike();
+                      }
+                      final heartKey = UniqueKey();
+                      setState(() => _activeHearts.add(heartKey));
+                      Future.delayed(const Duration(milliseconds: 800), () {
+                        if (mounted)
+                          setState(() => _activeHearts.remove(heartKey));
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                ],
+
+                // ── Reaction Row ──────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: _ReactionRow(
+                    post: post,
+                    isLiked: currentIsLiked,
+                    likeCount: currentLikeCount,
+                    commentCount: currentCommentCount,
+                    isBookmarked: currentIsBookmarked,
+                    onLike: user != null ? _handleLike : null,
+                    onComment: () => CommentsBottomSheet.show(context, post),
+                    onBookmark: _handleSave,
+                  ),
+                ),
+
+                // ── Post Content (Caption) ───────────────────────────
+                if (post.title.isNotEmpty || post.body.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: ExpandableText(
+                      text: post.title.isNotEmpty ? post.title : post.body,
+                      maxLines: 2,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: post.computedStatus == 'archived'
+                            ? const Color(0xFF8A8A8A)
+                            : const Color(0xFF333333),
+                        decoration: post.computedStatus == 'archived'
+                            ? TextDecoration.lineThrough
+                            : null,
+                      ),
                     ),
                   ),
-                ),
 
-              // ── Event Dates ──────────────────────────────────
-              if (post.isEvent && post.eventStartDate != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.calendar_today_rounded,
-                        size: 14,
-                        color: post.computedStatus == 'archived' ? const Color(0xFFC0C0C0) : AppTheme.primary,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        _formatEventDateRange(post.eventStartDate!, post.eventEndDate),
-                        style: TextStyle(
-                          fontFamily: AppTheme.fontFamily,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: post.computedStatus == 'archived' ? const Color(0xFF8A8A8A) : const Color(0xFF4A4A4A),
+                // ── Event Dates ──────────────────────────────────
+                if (post.isEvent && post.eventStartDate != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.calendar_today_rounded,
+                          size: 14,
+                          color: post.computedStatus == 'archived'
+                              ? const Color(0xFFC0C0C0)
+                              : AppTheme.primary,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 6),
+                        Text(
+                          _formatEventDateRange(
+                            post.eventStartDate!,
+                            post.eventEndDate,
+                          ),
+                          style: TextStyle(
+                            fontFamily: AppTheme.fontFamily,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: post.computedStatus == 'archived'
+                                ? const Color(0xFF8A8A8A)
+                                : const Color(0xFF4A4A4A),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -334,9 +353,12 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
     if (end == null) {
       return DateFormat('MMM d, yyyy • h:mm a').format(start);
     }
-    
-    final bool sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
-    
+
+    final bool sameDay =
+        start.year == end.year &&
+        start.month == end.month &&
+        start.day == end.day;
+
     if (sameDay) {
       // Oct 12, 5:00 PM - 8:00 PM
       final dateStr = DateFormat('MMM d, yyyy').format(start);
@@ -362,8 +384,14 @@ class _PostHeader extends ConsumerStatefulWidget {
   final Post post;
   final dynamic user;
   final VoidCallback? onDelete;
+  final bool isSeen;
 
-  const _PostHeader({required this.post, this.user, this.onDelete});
+  const _PostHeader({
+    required this.post,
+    this.user,
+    this.onDelete,
+    this.isSeen = false,
+  });
 
   @override
   ConsumerState<_PostHeader> createState() => _PostHeaderState();
@@ -374,13 +402,13 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
 
   Future<void> _toggleFollow() async {
     if (_isBusy) return;
-    
+
     final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
     final bool currentFollowing = postInStore.isFollowing;
     final bool newState = !currentFollowing;
 
     HapticFeedback.selectionClick();
-    
+
     final version = DateTime.now().millisecondsSinceEpoch;
     final postId = widget.post.id;
     final authorId = widget.post.authorId;
@@ -394,11 +422,13 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
 
     try {
       final res = await BackendService.toggleFollow(authorId);
-      
+
       if (!mounted) return;
 
       // 2. Race Check
-      final latestVersion = ref.read(postActionVersionProvider((postId, 'follow')));
+      final latestVersion = ref.read(
+        postActionVersionProvider((postId, 'follow')),
+      );
       if (latestVersion != version) return;
 
       if (!res.success) {
@@ -422,10 +452,15 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
       valueListenable: UserSession.current,
       builder: (context, sessionData, _) {
         final isMe = UserSession.isMe(widget.post.authorId);
-        final displayAvatar = isMe ? (sessionData?.avatarUrl ?? widget.post.authorProfileImage) : widget.post.authorProfileImage;
-        final displayName = isMe 
-            ? (sessionData?.displayName ?? widget.post.authorName) 
-            : ((widget.post.authorName.isEmpty || widget.post.authorName == 'User') ? 'User' : widget.post.authorName);
+        final displayAvatar = isMe
+            ? (sessionData?.avatarUrl ?? widget.post.authorProfileImage)
+            : widget.post.authorProfileImage;
+        final displayName = isMe
+            ? (sessionData?.displayName ?? widget.post.authorName)
+            : ((widget.post.authorName.isEmpty ||
+                      widget.post.authorName == 'User')
+                  ? 'User'
+                  : widget.post.authorName);
 
         return Row(
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -433,8 +468,12 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
             // Avatar
             GestureDetector(
               onTap: () {
-                if (widget.user != null && widget.post.authorId != widget.user.uid) {
-                  NavigationUtils.navigateToProfile(context, widget.post.authorId);
+                if (widget.user != null &&
+                    widget.post.authorId != widget.user.uid) {
+                  NavigationUtils.navigateToProfile(
+                    context,
+                    widget.post.authorId,
+                  );
                 }
               },
               child: UserAvatar(
@@ -462,11 +501,16 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                       color: Color(0xFF1A1A1A),
                     ),
                   ),
-                  if (widget.post.city != null && widget.post.city!.isNotEmpty) ...[
+                  if (widget.post.city != null &&
+                      widget.post.city!.isNotEmpty) ...[
                     const SizedBox(height: 1),
                     Row(
                       children: [
-                        const Icon(Icons.location_on_rounded, size: 13, color: Color(0xFF8A8A8A)),
+                        const Icon(
+                          Icons.location_on_rounded,
+                          size: 13,
+                          color: Color(0xFF8A8A8A),
+                        ),
                         const SizedBox(width: 2),
                         Text(
                           widget.post.city!,
@@ -495,7 +539,9 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                 child: Text(
                   isFollowing ? 'Following' : 'Follow',
                   style: TextStyle(
-                    color: isFollowing ? const Color(0xFF8A8A8A) : AppTheme.primary,
+                    color: isFollowing
+                        ? const Color(0xFF8A8A8A)
+                        : AppTheme.primary,
                     fontWeight: FontWeight.w800,
                     fontSize: 13,
                     fontFamily: AppTheme.fontFamily,
@@ -506,20 +552,45 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
             ],
 
             // Time
-            Text(
-              TimeUtils.formatTimeAgoCompact(widget.post.createdAt),
-              style: const TextStyle(
-                fontFamily: AppTheme.fontFamily,
-                fontSize: 13,
-                color: Color(0xFF8A8A8A),
-              ),
+            Row(
+              children: [
+                if (widget.isSeen) ...[
+                  const Text(
+                    'Viewed',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontFamily,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '•',
+                    style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 10),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  TimeUtils.formatTimeAgoCompact(widget.post.createdAt),
+                  style: const TextStyle(
+                    fontFamily: AppTheme.fontFamily,
+                    fontSize: 13,
+                    color: Color(0xFF8A8A8A),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(width: 8),
 
             // 3-dot menu
             GestureDetector(
               onTap: () => _showOptions(context),
-              child: const Icon(Icons.more_horiz, color: Color(0xFF8A8A8A), size: 22),
+              child: const Icon(
+                Icons.more_horiz,
+                color: Color(0xFF8A8A8A),
+                size: 22,
+              ),
             ),
           ],
         );
@@ -528,7 +599,8 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
   }
 
   void _showOptions(BuildContext context) {
-    final isOwner = widget.user != null && widget.post.authorId == widget.user.uid;
+    final isOwner =
+        widget.user != null && widget.post.authorId == widget.user.uid;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -547,14 +619,15 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
         },
         onShare: () async {
           Navigator.pop(context);
-          final shareText = '${widget.post.title.isNotEmpty ? widget.post.title : widget.post.body}\n\nShared via App';
+          final shareText =
+              '${widget.post.title.isNotEmpty ? widget.post.title : widget.post.body}\n\nShared via App';
           try {
             await Share.share(shareText);
           } catch (e) {
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(safeErrorMessage(e))),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(safeErrorMessage(e))));
             }
           }
         },
@@ -562,7 +635,9 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
           Navigator.pop(context);
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => PostInsightsScreen(post: widget.post)),
+            MaterialPageRoute(
+              builder: (_) => PostInsightsScreen(post: widget.post),
+            ),
           );
         },
         onMute: () {
@@ -595,11 +670,17 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
               Navigator.pop(context);
               // Call mute user API
               try {
-                final response = await BackendService.muteUser(widget.post.authorId);
+                final response = await BackendService.muteUser(
+                  widget.post.authorId,
+                );
                 if (context.mounted) {
                   if (response.success) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('@${widget.post.authorName} has been muted')),
+                      SnackBar(
+                        content: Text(
+                          '@${widget.post.authorName} has been muted',
+                        ),
+                      ),
                     );
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -609,9 +690,9 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                 }
               } catch (e) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(safeErrorMessage(e))),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(safeErrorMessage(e))));
                 }
               }
             },
@@ -649,15 +730,17 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                   style: TextStyle(fontSize: 14, color: Color(0xFF666666)),
                 ),
                 const SizedBox(height: 16),
-                ...reasons.map((reason) => RadioListTile<String>(
-                      title: Text(reason, style: const TextStyle(fontSize: 14)),
-                      value: reason,
-                      groupValue: selectedReason,
-                      contentPadding: EdgeInsets.zero,
-                      onChanged: (value) {
-                        setState(() => selectedReason = value);
-                      },
-                    )),
+                ...reasons.map(
+                  (reason) => RadioListTile<String>(
+                    title: Text(reason, style: const TextStyle(fontSize: 14)),
+                    value: reason,
+                    groupValue: selectedReason,
+                    contentPadding: EdgeInsets.zero,
+                    onChanged: (value) {
+                      setState(() => selectedReason = value);
+                    },
+                  ),
+                ),
               ],
             ),
           ),
@@ -673,19 +756,28 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                       Navigator.pop(context);
                       // Call report post API
                       try {
-                        final response = await BackendService.reportPost(widget.post.id, selectedReason!);
+                        final response = await BackendService.reportPost(
+                          widget.post.id,
+                          selectedReason!,
+                        );
                         if (context.mounted) {
                           if (response.success) {
                             // Hide reported post from feed for this user using PostStore
-                            ref.read(postStoreProvider.notifier).removePost(widget.post.id);
+                            ref
+                                .read(postStoreProvider.notifier)
+                                .removePost(widget.post.id);
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('Thank you for your report. Post hidden from your feed.'),
+                                content: Text(
+                                  'Thank you for your report. Post hidden from your feed.',
+                                ),
                               ),
                             );
                           } else {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(safeErrorMessage(response.error))),
+                              SnackBar(
+                                content: Text(safeErrorMessage(response.error)),
+                              ),
                             );
                           }
                         }
@@ -742,7 +834,7 @@ class _PostMedia extends StatefulWidget {
   final VoidCallback onDoubleTap;
 
   const _PostMedia({
-    required this.post, 
+    required this.post,
     required this.activeHearts,
     required this.onDoubleTap,
   });
@@ -767,7 +859,7 @@ class _PostMediaState extends State<_PostMedia> {
   Future<void> _initializeVideo() async {
     final url = ProxyHelper.getUrl(widget.post.mediaUrl!);
     _controller = VideoPlayerController.networkUrl(Uri.parse(url));
-    
+
     try {
       await _controller!.initialize();
       if (mounted) {
@@ -809,10 +901,10 @@ class _PostMediaState extends State<_PostMedia> {
 
   void _handleVisibilityChanged(VisibilityInfo info) {
     if (!mounted || _controller == null) return;
-    
+
     // Play if > 50% visible, otherwise pause
     final bool isNowVisible = info.visibleFraction > 0.5;
-    
+
     if (isNowVisible != _isVisible) {
       _isVisible = isNowVisible;
       if (_isInitialized) {
@@ -829,7 +921,7 @@ class _PostMediaState extends State<_PostMedia> {
   Widget build(BuildContext context) {
     final isVideo = widget.post.mediaType == 'video';
     final aspectRatio = isVideo ? 9 / 16 : 4 / 5;
-    
+
     if (widget.post.mediaUrl == null && widget.post.id.startsWith('temp_')) {
       return AspectRatio(
         aspectRatio: aspectRatio,
@@ -842,7 +934,10 @@ class _PostMediaState extends State<_PostMedia> {
                 SizedBox(
                   width: 24,
                   height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppTheme.primary,
+                  ),
                 ),
                 SizedBox(height: 8),
                 Text(
@@ -859,7 +954,7 @@ class _PostMediaState extends State<_PostMedia> {
         ),
       );
     }
-    
+
     return VisibilityDetector(
       key: Key('post_media_${widget.post.id}'),
       onVisibilityChanged: _handleVisibilityChanged,
@@ -868,76 +963,83 @@ class _PostMediaState extends State<_PostMedia> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-                // Video Player or Thumbnail
-                if (isVideo && _isInitialized)
-                  VideoPlayer(_controller!)
-                else
-                  CachedNetworkImage(
-                    imageUrl: ProxyHelper.getUrl(
-                        widget.post.thumbnailUrl ?? widget.post.mediaUrl!),
-                    fit: BoxFit.cover,
-                    memCacheWidth: 600,
-                    placeholder: (context, url) => Container(
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Color(0xFFEBEBF4),
-                            Color(0xFFF7F7FA),
-                            Color(0xFFEBEBF4),
-                          ],
-                          begin: Alignment(-1, 0),
-                          end: Alignment(1, 0),
-                        ),
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.image_outlined,
-                          color: Color(0xFFCCCCCC),
-                          size: 32,
-                        ),
-                      ),
-                    ),
-                    errorWidget: (context, url, error) => Container(
-                      color: const Color(0xFFECECEC),
-                      child: const Icon(Icons.broken_image_outlined,
-                          color: Color(0xFF8A8A8A)),
-                    ),
-                  ),
-
-                // Overlay for tap interactions
-                GestureDetector(
-                  onDoubleTap: widget.onDoubleTap,
-                  behavior: HitTestBehavior.opaque,
-                  child: const SizedBox.expand(),
+            // Video Player or Thumbnail
+            if (isVideo && _isInitialized)
+              VideoPlayer(_controller!)
+            else
+              CachedNetworkImage(
+                imageUrl: ProxyHelper.getUrl(
+                  widget.post.thumbnailUrl ?? widget.post.mediaUrl!,
                 ),
-
-                // Dynamic Heart Pops
-                ...widget.activeHearts.map((key) => HeartPopOverlay(key: key)),
-                
-                // Video Overlay Icons
-                if (isVideo)
-                  Positioned(
-                    bottom: 10,
-                    right: 10,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Icon(
-                        _isInitialized ? Icons.videocam_rounded : Icons.play_arrow_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
+                fit: BoxFit.cover,
+                memCacheWidth: 600,
+                placeholder: (context, url) => Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Color(0xFFEBEBF4),
+                        Color(0xFFF7F7FA),
+                        Color(0xFFEBEBF4),
+                      ],
+                      begin: Alignment(-1, 0),
+                      end: Alignment(1, 0),
                     ),
                   ),
-              ],
+                  child: const Center(
+                    child: Icon(
+                      Icons.image_outlined,
+                      color: Color(0xFFCCCCCC),
+                      size: 32,
+                    ),
+                  ),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: const Color(0xFFECECEC),
+                  child: const Icon(
+                    Icons.broken_image_outlined,
+                    color: Color(0xFF8A8A8A),
+                  ),
+                ),
+              ),
+
+            // Overlay for tap interactions
+            GestureDetector(
+              onDoubleTap: widget.onDoubleTap,
+              behavior: HitTestBehavior.opaque,
+              child: const SizedBox.expand(),
             ),
-          ),
-        );
-      }
+
+            // Dynamic Heart Pops
+            ...widget.activeHearts.map((key) => HeartPopOverlay(key: key)),
+
+            // Video Overlay Icons
+            if (isVideo)
+              Positioned(
+                bottom: 10,
+                right: 10,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Icon(
+                    _isInitialized
+                        ? Icons.videocam_rounded
+                        : Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -974,9 +1076,7 @@ class _ReactionRow extends StatelessWidget {
               ? Icons.favorite_rounded
               : Icons.favorite_border_rounded,
           label: likeCount > 0 ? _fmt(likeCount) : '0',
-          color: isLiked
-              ? const Color(0xFFE53935)
-              : const Color(0xFF6E6E73),
+          color: isLiked ? const Color(0xFFE53935) : const Color(0xFF6E6E73),
           onTap: onLike,
         ),
         const SizedBox(width: 8),
@@ -993,11 +1093,14 @@ class _ReactionRow extends StatelessWidget {
         // (real view tracking to be implemented later)
         if (post.isEvent && post.attendeeCount > 0) ...[
           const SizedBox(width: 12),
-          const Text('•',
-              style: TextStyle(
-                  color: Color(0xFF8A8A8A),
-                  fontSize: 14,
-                  fontFamily: AppTheme.fontFamily)),
+          const Text(
+            '•',
+            style: TextStyle(
+              color: Color(0xFF8A8A8A),
+              fontSize: 14,
+              fontFamily: AppTheme.fontFamily,
+            ),
+          ),
           const SizedBox(width: 8),
           Text(
             '${_fmt(post.attendeeCount)} going',
@@ -1016,9 +1119,7 @@ class _ReactionRow extends StatelessWidget {
           icon: isBookmarked
               ? Icons.bookmark_rounded
               : Icons.bookmark_border_rounded,
-          color: isBookmarked
-              ? AppTheme.primary
-              : const Color(0xFF6E6E73),
+          color: isBookmarked ? AppTheme.primary : const Color(0xFF6E6E73),
           onTap: onBookmark,
         ),
       ],
@@ -1037,11 +1138,12 @@ class _ActionBtn extends StatelessWidget {
   final Color color;
   final VoidCallback? onTap;
 
-  const _ActionBtn(
-      {required this.icon,
-      this.label,
-      required this.color,
-      this.onTap});
+  const _ActionBtn({
+    required this.icon,
+    this.label,
+    required this.color,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1157,7 +1259,9 @@ class _OptionsSheet extends ConsumerWidget {
               onTap: () {
                 Navigator.pop(context);
                 // Persist hide to backend (fire-and-forget)
-                BackendService.hidePost(post.id).then((_) {}).catchError((_) => null);
+                BackendService.hidePost(
+                  post.id,
+                ).then((_) {}).catchError((_) => null);
                 // Hide post from global store immediately
                 ref.read(postStoreProvider.notifier).removePost(post.id);
                 if (context.mounted) {
@@ -1196,7 +1300,8 @@ class _OptionsSheet extends ConsumerWidget {
                 style: TextButton.styleFrom(
                   backgroundColor: const Color(0xFFECECEC),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(26)),
+                    borderRadius: BorderRadius.circular(26),
+                  ),
                 ),
                 child: const Text(
                   'Cancel',

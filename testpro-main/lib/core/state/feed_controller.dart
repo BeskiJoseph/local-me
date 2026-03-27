@@ -32,6 +32,20 @@ class FeedController extends ChangeNotifier {
 
     // Prevent duplicates from rapid pagination AND filter out tombstoned ghost posts
     final existingIds = _posts.map((p) => p.id).toSet();
+    final incomingIds = newPosts.map((p) => p.id).toSet();
+
+    // Debug: Check for duplicates
+    final duplicateCount = incomingIds
+        .where((id) => existingIds.contains(id))
+        .length;
+    if (duplicateCount > 0) {
+      debugPrint(
+        '[FeedController] ⚠️  Found $duplicateCount duplicates in incoming posts',
+      );
+      debugPrint('[FeedController] Existing IDs: ${existingIds.toList()}');
+      debugPrint('[FeedController] Incoming IDs: ${incomingIds.toList()}');
+    }
+
     final uniqueNew = newPosts
         .where(
           (p) => !existingIds.contains(p.id) && !_tombstones.contains(p.id),
@@ -39,6 +53,12 @@ class FeedController extends ChangeNotifier {
         .toList();
 
     _posts.addAll(uniqueNew);
+
+    if (uniqueNew.length < newPosts.length) {
+      debugPrint(
+        '[FeedController] Filtered ${newPosts.length - uniqueNew.length} duplicates, kept ${uniqueNew.length}',
+      );
+    }
 
     // Update pagination state
     if (hasMore != null) this.hasMore = hasMore;
@@ -143,6 +163,12 @@ class FeedController extends ChangeNotifier {
           (p) => !existingIds.contains(p.id) && !_tombstones.contains(p.id),
         )
         .toList();
+
+    if (uniqueNew.length < newPosts.length) {
+      debugPrint(
+        '[FeedController] Prepend: Filtered ${newPosts.length - uniqueNew.length} duplicates',
+      );
+    }
 
     _posts.insertAll(0, uniqueNew);
     notifyListeners();

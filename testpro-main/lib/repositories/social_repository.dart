@@ -20,7 +20,7 @@ class SocialRepository {
     bool current = response.success && response.data!['liked'] == true;
     yield current;
   }
-  
+
   /// Future version - use this when you only need the value once
   Future<bool> isPostLiked(String postId, String userId) async {
     final response = await BackendService.checkLikeState(postId);
@@ -43,7 +43,7 @@ class SocialRepository {
     bool current = response.success && response.data! == true;
     yield current;
   }
-  
+
   /// Future version - use this when you only need the value once
   Future<bool> isUserFollowed(String userId, String targetUserId) async {
     final response = await BackendService.checkFollowState(targetUserId);
@@ -59,19 +59,23 @@ class SocialRepository {
   }
 
   Stream<List<Post>> likedPostsStream(String userId) async* {
-    final response = await BackendService.getPosts(authorId: userId);
+    final response = await BackendService.getFilteredPosts(authorId: userId);
     if (response.success) {
       final data = response.data ?? [];
-      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      final posts = data
+          .map((json) => Post.fromJson(json as Map<String, dynamic>))
+          .toList();
       yield posts;
     }
   }
 
   Stream<List<Post>> joinedEventsStream(String userId) async* {
-    final response = await BackendService.getPosts(limit: 50);
+    final response = await BackendService.getFilteredPosts(limit: 50);
     if (response.success) {
       final data = response.data ?? [];
-      final posts = data.map((json) => Post.fromJson(json as Map<String, dynamic>)).toList();
+      final posts = data
+          .map((json) => Post.fromJson(json as Map<String, dynamic>))
+          .toList();
       yield posts;
     }
   }

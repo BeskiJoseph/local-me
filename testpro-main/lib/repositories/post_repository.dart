@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:testpro/models/post.dart';
 import 'package:testpro/models/paginated_response.dart';
 import 'package:testpro/models/api_response.dart';
@@ -90,12 +91,44 @@ class PostRepository {
         .map((json) => Post.fromJson(json as Map<String, dynamic>))
         .toList();
 
+    // 🔥 FIX: Use backend-provided cursor if available, fallback to manual construction
+    Map<String, dynamic>? nextCursor;
+    if (response.pagination?.cursor is Map) {
+      nextCursor = Map<String, dynamic>.from(
+        response.pagination!.cursor as Map,
+      );
+      if (kDebugMode) {
+        print("[PostRepo] ✅ Using backend-provided cursor: $nextCursor");
+      }
+    }
+
+    if (nextCursor == null &&
+        posts.isNotEmpty &&
+        (response.pagination?.hasMore ?? false)) {
+      final lastPost = posts.last;
+      nextCursor = {
+        'createdAt': lastPost.createdAt.millisecondsSinceEpoch,
+        'id': lastPost.id,
+      };
+      if (kDebugMode) {
+        print("[PostRepo] ⚠️  Constructed fallback cursor: $nextCursor");
+      }
+    }
+
+    if (kDebugMode) {
+      print("[PostRepo] Feed: $feedType");
+      print("[PostRepo] Posts received: ${posts.length}");
+      print("[PostRepo] HasMore: ${response.pagination?.hasMore ?? false}");
+      print("[PostRepo] NextCursor: $nextCursor");
+      print(
+        "[PostRepo] Incoming posts IDs: ${posts.map((p) => p.id).toList()}",
+      );
+    }
+
     return PaginatedResponse<Post>(
       data: posts,
       hasMore: response.pagination?.hasMore ?? false,
-      cursor: response.pagination?.cursor != null 
-          ? {'id': response.pagination!.cursor} 
-          : null,
+      cursor: nextCursor,
     );
   }
 
@@ -113,22 +146,43 @@ class PostRepository {
       city: city,
       country: country,
       limit: limit,
-      cursor: lastCursors,
+      cursor: (lastCursors?.isEmpty ?? true) ? null : lastCursors,
     );
 
-    if (!response.success) throw response.error ?? 'Failed to fetch filtered feed';
+    if (!response.success)
+      throw response.error ?? 'Failed to fetch filtered feed';
 
     final data = response.data ?? [];
     final posts = data
         .map((json) => Post.fromJson(json as Map<String, dynamic>))
         .toList();
 
+    // 🔥 FIX: Use backend-provided cursor if available
+    Map<String, dynamic>? nextCursor;
+    if (response.pagination?.cursor is Map) {
+      nextCursor = Map<String, dynamic>.from(
+        response.pagination!.cursor as Map,
+      );
+    }
+
+    if (nextCursor == null &&
+        posts.isNotEmpty &&
+        (response.pagination?.hasMore ?? false)) {
+      final lastPost = posts.last;
+      nextCursor = {
+        'createdAt': lastPost.createdAt.millisecondsSinceEpoch,
+        'id': lastPost.id,
+      };
+    }
+
+    if (kDebugMode) {
+      print("[PostRepo] Filtered Feed, NextCursor: $nextCursor");
+    }
+
     return PaginatedResponse<Post>(
       data: posts,
       hasMore: response.pagination?.hasMore ?? false,
-      cursor: response.pagination?.cursor != null 
-          ? {'id': response.pagination!.cursor} 
-          : null,
+      cursor: nextCursor,
     );
   }
 
