@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../../models/post.dart';
 import 'feed_session.dart';
+import '../../config/feed_constants.dart';
 
 /// Lightweight feed controller for abstracting mutable list operations
 class FeedController extends ChangeNotifier {
@@ -9,7 +10,7 @@ class FeedController extends ChangeNotifier {
   final Set<String> _tombstones = {}; // Memory layer for optimistic deletions
   // Local feed state moved to seenIds-based flow; remove distance cursor state
 
-  FeedController({this.feedType = 'global'});
+  FeedController({this.feedType = FeedConstants.feedTypeGlobal});
 
   List<Post> get posts => List.unmodifiable(_posts);
   bool isLoading = false;

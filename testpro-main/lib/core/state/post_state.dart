@@ -6,6 +6,7 @@ import 'package:testpro/models/comment.dart';
 import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/post_service.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:testpro/config/feed_constants.dart';
 
 
 /// Central state for the entire app's post data.
@@ -579,12 +580,12 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
         final response = (authorId != null)
             ? await PostService.getFilteredPostsPaginated(
                 authorId: authorId,
-                limit: 15,
+                limit: FeedConstants.defaultPageSize,
                 lastCursors: currentCursors,
               )
             : await PostService.getPostsPaginated(
                 feedType: feedType,
-                limit: 15,
+                limit: FeedConstants.defaultPageSize,
                 lastCursors: currentCursors,
                 mediaType: mediaType,
                 latitude: latitude,
@@ -795,8 +796,13 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
   }
 
   void clearSeen() {
+    _sessionSeenBuffer.clear();
+    _localSeenTimestamps.clear();
     _updateState(
-      (_isBatching ? _batchState! : state).copyWith(seenIds: const {}),
+      (_isBatching ? _batchState! : state).copyWith(
+        seenIds: const {},
+        localSeenIds: const {},
+      ),
     );
   }
 
