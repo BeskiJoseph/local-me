@@ -2,12 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../models/post.dart';
 import '../../services/auth_service.dart';
-import '../../services/backend_service.dart';
-import 'package:testpro/utils/safe_error.dart';
 import '../comments_bottom_sheet.dart';
 import 'package:testpro/core/state/post_state.dart';
-import 'package:testpro/services/haptic_service.dart';
-import 'dart:async';
+import 'package:testpro/services/interaction_service.dart';
+import 'package:testpro/utils/debounce.dart';
 
 class PostActionRow extends ConsumerStatefulWidget {
   final Post post;
@@ -24,84 +22,26 @@ class PostActionRow extends ConsumerStatefulWidget {
 }
 
 class _PostActionRowState extends ConsumerState<PostActionRow> {
-  Timer? _debounceTimer;
   bool _isLikeBusy = false;
 
   void _toggleLike(String userId, Post latestPost) async {
     if (_isLikeBusy) return;
 
-    final bool isLiked = latestPost.isLiked;
-    final int likeCount = latestPost.likeCount;
-    
-    final bool newTarget = !isLiked;
-    final int newCount = likeCount + (newTarget ? 1 : -1);
-
-    if (newTarget) HapticService.medium();
-
-    final int version = DateTime.now().millisecondsSinceEpoch;
-    final String postId = latestPost.id;
-
-    // 1. Optimistic Update in Global Store
-    final notifier = ref.read(postStoreProvider.notifier);
-    notifier.setActionVersion(postId, 'like', version);
-    notifier.updatePostPartially(postId, {
-      'isLiked': newTarget,
-      'likeCount': newCount,
+    Debounce.run('like_${latestPost.id}', () async {
+      setState(() => _isLikeBusy = true);
+      
+      await InteractionService.toggleLike(
+        postId: latestPost.id,
+        ref: ref,
+        onBusy: () => setState(() => _isLikeBusy = true),
+        onReady: () => setState(() => _isLikeBusy = false),
+      );
     });
-
-    setState(() => _isLikeBusy = true);
-
-    // 2. Debounced API Call
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 300), () async {
-      try {
-        final response = await BackendService.toggleLike(postId);
-        
-        if (!mounted) return;
-
-        // 3. Stale Response Check (Race Condition Protection)
-        final latestVersion = ref.read(postActionVersionProvider((postId, 'like')));
-        if (latestVersion != version) {
-          // A newer action has been started, ignore this result
-          return;
-        }
-
-        if (!response.success) {
-          _rollback(postId, isLiked, likeCount);
-          _showError("Action failed. Check connection.");
-        } else {
-          // Success: Sync with server data if needed, or just clear busy state
-          setState(() => _isLikeBusy = false);
-        }
-      } catch (e) {
-        if (mounted) {
-          _rollback(postId, isLiked, likeCount);
-          _showError("An error occurred.");
-        }
-      } finally {
-        if (mounted) setState(() => _isLikeBusy = false);
-      }
-    });
-  }
-
-  void _rollback(String postId, bool originalLiked, int originalCount) {
-    ref.read(postStoreProvider.notifier).updatePostPartially(postId, {
-      'isLiked': originalLiked,
-      'likeCount': originalCount,
-    });
-  }
-
-  void _showError(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
-    );
   }
 
   @override
   void dispose() {
-    _debounceTimer?.cancel();
+    Debounce.cancel('like_${widget.post.id}');
     super.dispose();
   }
 

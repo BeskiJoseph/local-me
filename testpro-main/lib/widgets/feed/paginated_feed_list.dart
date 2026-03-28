@@ -51,11 +51,21 @@ class PaginatedFeedList extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<PaginatedFeedList> createState() => _PaginatedFeedListState();
+
+  /// 🔥 Static method to add new post to feed immediately
+  static void addNewPost(Post post, WidgetRef ref) {
+    debugPrint('➕ PaginatedFeedList.addNewPost: ${post.id}');
+    // Register to store with prepend=true (new posts go first)
+    ref.read(postStoreProvider.notifier).registerPosts([post], forFeedType: 'hybrid', prepend: true);
+    ref.read(postStoreProvider.notifier).registerPosts([post], forFeedType: 'global', prepend: true);
+    // The ref.listen in the widget will pick up the change and rebuild
+  }
 }
 
 class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
   final ScrollController _scrollController = ScrollController();
-  final List<String> _displayIds = [];
+  PageController? _pageController;  // For paged layout
+  late List<String> _displayIds;
   bool _isRefilling = false;
   int _currentPage = 0;
 
@@ -63,49 +73,70 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
   void initState() {
     super.initState();
     _scrollController.addListener(_scrollListener);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.initialPosts?.isNotEmpty ?? false) {
+    
+    // 🔥 CRITICAL FIX: Initialize _displayIds IMMEDIATELY with initialPosts
+    if (widget.initialPosts?.isNotEmpty ?? false) {
+      _displayIds = widget.initialPosts!.map((p) => p.id).toList();
+      
+      // 🔥 CRITICAL: Create PageController ONCE for paged layout
+      if (widget.layoutType == FeedLayoutType.paged) {
+        _pageController = PageController(initialPage: widget.startIndex);
+      }
+      
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         ref
             .read(postStoreProvider.notifier)
             .registerPosts(
               widget.initialPosts!,
               forFeedType: widget.feedType ?? 'global',
+              prepend: false,
             );
+      });
+    } else {
+      _displayIds = [];
+      if (widget.layoutType == FeedLayoutType.paged) {
+        _pageController = PageController(initialPage: widget.startIndex);
       }
-      _syncDisplayIds();
-      // Only refill if empty or we need more for the first page
-      if (_displayIds.length < widget.pageSize) {
-        _checkRefill();
-      }
-    });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _syncDisplayIds();
+        if (_displayIds.length < widget.pageSize) {
+          _checkRefill();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _pageController?.dispose();  // Dispose PageController
+    super.dispose();
   }
 
   void _syncDisplayIds() {
     final store = ref.read(postStoreProvider);
-    final notifier = ref.read(postStoreProvider.notifier);
 
     // 🔥 Get postIds for THIS specific feedType, not all posts
     final feedSpecificIds = widget.feedType != null
         ? (store.postIdsByFeedType[widget.feedType!] ?? [])
         : store.postIds;
 
-    final newFreshIds = feedSpecificIds.where((id) {
-      if (_displayIds.contains(id)) return false;
-      if (id == widget.postId) return true;
-      return true; // Always allow, stop hiding soft-seen
-    }).toList();
+    // 🔥 Find new IDs that aren't in _displayIds yet
+    final currentIdSet = _displayIds.toSet();
+    final newIds = feedSpecificIds.where((id) => !currentIdSet.contains(id)).toList();
 
-    if (newFreshIds.isNotEmpty) {
+    if (newIds.isNotEmpty) {
       if (kDebugMode) {
         print(
-          '[PaginatedFeedList] Syncing ${widget.feedType}: adding ${newFreshIds.length} new IDs',
+          '[PaginatedFeedList] Syncing ${widget.feedType}: adding ${newIds.length} new IDs',
         );
         print(
           '[PaginatedFeedList] feedSpecificIds total: ${feedSpecificIds.length}',
         );
       }
       setState(() {
-        _displayIds.addAll(newFreshIds);
+        // 🔥 REBUILD _displayIds to match store order: add new IDs at BEGINNING
+        _displayIds = [...newIds, ..._displayIds];
       });
     }
   }
@@ -121,12 +152,13 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
     if (widget.onLoadMore != null) {
       await widget.onLoadMore!();
     } else if (widget.feedType != null) {
+      final pos = LocationService.currentPosition;
       await ref.read(postStoreProvider.notifier).loadMore(
         feedType: widget.feedType!,
         authorId: widget.authorId,
         mediaType: widget.mediaType,
-        latitude: widget.feedType == 'local' ? LocationService.currentPosition?.latitude : null,
-        longitude: widget.feedType == 'local' ? LocationService.currentPosition?.longitude : null,
+        latitude: pos?.latitude,
+        longitude: pos?.longitude,
       );
     }
   }
@@ -134,27 +166,49 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
   Future<void> _checkRefill() async {
     if (_isRefilling || !mounted) return;
 
-    final store = ref.read(postStoreProvider);
-    final notifier = ref.read(postStoreProvider.notifier);
+    setState(() => _isRefilling = true);
+    try {
+      while (mounted) {
+        final store = ref.read(postStoreProvider);
+        final feedType = widget.feedType ?? 'global';
+        final freshIds = widget.feedType != null
+            ? (store.postIdsByFeedType[widget.feedType!] ?? [])
+            : store.postIds;
+        
+        // 🔥 STOP if we already know there are no more posts
+        final hasMore = store.hasMoreByFeedType[feedType] ?? true;
+        debugPrint('[PaginatedFeedList] 🔍 Checking $feedType: hasMore=$hasMore, length=${freshIds.length}, isLoading=${store.isLoadingByFeedType[feedType]}');
+        
+        if (!hasMore) {
+          debugPrint('[PaginatedFeedList] 🛑 Stopping refill: No more posts for $feedType');
+          break;
+        }
 
-    final freshIds = store.postIds;
+        // 🔥 STOP if the last request resulted in an error
+        final hasError = store.errorByFeedType[feedType] != null;
+        if (hasError) {
+          debugPrint('[PaginatedFeedList] 🛑 Stopping refill: Error encountered for $feedType');
+          break;
+        }
 
-    if (freshIds.length < widget.pageSize) {
-      setState(() => _isRefilling = true);
-      try {
+        if (freshIds.length >= widget.pageSize) {
+          break;
+        }
+
+        // 🔥 Avoid overlapping loadMore calls
+        if (store.isLoadingByFeedType[feedType] == true) {
+          await Future.delayed(const Duration(milliseconds: 200));
+          continue;
+        }
+
         await _triggerLoadMore();
-        await Future.delayed(const Duration(milliseconds: 50));
-        if (mounted) await _checkRefill();
-      } finally {
-        if (mounted) setState(() => _isRefilling = false);
+        
+        // 🔥 Increase delay to be more conservative and allow state to propagate
+        await Future.delayed(const Duration(milliseconds: 500));
       }
+    } finally {
+      if (mounted) setState(() => _isRefilling = false);
     }
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
   }
 
   @override
@@ -174,11 +228,20 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
       },
     );
 
-    if (_displayIds.isEmpty && (store.isLoading || _isRefilling)) {
+    // 🔥 Don't show loading if we have initialPosts - prevents flash
+    final hasInitialPosts = widget.initialPosts != null && widget.initialPosts!.isNotEmpty;
+    
+    if (_displayIds.isEmpty && !hasInitialPosts && (store.isLoading || _isRefilling)) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_displayIds.isEmpty) {
+    // 🔥 CRITICAL FIX: If _displayIds is empty but we have initialPosts,
+    // use initialPosts IDs to prevent "No posts" flash
+    final effectiveDisplayIds = _displayIds.isEmpty && widget.initialPosts != null
+        ? widget.initialPosts!.map((p) => p.id).toList()
+        : _displayIds;
+
+    if (effectiveDisplayIds.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -215,14 +278,14 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
       child: widget.layoutType == FeedLayoutType.paged
           ? PageView.builder(
               scrollDirection: Axis.vertical,
-              controller: PageController(initialPage: widget.startIndex),
-              itemCount: _displayIds.length,
+              controller: _pageController,  // 🔥 Use state controller, don't recreate
+              itemCount: effectiveDisplayIds.length,
               onPageChanged: (index) {
                 setState(() => _currentPage = index);
-                if (index >= _displayIds.length - 2) _checkRefill();
+                if (index >= effectiveDisplayIds.length - 2) _checkRefill();
               },
               itemBuilder: (context, index) {
-                final postId = _displayIds[index];
+                final postId = effectiveDisplayIds[index];
                 if (widget.itemBuilder != null) {
                   final post = ref.watch(postStoreProvider).posts[postId];
                   if (post == null) return const SizedBox.shrink();

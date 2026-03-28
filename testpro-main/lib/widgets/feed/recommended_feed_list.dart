@@ -1,18 +1,14 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:testpro/core/state/post_state.dart';
-import 'package:testpro/services/post_service.dart';
 import 'package:testpro/models/post.dart';
-import '../../services/auth_service.dart';
-import '../../core/state/feed_controller.dart';
-import '../../core/state/feed_session.dart';
 import 'package:testpro/widgets/nextdoor_post_card.dart';
 import '../../screens/event_post_card.dart';
-import '../../utils/safe_error.dart';
-import '../../services/backend_service.dart';
 import '../../screens/interest_picker_screen.dart';
 import '../../screens/post_reels_view.dart';
+import '../../utils/debounce.dart';
+import '../../utils/safe_error.dart';
+import '../../mixins/post_loader_mixin.dart';
 
 /// A specialized widget to handle the personalized recommendation feed
 class RecommendedFeedList extends ConsumerStatefulWidget {
@@ -24,13 +20,48 @@ class RecommendedFeedList extends ConsumerStatefulWidget {
 }
 
 class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, PostLoaderMixin {
   final ScrollController _scrollController = ScrollController();
-  final FeedController _feedController = FeedController();
-  final String _sessionId = DateTime.now().millisecondsSinceEpoch.toString();
   final Map<String, bool?> _likedPostIds = {};
-
-  Timer? _debounce;
+  
+  // PostLoaderMixin implementation
+  List<Post> _posts = [];
+  bool _isLoading = false;
+  bool _hasMore = true;
+  
+  @override
+  List<Post> get posts => _posts;
+  
+  @override
+  set posts(List<Post> value) {
+    if (mounted) setState(() => _posts = value);
+  }
+  
+  @override
+  bool get isLoading => _isLoading;
+  
+  @override
+  set isLoading(bool value) {
+    if (mounted) setState(() => _isLoading = value);
+  }
+  
+  @override
+  bool get hasMore => _hasMore;
+  
+  @override
+  set hasMore(bool value) => _hasMore = value;
+  
+  @override
+  Map<String, bool> get likedPostIds => _likedPostIds.cast<String, bool>();
+  
+  @override
+  String? get feedType => 'hybrid';
+  
+  @override
+  String? get userCity => null;
+  
+  @override
+  String? get userCountry => null;
 
   @override
   bool get wantKeepAlive => true;
@@ -38,133 +69,58 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
   @override
   void initState() {
     super.initState();
-    _loadMorePosts();
+    loadPosts();
     _scrollController.addListener(_onScroll);
   }
 
   void _onScroll() {
-    if (_debounce?.isActive ?? false) return;
-
-    _debounce = Timer(const Duration(milliseconds: 300), () {
+    Debounce.run('scroll_feed', () {
       if (_scrollController.hasClients &&
           _scrollController.position.pixels >=
               _scrollController.position.maxScrollExtent - 200 &&
-          !_feedController.isLoading &&
-          _feedController.hasMore &&
-          _feedController.error == null) {
-        _loadMorePosts();
+          !_isLoading &&
+          _hasMore) {
+        loadPosts();
       }
     });
   }
 
   @override
   void dispose() {
-    _debounce?.cancel();
+    Debounce.cancel('scroll_feed');
     _scrollController.dispose();
-    _feedController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadMorePosts({bool refresh = false}) async {
-    if (_feedController.isLoading) return;
-    if (!refresh && !_feedController.hasMore) return;
-
-    debugPrint('🚀 RECOMMENDED FEED API CALLED');
-
-    if (refresh) {
-      _feedController.clear(notify: false);
-      _likedPostIds.clear();
-      _feedController.setLoading(true);
-    } else {
-      _feedController.setLoading(true);
-      _feedController.setError(null);
-    }
-
-    try {
-      final user = AuthService.currentUser;
-      if (user == null) {
-        if (mounted) _feedController.setError('User not authenticated');
-        return;
-      }
-
-      final newResponse = await PostService.getPostsPaginated(
-        feedType: 'global',
-        limit: 10,
-      );
-      final newPosts = newResponse.data;
-
-      if (mounted) {
-        // 🔥 Register in Global Store
-        ref
-            .read(postStoreProvider.notifier)
-            .registerPosts(newPosts, forFeedType: 'global');
-
-        for (var p in newPosts) {
-          _likedPostIds[p.id] = p.isLiked;
-        }
-        _feedController.appendPosts(
-          newPosts,
-          refresh: refresh,
-          hasMore: newResponse.hasMore,
-        );
-      }
-    } catch (e) {
-      debugPrint('Error loading recommended posts: $e');
-      if (mounted) _feedController.setError(e.toString());
-    } finally {
-      if (mounted) _feedController.setLoading(false);
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required by AutomaticKeepAliveClientMixin
 
-    return ListenableBuilder(
-      listenable: _feedController,
-      builder: (context, _) {
-        final posts = _feedController.posts;
-        final isLoading = _feedController.isLoading;
-        final error = _feedController.error;
-        final hasMore = _feedController.hasMore;
-
-        if (posts.isEmpty && isLoading) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        if (error != null && posts.isEmpty) {
-          return _buildErrorState(error);
-        }
-
-        if (posts.isEmpty && !isLoading) {
-          return _buildEmptyState();
-        }
-
-        return RefreshIndicator(
-          onRefresh: () => _loadMorePosts(refresh: true),
-          color: const Color(0xFF6C5CE7),
-          child: ListView.builder(
-            controller: _scrollController,
-            padding: const EdgeInsets.only(top: 8, bottom: 80),
-            itemCount: posts.length + (hasMore || error != null ? 1 : 0),
-            itemBuilder: (context, index) {
-              if (index == posts.length) {
-                if (error != null) {
-                  return _buildRetryFooter();
-                }
-                return const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                );
-              }
-              final post = posts[index];
-              // Hide archived/expired events
-              if ((post.isEvent || post.category.toLowerCase() == 'events') &&
-                  post.computedStatus == 'archived') {
-                return const SizedBox.shrink();
-              }
+    return RefreshIndicator(
+      onRefresh: () => loadPosts(refresh: true),
+      color: const Color(0xFF6C5CE7),
+      child: ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.only(top: 8, bottom: 80),
+        itemCount: _posts.length + (_hasMore ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index == _posts.length) {
+            if (_isLoading) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              );
+            }
+            return _buildRetryFooter();
+          }
+          final post = _posts[index];
+          // Hide archived/expired events
+          if ((post.isEvent || post.category.toLowerCase() == 'events') &&
+              post.computedStatus == 'archived') {
+            return const SizedBox.shrink();
+          }
               // Route events to EventPostCard
               if (post.isEvent || post.category.toLowerCase() == 'events') {
                 return EventPostCard(post: post);
@@ -174,19 +130,17 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
                 initialIsLiked: _likedPostIds[post.id],
                 onTap: () {
                   if (!mounted) return;
-                  // 🔥 Register before navigating
+                  // 🔥 Register before navigating (not a new post - use prepend: false)
                   ref.read(postStoreProvider.notifier).registerPosts([
                     post,
-                  ], forFeedType: 'global');
+                  ], forFeedType: 'global', prepend: false);
 
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => PostReelsView(
-                        posts: posts,
+                        posts: _posts,
                         startIndex: index,
-                        feedType: 'global',
-                        initialHasMore: _feedController.hasMore,
                       ),
                     ),
                   );
@@ -195,7 +149,7 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
             },
           ),
         );
-      },
+      }
     );
   }
 
@@ -206,7 +160,7 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
         children: [
           const Text('Failed to load more posts'),
           TextButton(
-            onPressed: () => _loadMorePosts(),
+            onPressed: () => loadPosts(),
             child: const Text('Try Again'),
           ),
         ],
@@ -229,7 +183,7 @@ class _RecommendedFeedListState extends ConsumerState<RecommendedFeedList>
           ),
           const SizedBox(height: 16),
           ElevatedButton(
-            onPressed: () => _loadMorePosts(refresh: true),
+            onPressed: () => loadPosts(refresh: true),
             child: const Text('Retry'),
           ),
         ],

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import '../models/notification.dart';
-import '../services/auth_service.dart';
 import '../services/backend_service.dart';
 import '../utils/proxy_helper.dart';
 import '../config/app_theme.dart';
@@ -11,9 +10,6 @@ import 'post_reels_view.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
 import '../services/notification_data_service.dart';
-import '../core/state/post_state.dart';
-import '../core/state/provider_container.dart';
-import '../models/post.dart';
 
 class ActivityScreen extends StatefulWidget {
   const ActivityScreen({super.key});
@@ -24,12 +20,10 @@ class ActivityScreen extends StatefulWidget {
 
 class _ActivityScreenState extends State<ActivityScreen>
     with SingleTickerProviderStateMixin {
-  final String _currentUserId = AuthService.currentUser?.uid ?? '';
   late TabController _tabController;
   
   List<ActivityNotification> _notifications = [];
   bool _isLoading = true;
-  bool _hasMore = true;
 
   @override
   void initState() {
@@ -48,7 +42,6 @@ class _ActivityScreenState extends State<ActivityScreen>
       setState(() {
         _notifications = items;
         _isLoading = false;
-        _hasMore = false;
       });
     } catch (e) {
       if (kDebugMode) debugPrint('Error loading notifications: $e');

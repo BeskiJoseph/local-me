@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:testpro/services/post_service.dart';
-import 'package:testpro/services/backend_service.dart';
-import 'package:testpro/core/state/feed_controller.dart';
-import 'package:testpro/core/state/feed_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:testpro/utils/safe_error.dart';
 import '../../models/post.dart';
@@ -37,14 +34,28 @@ class HomeFeedList extends StatefulWidget {
 
   @override
   State<HomeFeedList> createState() => _HomeFeedListState();
+
+  /// 🔥 Static method to add new post to feed (called from new_post_screen)
+  static void addNewPost(Post post) {
+    debugPrint('➕ Adding new post to HomeFeedList: ${post.id}');
+    _HomeFeedListState._tempPosts.insert(0, post);
+    _HomeFeedListState._likedPostIds[post.id] = post.isLiked;
+    // 🔥 Clear cached future to force FutureBuilder to rebuild
+    _HomeFeedListState._feedFuture = null;
+    // 🔥 Trigger rebuild
+    _HomeFeedListState._triggerRebuild?.call();
+  }
 }
 
 class _HomeFeedListState extends State<HomeFeedList>
     with AutomaticKeepAliveClientMixin {
   late final ScrollController _scrollController;
   static final Map<String, bool?> _likedPostIds = {};
+  
+  // 🔥 Static callback to trigger rebuild from outside
+  static VoidCallback? _triggerRebuild;
 
-  Future<PaginatedResponse<Post>>? _feedFuture;
+  static Future<PaginatedResponse<Post>>? _feedFuture;
   String? _futureFeedType;
   String? _futureCity;
   String? _futureCountry;
@@ -68,6 +79,15 @@ class _HomeFeedListState extends State<HomeFeedList>
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    
+    // 🔥 Set up rebuild callback for external post additions
+    _triggerRebuild = () {
+      if (mounted) {
+        setState(() {});
+        debugPrint('🔥 HomeFeedList rebuilt after new post added');
+      }
+    };
+    
     // Restore from cache if available
     if (_postsCache.containsKey(_cacheKey)) {
       _feedFuture = Future.value(_postsCache[_cacheKey]);
@@ -133,15 +153,8 @@ class _HomeFeedListState extends State<HomeFeedList>
             feedType: widget.feedType,
             userCity: widget.userCity,
             userCountry: widget.userCountry,
-            watchedIds: FeedSession.instance.seenIdsParam(widget.feedType),
             limit: 20, // Initial load limit
           ).then((response) {
-            // Track seen posts for cross-feed deduplication
-            FeedSession.instance.markSeen(
-              response.data.map((p) => p.id).toList(),
-              feedType: widget.feedType,
-            );
-
             // Populate liked posts map
             for (var p in response.data) {
               _likedPostIds[p.id] = p.isLiked;
@@ -161,7 +174,7 @@ class _HomeFeedListState extends State<HomeFeedList>
     _postsCache.remove(_cacheKey); // Clear cache
     // FeedSession.instance.reset(); // Clear session deduplication on manual refresh
     setState(() {
-      _feedFuture = null;
+      _HomeFeedListState._feedFuture = null;
       // Don't clear temporary posts here - they should persist until real post arrives
       debugPrint('🔄 Feed future reset, will fetch fresh data');
       debugPrint(
@@ -221,6 +234,17 @@ class _HomeFeedListState extends State<HomeFeedList>
       return const Center(child: Text('Waiting for location...'));
     }
 
+    // 🔥 CRITICAL FIX: Show loading immediately when no cached data and future is being created
+    // This prevents "No posts" flash before spinner appears
+    final isInitiallyLoading = _feedFuture == null && !_postsCache.containsKey(_cacheKey);
+    if (isInitiallyLoading) {
+      // Trigger the future creation but show spinner immediately
+      _getFuture();
+      return const Center(
+        child: CircularProgressIndicator(color: AppTheme.primary),
+      );
+    }
+
     return FutureBuilder<PaginatedResponse<Post>>(
       future: _getFuture(),
       builder: (context, snapshot) {
@@ -273,7 +297,10 @@ class _HomeFeedListState extends State<HomeFeedList>
         }
 
         // Combine temporary posts with real posts
-        final allPosts = [..._tempPosts, ...posts];
+        // 🔥 Remove duplicates: skip server posts that already exist in temp posts
+        final tempPostIds = _tempPosts.map((p) => p.id).toSet();
+        final uniqueServerPosts = posts.where((p) => !tempPostIds.contains(p.id)).toList();
+        final allPosts = [..._tempPosts, ...uniqueServerPosts];
 
         // Apply optimistic deletion filter (tombstones)
         allPosts.removeWhere((p) => _deletedPostIds.contains(p.id));
@@ -307,7 +334,11 @@ class _HomeFeedListState extends State<HomeFeedList>
                     post.category.toLowerCase().contains(q);
               }).toList();
 
-        if (filteredPosts.isEmpty) {
+        // 🔥 CRITICAL FIX: Don't show "No posts" while still loading
+        final isStillLoading = snapshot.connectionState == ConnectionState.waiting || 
+                               snapshot.connectionState == ConnectionState.active;
+        
+        if (filteredPosts.isEmpty && !isStillLoading) {
           return RefreshIndicator(
             onRefresh: refreshFeed,
             color: AppTheme.primary,
@@ -355,6 +386,13 @@ class _HomeFeedListState extends State<HomeFeedList>
           );
         }
 
+        // 🔥 Show loading spinner if filteredPosts is empty but still loading
+        if (filteredPosts.isEmpty && isStillLoading) {
+          return const Center(
+            child: CircularProgressIndicator(color: AppTheme.primary),
+          );
+        }
+
         return RefreshIndicator(
           onRefresh: refreshFeed,
           color: AppTheme.primary,
@@ -385,6 +423,7 @@ class _HomeFeedListState extends State<HomeFeedList>
                       builder: (_) => PostReelsView(
                         posts: filteredPosts,
                         startIndex: index,
+                        feedType: widget.feedType,
                         initialHasMore: response?.hasMore ?? false,
                       ),
                     ),

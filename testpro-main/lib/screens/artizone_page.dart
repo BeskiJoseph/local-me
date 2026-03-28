@@ -5,7 +5,6 @@ import 'package:testpro/widgets/nextdoor_post_card.dart';
 import '../shared/widgets/empty_state.dart';
 import 'article_reading_screen.dart';
 import 'create_article_screen.dart';
-import '../core/state/feed_session.dart';
 
 class ArtizonePage extends StatefulWidget {
   final String userId;

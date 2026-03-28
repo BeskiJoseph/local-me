@@ -359,7 +359,7 @@ class PostController {
 
         const pageSize = Math.min(parseInt(limit), 50);
 
-        // Validate coordinates (required for hybrid)
+        // Validate coordinates (required for distance sorting)
         geoService.validateCoordinates(parseFloat(lat), parseFloat(lng));
 
         // Get user context for enrichment
@@ -371,67 +371,30 @@ class PostController {
           req.sessionSeenIds.forEach(id => seenPostIds.add(id));
         }
 
-         // Parse cursor from JSON string (can be single or dual cursor)
-         let dualCursor = { localCursor: null, globalCursor: null };
+         // Parse cursor from JSON string
+         let lastDocSnapshot = null;
          if (cursor) {
            try {
-             const parsed = JSON.parse(cursor);
-             logger.debug(
-               { cursor: parsed },
-               '[Controller] Parsed cursor'
-             );
-             
-             // DUAL CURSOR: If it has localCursor/globalCursor fields, use as-is
-             if (parsed.localCursor || parsed.globalCursor) {
-               dualCursor = {
-                 localCursor: parsed.localCursor,
-                 globalCursor: parsed.globalCursor
-               };
-               logger.info(
-                 { localCursor: parsed.localCursor, globalCursor: parsed.globalCursor },
-                 '[Controller] Using dual cursor for pagination'
-               );
-             } 
-             // SINGLE CURSOR (backward compat): Convert old format to dual
-             else if (parsed.createdAt && parsed.id) {
-               dualCursor = {
-                 localCursor: parsed,
-                 globalCursor: parsed
-               };
-               logger.warn(
-                 { cursor: parsed },
-                 '[Controller] Converted single cursor to dual cursor (backward compatibility)'
-               );
-             }
+             lastDocSnapshot = JSON.parse(cursor);
+             logger.debug({ cursor: lastDocSnapshot }, '[Controller] Parsed cursor');
            } catch (err) {
              logger.warn({ cursor, error: err }, '[Controller] Invalid cursor format, ignoring');
            }
          }
 
-        // Calculate geohash bounds from coordinates
         const baseLat = parseFloat(lat);
         const baseLng = parseFloat(lng);
-        const precision = 6; // Precision 6 ~ 1.2km
-        const geohash = calculateGeohash(baseLat, baseLng, precision);
-        const { min: geoHashMin, max: geoHashMax } = getGeohashBounds(geohash);
 
-        logger.info(
-          { uid, lat: baseLat, lng: baseLng, geohash, precision },
-          '[Controller] Calculated geohash for hybrid feed'
-        );
-
-         // Get hybrid feed from service (MAIN FEED ENGINE)
-         const feedResult = await feedService.getHybridFeed({
-           latitude: baseLat,
-           longitude: baseLng,
-           geoHashMin,
-           geoHashMax,
-           seenPostIds,
-           pageSize,
-           dualCursor,  // Changed from lastDocSnapshot to dualCursor
-           mediaType,
-           userContext
-         });
+        // Get simplified distance-based feed from service
+        const feedResult = await feedService.getHybridFeed({
+          latitude: baseLat,
+          longitude: baseLng,
+          seenPostIds,
+          pageSize,
+          cursor: lastDocSnapshot,
+          mediaType,
+          userContext
+        });
 
         logger.info(
           {
@@ -439,8 +402,7 @@ class PostController {
             lat: baseLat,
             lng: baseLng,
             postsReturned: feedResult.posts.length,
-            hasMore: feedResult.hasMore,
-            mergeInfo: feedResult.pagination?.mergeInfo
+            hasMore: feedResult.hasMore
           },
           '[Controller] Hybrid feed retrieved'
         );
@@ -452,8 +414,7 @@ class PostController {
           pagination: {
             nextCursor: feedResult.nextCursor,
             hasMore: feedResult.hasMore,
-            count: feedResult.posts.length,
-            mergeInfo: feedResult.pagination?.mergeInfo
+            count: feedResult.posts.length
           }
         });
       } catch (error) {

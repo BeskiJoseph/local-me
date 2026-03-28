@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../config/app_theme.dart';
-import '../services/backend_service.dart';
 import '../services/auth_service.dart';
+import '../services/backend_service.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../core/utils/navigation_utils.dart';
-import '../utils/safe_error.dart';
+import '../services/interaction_service.dart';
 
 /// User search card for search results
-class UserSearchCard extends StatefulWidget {
+class UserSearchCard extends ConsumerStatefulWidget {
   final String userId;
   final Map<String, dynamic> userData;
 
@@ -18,10 +19,10 @@ class UserSearchCard extends StatefulWidget {
   });
 
   @override
-  State<UserSearchCard> createState() => _UserSearchCardState();
+  ConsumerState<UserSearchCard> createState() => _UserSearchCardState();
 }
 
-class _UserSearchCardState extends State<UserSearchCard> {
+class _UserSearchCardState extends ConsumerState<UserSearchCard> {
   bool _isFollowing = false;
   bool _isLoading = false;
 
@@ -50,45 +51,21 @@ class _UserSearchCardState extends State<UserSearchCard> {
   Future<void> _toggleFollow() async {
     final user = AuthService.currentUser;
     if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please log in to follow')),
-      );
+      ErrorHandler.showError('Please log in to follow');
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _isFollowing = !_isFollowing; // Optimistic update
-    });
-
-    try {
-      final response = await BackendService.toggleFollow(widget.userId);
-      if (mounted && response.success) {
+    await InteractionService.toggleFollowUser(
+      targetUserId: widget.userId,
+      ref: ref,
+      onBusy: () => setState(() => _isLoading = true),
+      onReady: () => setState(() => _isLoading = false),
+      onResult: (isFollowing) {
         setState(() {
-          _isFollowing = response.data ?? !_isFollowing;
+          _isFollowing = isFollowing;
         });
-      } else if (mounted && !response.success) {
-        setState(() => _isFollowing = !_isFollowing);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(safeErrorMessage(response.error))),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isFollowing = !_isFollowing; // Revert on error
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(safeErrorMessage(e))),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
+      },
+    );
   }
 
   void _navigateToProfile() {

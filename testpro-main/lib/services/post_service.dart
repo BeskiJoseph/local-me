@@ -1,15 +1,9 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:testpro/models/post.dart';
-import 'package:testpro/models/comment.dart';
 import 'package:testpro/models/paginated_response.dart';
 import 'package:testpro/repositories/post_repository.dart';
 import 'package:testpro/services/location_service.dart';
-import 'package:testpro/core/state/feed_session.dart';
-import 'package:testpro/core/state/post_state.dart';
-import 'package:testpro/core/state/provider_container.dart';
-import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'backend_service.dart';
 
 class _PostInteraction {
   final bool? isLiked;
@@ -32,7 +26,6 @@ class PostService {
   // Session interaction cache — ensures likes/comments survive refresh
   static final Map<String, _PostInteraction> _interactionCache = {};
 
-
   static PostRepository get repository => _repository;
 
   static set repository(PostRepository repo) {
@@ -47,6 +40,12 @@ class PostService {
       likeCount: cached.likeCount ?? post.likeCount,
       commentCount: cached.commentCount ?? post.commentCount,
     );
+  }
+
+  /// 🔥 Clear interaction cache when memory pressure detected
+  static void clearInteractionCache() {
+    _interactionCache.clear();
+    if (kDebugMode) debugPrint('[PostService] 🧹 Interaction cache cleared');
   }
 
   /// Creates a new post.

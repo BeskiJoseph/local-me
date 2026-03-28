@@ -1,4 +1,3 @@
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -7,19 +6,18 @@ import 'package:testpro/models/post.dart';
 import 'package:testpro/screens/edit_post_screen.dart';
 import 'package:testpro/config/app_theme.dart';
 import 'package:testpro/services/auth_service.dart';
-import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/post_service.dart';
+import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/utils/proxy_helper.dart';
 import 'package:testpro/utils/safe_error.dart';
+import 'package:testpro/services/interaction_service.dart';
 
-import 'package:testpro/screens/post_reels_view.dart';
 import 'package:testpro/screens/post_insights_screen.dart';
 import 'package:testpro/core/utils/time_utils.dart';
 import 'package:testpro/shared/widgets/expandable_text.dart';
 import 'package:testpro/shared/widgets/user_avatar.dart';
 import 'package:testpro/core/session/user_session.dart';
 import 'package:testpro/core/utils/navigation_utils.dart';
-import 'package:testpro/core/utils/haptic_service.dart';
 import 'package:testpro/shared/widgets/heart_pop_overlay.dart';
 import 'package:testpro/widgets/comments_bottom_sheet.dart';
 import 'package:intl/intl.dart';
@@ -27,8 +25,6 @@ import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:testpro/core/state/post_state.dart';
-import 'package:testpro/core/state/provider_container.dart';
-import 'dart:async';
 
 /// ============================================================
 /// POST CARD — pixel-matched to screenshot
@@ -77,68 +73,9 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
   }
 
   void _handleLike() async {
-    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
-    final bool isLiked = post.isLiked;
-    final int likeCount = post.likeCount;
-    final bool newTarget = !isLiked;
-    final int newCount = (likeCount + (newTarget ? 1 : -1)).clamp(0, 1 << 30);
-
-    if (newTarget) HapticService.medium();
-
-    final version = DateTime.now().millisecondsSinceEpoch;
-    final postId = widget.post.id;
-
-    // 1. Optimistic Update in Global Store
-    final notifier = ref.read(postStoreProvider.notifier);
-    notifier.setActionVersion(postId, 'like', version);
-    notifier.updatePostPartially(postId, {
-      'isLiked': newTarget,
-      'likeCount': newCount,
-    });
-
-    try {
-      final response = await BackendService.toggleLike(postId);
-
-      if (!mounted) return;
-
-      // 2. Race Condition Check
-      final latestVersion = ref.read(
-        postActionVersionProvider((postId, 'like')),
-      );
-      if (latestVersion != version) return;
-
-      if (!response.success) {
-        // Rollback
-        notifier.updatePostPartially(postId, {
-          'isLiked': isLiked,
-          'likeCount': likeCount,
-        });
-        _showSnackbarError("Unable to update like. Please try again.");
-      } else {
-        // Confirm with server response if possible
-        final data = response.data;
-        if (data != null) {
-          notifier.updatePostPartially(postId, {
-            'isLiked': data['isLiked'],
-            'likeCount': data['likeCount'],
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        notifier.updatePostPartially(postId, {
-          'isLiked': isLiked,
-          'likeCount': likeCount,
-        });
-        _showSnackbarError("An error occurred.");
-      }
-    }
-  }
-
-  void _showSnackbarError(String msg) {
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
+    await InteractionService.toggleLike(
+      postId: widget.post.id,
+      ref: ref,
     );
   }
 
@@ -199,12 +136,12 @@ class _NextdoorStylePostCardState extends ConsumerState<NextdoorStylePostCard> {
 
       if (!response.success) {
         notifier.updatePostPartially(postId, {'isBookmarked': isBookmarked});
-        _showSnackbarError("Unable to update save. Please try again.");
+        ErrorHandler.showError("Unable to update save. Please try again.");
       }
     } catch (e) {
       if (mounted) {
         notifier.updatePostPartially(postId, {'isBookmarked': isBookmarked});
-        _showSnackbarError("An error occurred.");
+        ErrorHandler.showError("An error occurred.");
       }
     }
   }
@@ -401,47 +338,14 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
   bool _isBusy = false;
 
   Future<void> _toggleFollow() async {
-    if (_isBusy) return;
-
-    final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
-    final bool currentFollowing = postInStore.isFollowing;
-    final bool newState = !currentFollowing;
-
-    HapticFeedback.selectionClick();
-
-    final version = DateTime.now().millisecondsSinceEpoch;
-    final postId = widget.post.id;
-    final authorId = widget.post.authorId;
-
-    // 1. Optimistic
-    final notifier = ref.read(postStoreProvider.notifier);
-    notifier.setActionVersion(postId, 'follow', version);
-    notifier.updatePostPartially(postId, {'isFollowing': newState});
-
-    setState(() => _isBusy = true);
-
-    try {
-      final res = await BackendService.toggleFollow(authorId);
-
-      if (!mounted) return;
-
-      // 2. Race Check
-      final latestVersion = ref.read(
-        postActionVersionProvider((postId, 'follow')),
-      );
-      if (latestVersion != version) return;
-
-      if (!res.success) {
-        // Rollback
-        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
-      }
-    } catch (_) {
-      if (mounted) {
-        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
-      }
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
+    await InteractionService.toggleFollow(
+      targetUserId: widget.post.authorId,
+      postId: widget.post.id,
+      authorId: widget.post.authorId,
+      ref: ref,
+      onBusy: () => setState(() => _isBusy = true),
+      onReady: () => setState(() => _isBusy = false),
+    );
   }
 
   @override
@@ -675,24 +579,20 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                 );
                 if (context.mounted) {
                   if (response.success) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          '@${widget.post.authorName} has been muted',
-                        ),
-                      ),
+                    ErrorHandler.showSuccess(
+                      '@${widget.post.authorName} has been muted',
                     );
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(safeErrorMessage(response.error))),
+                    ErrorHandler.showError(
+                      safeErrorMessage(response.error),
                     );
                   }
                 }
               } catch (e) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(SnackBar(content: Text(safeErrorMessage(e))));
+                  ErrorHandler.showError(
+                    safeErrorMessage(e),
+                  );
                 }
               }
             },
@@ -766,25 +666,19 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
                             ref
                                 .read(postStoreProvider.notifier)
                                 .removePost(widget.post.id);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Thank you for your report. Post hidden from your feed.',
-                                ),
-                              ),
+                            ErrorHandler.showSuccess(
+                              'Thank you for your report. Post hidden from your feed.',
                             );
                           } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(safeErrorMessage(response.error)),
-                              ),
+                            ErrorHandler.showError(
+                              safeErrorMessage(response.error),
                             );
                           }
                         }
                       } catch (e) {
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(safeErrorMessage(e))),
+                          ErrorHandler.showError(
+                            safeErrorMessage(e),
                           );
                         }
                       }
@@ -792,33 +686,6 @@ class _PostHeaderState extends ConsumerState<_PostHeader> {
               child: const Text('Report', style: TextStyle(color: Colors.red)),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-class _CategoryChip extends StatelessWidget {
-  final String label;
-  const _CategoryChip({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppTheme.primary, // #2F7D6A
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w800,
-          fontFamily: AppTheme.fontFamily,
-          letterSpacing: 0.5,
         ),
       ),
     );
@@ -972,7 +839,10 @@ class _PostMediaState extends State<_PostMedia> {
                   widget.post.thumbnailUrl ?? widget.post.mediaUrl!,
                 ),
                 fit: BoxFit.cover,
+                maxHeightDiskCache: 1080,
+                maxWidthDiskCache: 1080,
                 memCacheWidth: 600,
+                memCacheHeight: 600,
                 placeholder: (context, url) => Container(
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
@@ -1265,11 +1135,8 @@ class _OptionsSheet extends ConsumerWidget {
                 // Hide post from global store immediately
                 ref.read(postStoreProvider.notifier).removePost(post.id);
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Post hidden from your feed'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
+                  ErrorHandler.showSuccess(
+                    'Post hidden from your feed',
                   );
                 }
               },

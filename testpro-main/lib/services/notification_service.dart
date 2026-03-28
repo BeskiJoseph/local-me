@@ -3,11 +3,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/foundation.dart';
 import '../screens/post_reels_view.dart';
-import '../main.dart';
 import 'backend_service.dart';
 import 'notification_data_service.dart';
-import '../core/state/post_state.dart';
-import '../core/state/provider_container.dart';
+import 'interaction_service.dart';
 
 /// Top-level background message handler for FCM.
 /// Must be top-level to work in release mode.
@@ -79,12 +77,12 @@ class NotificationService {
     final data = message.data;
     final postId = data['postId'] as String?;
     
-    if (postId != null && navigatorKey.currentContext != null) {
+    if (postId != null && ErrorHandler.navigatorKey.currentContext != null) {
       // 🔥 Register ID in store if possible (skeleton)
       // GlobalProviderContainer.instance.read(postStoreProvider.notifier).registerPosts([...]);
 
       Navigator.push(
-        navigatorKey.currentContext!,
+        ErrorHandler.navigatorKey.currentContext!,
         MaterialPageRoute(builder: (_) => PostReelsView(postId: postId)),
       );
     }

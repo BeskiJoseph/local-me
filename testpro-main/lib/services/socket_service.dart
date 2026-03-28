@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:flutter/foundation.dart';
 import 'media_upload_service.dart';
-import 'media_upload_service.dart';
 
 class SocketService {
   static IO.Socket? _socket;
@@ -54,11 +53,9 @@ class SocketService {
     // --- Global Metadata Listeners ---
     _socket!.on('like_update', (data) {
       _roomController.add(Map<String, dynamic>.from(data));
-      _roomController.add(Map<String, dynamic>.from(data));
     });
 
     _socket!.on('comment_update', (data) {
-      _roomController.add(Map<String, dynamic>.from(data));
       _roomController.add(Map<String, dynamic>.from(data));
     });
 

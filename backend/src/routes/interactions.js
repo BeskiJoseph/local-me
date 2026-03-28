@@ -214,7 +214,8 @@ router.post(
                     authorName: actorDisplayName,
                     authorProfileImage: req.user.photoURL,
                     createdAt: new Date().toISOString(),
-                    postId
+                    postId,
+                    parentId: parentId || null
                 });
 
                 // Prepare notification to post author if different from commenter
@@ -313,10 +314,21 @@ router.delete(
                 }
 
                 const postRef = db.collection('posts').doc(commentData.postId);
+                let removedCount = 1;
 
-                // 1. Decrement post comment count
+                // If deleting a top-level comment, cascade delete direct replies.
+                if (!commentData.parentId) {
+                    const repliesQuery = db.collection('comments').where('parentId', '==', commentId);
+                    const repliesSnap = await transaction.get(repliesQuery);
+                    removedCount += repliesSnap.size;
+                    repliesSnap.docs.forEach((replyDoc) => {
+                        transaction.delete(replyDoc.ref);
+                    });
+                }
+
+                // 1. Decrement post comment count (full deleted thread size)
                 transaction.update(postRef, {
-                    commentCount: admin.firestore.FieldValue.increment(-1)
+                    commentCount: admin.firestore.FieldValue.increment(-removedCount)
                 });
 
                 // 2. If it's a reply, decrement parent reply count
@@ -585,21 +597,26 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
             }
         }
 
-        const snapshot = await query.limit(parseInt(limit)).get();
+        const parsedLimit = parseInt(limit, 10);
+        const snapshot = await query.limit(parsedLimit + 1).get();
+        const pageDocs = snapshot.docs.slice(0, parsedLimit);
+        const hasMore = snapshot.docs.length > parsedLimit;
 
         // Batch check which comments the user has liked
-        const commentIds = snapshot.docs.map(doc => doc.id);
+        const commentIds = pageDocs.map(doc => doc.id);
         const likedSet = new Set();
         if (commentIds.length > 0) {
-            // Firestore 'in' query supports up to 30 items
-            const likesSnapshot = await db.collection('comment_likes')
-                .where('userId', '==', userId)
-                .where('commentId', 'in', commentIds.slice(0, 30))
-                .get();
-            likesSnapshot.docs.forEach(doc => likedSet.add(doc.data().commentId));
+            for (let i = 0; i < commentIds.length; i += 30) {
+                const chunk = commentIds.slice(i, i + 30);
+                const likesSnapshot = await db.collection('comment_likes')
+                    .where('userId', '==', userId)
+                    .where('commentId', 'in', chunk)
+                    .get();
+                likesSnapshot.docs.forEach(doc => likedSet.add(doc.data().commentId));
+            }
         }
 
-        const comments = snapshot.docs.map(doc => {
+        const comments = pageDocs.map(doc => {
             const data = doc.data();
             return {
                 id: doc.id,
@@ -614,8 +631,8 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
             success: true,
             data: comments,
             pagination: {
-                cursor: comments.length === parseInt(limit) ? comments[comments.length - 1].id : null,
-                hasMore: comments.length === parseInt(limit)
+                cursor: hasMore && comments.length > 0 ? comments[comments.length - 1].id : null,
+                hasMore
             }
         });
     } catch (err) {
@@ -636,6 +653,7 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
 router.get('/comments/:commentId/replies', authenticate, async (req, res, next) => {
     try {
         const { limit = 10, afterId } = req.query;
+        const parsedLimit = parseInt(limit, 10);
         let query = db.collection('comments')
             .where('parentId', '==', req.params.commentId)
             .orderBy('createdAt', 'asc');
@@ -645,8 +663,10 @@ router.get('/comments/:commentId/replies', authenticate, async (req, res, next) 
             if (lastDoc.exists) query = query.startAfter(lastDoc);
         }
 
-        const snapshot = await query.limit(parseInt(limit)).get();
-        const replies = snapshot.docs.map(doc => {
+        const snapshot = await query.limit(parsedLimit + 1).get();
+        const pageDocs = snapshot.docs.slice(0, parsedLimit);
+        const hasMore = snapshot.docs.length > parsedLimit;
+        const replies = pageDocs.map(doc => {
             const data = doc.data();
             return {
                 id: doc.id,
@@ -660,8 +680,8 @@ router.get('/comments/:commentId/replies', authenticate, async (req, res, next) 
             success: true,
             data: replies,
             pagination: {
-                cursor: replies.length === parseInt(limit) ? replies[replies.length - 1].id : null,
-                hasMore: replies.length === parseInt(limit)
+                cursor: hasMore && replies.length > 0 ? replies[replies.length - 1].id : null,
+                hasMore
             }
         });
     } catch (err) {

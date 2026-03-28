@@ -1,34 +1,36 @@
 import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../services/auth_service.dart';
-import '../config/app_theme.dart';
 import '../services/backend_service.dart';
-import '../utils/proxy_helper.dart';
+import '../config/app_theme.dart';
 import '../models/post.dart';
 import '../models/user_profile.dart';
-import '../core/utils/navigation_utils.dart';
 import '../core/session/user_session.dart';
 import 'edit_profile.dart';
 import '../shared/widgets/user_avatar.dart';
 import '../shared/widgets/empty_state.dart';
 import 'package:testpro/widgets/nextdoor_post_card.dart';
 import 'event_post_card.dart';
-import '../services/post_service.dart';
 import 'post_reels_view.dart';
-import '../core/state/feed_session.dart';
+import '../services/interaction_service.dart';
+import '../mixins/post_loader_mixin.dart';
 
-class PersonalAccount extends StatefulWidget {
+class PersonalAccount extends ConsumerStatefulWidget {
   final String? userId;
 
   const PersonalAccount({super.key, this.userId});
 
+  /// 🔥 Global key to access profile state from anywhere for adding new posts
+  static final GlobalKey<_PersonalAccountState> profileKey = GlobalKey<_PersonalAccountState>();
+
   @override
-  State<PersonalAccount> createState() => _PersonalAccountState();
+  ConsumerState<PersonalAccount> createState() => _PersonalAccountState();
 }
 
-class _PersonalAccountState extends State<PersonalAccount>
-    with SingleTickerProviderStateMixin {
+class _PersonalAccountState extends ConsumerState<PersonalAccount>
+    with SingleTickerProviderStateMixin, PostLoaderMixin {
   late TabController _tabController;
 
   // REST States
@@ -39,14 +41,36 @@ class _PersonalAccountState extends State<PersonalAccount>
   bool _isLoadingPosts = false;
   bool _hasMore = true;
   Map<String, bool> _likedPostIds = {};
-  List<String> _myEventIds = [];
   bool _isFollowing = false;
   bool _isTogglingFollow = false;
+  String profileUserId = '';
 
-  String get profileUserId {
-    final uid = widget.userId ?? AuthService.currentUser?.uid;
-    return uid ?? '';
+  // PostLoaderMixin implementation
+  @override
+  List<Post> get posts => _posts;
+  
+  @override
+  set posts(List<Post> value) => _posts = value;
+  
+  @override
+  bool get isLoading => _isLoadingPosts;
+  
+  @override
+  set isLoading(bool value) {
+    if (mounted) setState(() => _isLoadingPosts = value);
   }
+  
+  @override
+  bool get hasMore => _hasMore;
+  
+  @override
+  set hasMore(bool value) => _hasMore = value;
+  
+  @override
+  Map<String, bool> get likedPostIds => _likedPostIds;
+  
+  @override
+  String? get authorId => profileUserId;
 
   // This getter is no longer used directly in build, but kept for other methods if needed.
   bool get isOwnProfile =>
@@ -55,6 +79,8 @@ class _PersonalAccountState extends State<PersonalAccount>
   @override
   void initState() {
     super.initState();
+    // Initialize profileUserId based on widget.userId or current user
+    profileUserId = widget.userId ?? AuthService.currentUser?.uid ?? '';
     _tabController = TabController(length: 3, vsync: this);
     _loadData();
   }
@@ -81,17 +107,7 @@ class _PersonalAccountState extends State<PersonalAccount>
 
     // Then load other sections in parallel without blocking the UI
     _loadFollowState();
-    _loadPosts(refresh: true);
-    _loadMyEvents();
-  }
-
-  Future<void> _loadMyEvents() async {
-    try {
-      final response = await BackendService.getMyEventIds();
-      if (response.success && response.data != null && mounted) {
-        setState(() => _myEventIds = response.data!);
-      }
-    } catch (_) {}
+    loadPosts(refresh: true);
   }
 
   Future<void> _loadProfile() async {
@@ -138,56 +154,34 @@ class _PersonalAccountState extends State<PersonalAccount>
   }
 
   Future<void> _toggleFollow() async {
-    if (_isTogglingFollow) return;
-    setState(() => _isTogglingFollow = true);
+    await InteractionService.toggleFollowUser(
+      targetUserId: profileUserId,
+      ref: ref,
+      onBusy: () => setState(() => _isTogglingFollow = true),
+      onReady: () => setState(() => _isTogglingFollow = false),
+      onResult: (isFollowing) {
+        setState(() {
+          _isFollowing = isFollowing;
+        });
+      },
+    );
+  }
 
-    final originalState = _isFollowing;
-    setState(() => _isFollowing = !originalState);
-
-    try {
-      final response = await BackendService.toggleFollow(profileUserId);
-      if (!response.success && mounted) {
-        setState(() => _isFollowing = originalState);
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isFollowing = originalState);
-    } finally {
-      if (mounted) setState(() => _isTogglingFollow = false);
+  /// 🔥 FIX: Add new post to the TOP of profile list immediately
+  void addNewPost(Post post) {
+    if (post.authorId != profileUserId) return;
+    if (mounted) {
+      setState(() {
+        _posts.insert(0, post);
+        _likedPostIds[post.id] = post.isLiked;
+      });
     }
   }
 
-  Future<void> _loadPosts({bool refresh = false}) async {
-    if (_isLoadingPosts) return;
-    if (!refresh && !_hasMore) return;
-
-    if (mounted) setState(() => _isLoadingPosts = true);
-
-    try {
-      final response = await PostService.getFilteredPostsPaginated(
-        authorId: profileUserId,
-        limit: 10,
-      );
-
-      if (!mounted) return;
-
-      final List<Post> newPosts = response.data;
-
-      // ── Optimized: Use Embedded isLiked ──
-      setState(() {
-        for (var p in newPosts) {
-          _likedPostIds[p.id] = p.isLiked;
-        }
-        if (refresh) {
-          _posts.clear();
-        }
-        _posts.addAll(newPosts);
-        _hasMore = response.hasMore;
-        _isLoadingPosts = false;
-      });
-    } catch (e) {
-      if (kDebugMode) debugPrint('Error loading profile posts: $e');
-      if (mounted) setState(() => _isLoadingPosts = false);
-    }
+  @override
+  void onPostsError(dynamic error) {
+    if (kDebugMode) debugPrint('Error loading profile posts: $error');
+    showError(error);
   }
 
   @override
@@ -249,7 +243,7 @@ class _PersonalAccountState extends State<PersonalAccount>
               sessionData!.displayName!.isNotEmpty) {
             displayTitle = sessionData.displayName!;
           } else if (user?.displayName != null &&
-              user!.displayName!.isNotEmpty) {
+              user.displayName!.isNotEmpty) {
             displayTitle = user.displayName!;
           } else if (profile != null &&
               (profile.displayName ?? '').isNotEmpty) {
@@ -691,7 +685,7 @@ class _PersonalAccountState extends State<PersonalAccount>
         if (index == postOnlyItems.length) {
           if (!_isLoadingPosts && _hasMore) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              _loadPosts();
+              loadPosts();
             });
           }
           return const Center(
@@ -740,7 +734,7 @@ class _PersonalAccountState extends State<PersonalAccount>
         if (index == mediaPosts.length) {
           if (!_isLoadingPosts && _hasMore) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              _loadPosts();
+              loadPosts();
             });
           }
           return const Center(

@@ -49,6 +49,8 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
                       child: CachedNetworkImage(
                         imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
                         fit: BoxFit.contain,
+                        maxHeightDiskCache: 2048,
+                        maxWidthDiskCache: 2048,
                         placeholder: (context, url) => const Center(
                           child: CircularProgressIndicator(color: Colors.white),
                         ),
@@ -114,7 +116,10 @@ class _PostMediaDisplayState extends State<PostMediaDisplay> {
                       CachedNetworkImage(
                         imageUrl: ProxyHelper.getUrl(mediaUrl),
                         fit: BoxFit.cover,
+                        maxHeightDiskCache: 1080,
+                        maxWidthDiskCache: 1080,
                         memCacheWidth: 800,
+                        memCacheHeight: 800,
                         placeholder: (context, url) => _ShimmerEffect(),
                         errorWidget: (context, url, error) => Container(
                           color: Colors.grey.shade100,

@@ -167,6 +167,9 @@ class FeedService {
         const userLat = parseFloat(latitude);
         const userLng = parseFloat(longitude);
         const hasUserLocation = !isNaN(userLat) && !isNaN(userLng);
+        
+        // 🔥 MAX RADIUS for local feed: 50km
+        const MAX_LOCAL_RADIUS_KM = 50.0;
 
         posts = posts.map(post => {
           let distance = Infinity;
@@ -187,6 +190,14 @@ class FeedService {
             score: this.computeScore(post, { latitude: userLat, longitude: userLng })
           };
         });
+        
+        // 🔥 FILTER: Only include posts within max radius (50km)
+        const beforeFilter = posts.length;
+        posts = posts.filter(post => post.distance <= MAX_LOCAL_RADIUS_KM);
+        const excluded = beforeFilter - posts.length;
+        if (excluded > 0) {
+          logger.info({ excluded, maxRadius: MAX_LOCAL_RADIUS_KM }, '[FeedService] Excluded posts beyond max radius');
+        }
 
         // 2. SORT: Distance (ASC) with 100m tolerance, then createdAt (DESC)
         const DISTANCE_TOLERANCE = 0.1; // 100 meters
@@ -223,12 +234,14 @@ class FeedService {
             nextCursor = {
               createdAt: this.normalizeTimestamp(data.createdAt),
               id: repoLastDoc.id,
+              postId: repoLastDoc.id,
             };
           } else {
             // POJO from mapDocToPost
             nextCursor = {
               createdAt: this.normalizeTimestamp(repoLastDoc.createdAt),
               id: repoLastDoc.id,
+              postId: repoLastDoc.id,
             };
           }
         }
@@ -289,21 +302,14 @@ class FeedService {
 
         // 1. CALCULATE TRENDING SCORES
         // Score = ((likes * 2) + (comments * 3)) * timeDecay
-        posts = result.posts.map(post => ({
+        posts = posts.map(post => ({
           ...post,
           normalizedCreatedAt: this.normalizeTimestamp(post.createdAt),
           score: this.calculateTrendingScore(post)
         }));
 
-        // 2. EXPLICIT IMMUTABLE SORT: Score (DESC) then createdAt (DESC)
-        const sortedPosts = [...posts].sort((a, b) => {
-          if (b.score !== a.score) {
-            return b.score - a.score;
-          }
-          return b.normalizedCreatedAt - a.normalizedCreatedAt;
-        });
-
-        posts = sortedPosts;
+        // Keep repository ordering stable for cursor continuity.
+        // The UI can still use score for display hints without reordering pages.
 
         // Enrich with user interaction data
         if (userContext) {
@@ -314,12 +320,26 @@ class FeedService {
           }));
         }
 
-        // Build composite cursor from last post
-        const lastPost = posts.length > 0 ? posts[posts.length - 1] : null;
-        const nextCursor = lastPost ? {
-          createdAt: lastPost.normalizedCreatedAt || this.normalizeTimestamp(lastPost.createdAt),
-          id: lastPost.id,
-        } : null;
+        // Build pagination cursor from repository order, not post-score order.
+        // This keeps cursor movement stable even when UI ranking reorders the page.
+        const repoLastDoc = result.lastDoc;
+        let nextCursor = null;
+        if (repoLastDoc) {
+          if (typeof repoLastDoc.data === 'function') {
+            const data = repoLastDoc.data();
+            nextCursor = {
+              createdAt: this.normalizeTimestamp(data.createdAt),
+              id: repoLastDoc.id,
+              postId: repoLastDoc.id,
+            };
+          } else {
+            nextCursor = {
+              createdAt: this.normalizeTimestamp(repoLastDoc.createdAt),
+              id: repoLastDoc.id,
+              postId: repoLastDoc.id,
+            };
+          }
+        }
 
         return {
           posts,
@@ -377,12 +397,25 @@ class FeedService {
           }));
         }
 
-        // Build composite cursor from last post (createdAt + postId + authorName for determinism)
-        const lastPost = posts.length > 0 ? posts[posts.length - 1] : null;
-        const nextCursor = lastPost ? {
-          createdAt: lastPost.normalizedCreatedAt || this.normalizeTimestamp(lastPost.createdAt),
-          id: lastPost.id,
-        } : null;
+        // Build cursor from repository order for stable pagination.
+        const repoLastDoc = result.lastDoc;
+        let nextCursor = null;
+        if (repoLastDoc) {
+          if (typeof repoLastDoc.data === 'function') {
+            const data = repoLastDoc.data();
+            nextCursor = {
+              createdAt: this.normalizeTimestamp(data.createdAt),
+              id: repoLastDoc.id,
+              postId: repoLastDoc.id,
+            };
+          } else {
+            nextCursor = {
+              createdAt: this.normalizeTimestamp(repoLastDoc.createdAt),
+              id: repoLastDoc.id,
+              postId: repoLastDoc.id,
+            };
+          }
+        }
 
         return {
           posts,
@@ -441,187 +474,162 @@ class FeedService {
     * 3. Merge: [local posts, global posts] (local has priority)
     * 4. Deduplicate: Remove any post appearing in both
     * 5. Limit: Take pageSize posts AFTER dedup
-    * 6. Build cursor: From final merged posts
-    * 7. Return: With strong seenIds for cross-page dedup
     * 
-    * This is the MAIN FEED ENGINE.
+    * PROGRESSIVE RADIUS:
+    * - First: Return posts within 50km, sorted nearest first
+    * - When 50km exhausted: Expand to 1500km, still sorted nearest first
     */
-    async getHybridFeed({
+   async getHybridFeed({
       latitude,
       longitude,
-      geoHashMin,
-      geoHashMax,
       pageSize = 20,
-      dualCursor = null,  // Changed parameter name
+      cursor = null, 
       mediaType = null,
       userContext = null
     }) {
       try {
-         // Extract individual cursors from dual cursor
-         const localCursor = dualCursor?.localCursor || null;
-         const globalCursor = dualCursor?.globalCursor || null;
-         
-         // STEP 1: Fetch sources with OVERHEAD for dedup
-         const fetchLimit = pageSize * 2;
-         const localCount = Math.ceil(fetchLimit * 0.75);
-         const globalCount = Math.ceil(fetchLimit * 0.25) + pageSize; // Large buffer for global
-
-         const [localResult, globalResult] = await Promise.all([
-           this.getLocalFeed({
-             latitude, longitude, geoHashMin, geoHashMax,
-             pageSize: localCount, lastDocSnapshot: localCursor, mediaType, userContext
-           }),
-           this.getGlobalFeed({
-             pageSize: globalCount, lastDocSnapshot: globalCursor, mediaType, userContext
-           })
-         ]);
-
-         // STEP 2: CRITICAL FIX - Filter global to exclude local IDs before interleaving
-         // Build set of local post IDs
-         const localIds = new Set(localResult.posts.map(p => p.id));
-         const filteredGlobalPosts = globalResult.posts.filter(p => !localIds.has(p.id));
-         
-         logger.info({
-           localCount: localResult.posts.length,
-           globalCountRaw: globalResult.posts.length,
-           globalCountFiltered: filteredGlobalPosts.length,
-           duplicatesRemoved: globalResult.posts.length - filteredGlobalPosts.length
-         }, '[FeedService] Filtered global posts to exclude local');
-
-          // STEP 3: Interleave [3L, 1G] with post-merge DEDUP + STREAM TRACKING
-          const seenIds = new Set();
-          const finalPosts = [];
-          const postSources = new Map(); // Track which stream each final post came from
-          const localQueue = [...localResult.posts];
-          const globalQueue = [...filteredGlobalPosts];
-
-          logger.info({
-            localIds: localQueue.map(p => p.id),
-            globalIds: globalQueue.map(p => p.id),
-            totalLocalQueue: localQueue.length,
-            totalGlobalQueue: globalQueue.length
-          }, '[FeedService] Starting interleaving merge (after duplicate exclusion)');
-
-         let li = 0, gi = 0;
-         while (finalPosts.length < pageSize && (li < localQueue.length || gi < globalQueue.length)) {
-           // Add up to 3 unique local posts (PRIORITY)
-           for (let i = 0; i < 3 && li < localQueue.length && finalPosts.length < pageSize; i++) {
-             const post = localQueue[li++];
-             if (!seenIds.has(post.id)) {
-               seenIds.add(post.id);
-               finalPosts.push(post);
-               postSources.set(post.id, { stream: 'local', queueIndex: li - 1 });
-             }
-           }
-           
-           // Add 1 unique global post (FALLBACK)
-           if (gi < globalQueue.length && finalPosts.length < pageSize) {
-             const post = globalQueue[gi++];
-             if (!seenIds.has(post.id)) {
-               seenIds.add(post.id);
-               finalPosts.push(post);
-               postSources.set(post.id, { stream: 'global', queueIndex: gi - 1 });
-             }
-           }
-         }
-
-         // STEP 3: Fallback - if still under pageSize, drain as much as possible
-         while (finalPosts.length < pageSize && (li < localQueue.length || gi < globalQueue.length)) {
-           if (li < localQueue.length) {
-             const post = localQueue[li++];
-             if (!seenIds.has(post.id)) {
-               seenIds.add(post.id);
-               finalPosts.push(post);
-               postSources.set(post.id, { stream: 'local', queueIndex: li - 1 });
-             }
-           } else if (gi < globalQueue.length) {
-             const post = globalQueue[gi++];
-             if (!seenIds.has(post.id)) {
-               seenIds.add(post.id);
-               finalPosts.push(post);
-               postSources.set(post.id, { stream: 'global', queueIndex: gi - 1 });
-             }
-           }
-         }
-
-          logger.info({
-            finalIds: finalPosts.map(p => p.id),
-            count: finalPosts.length,
-            localConsumed: li,
-            globalConsumed: gi,
-            localQueueSize: localQueue.length,
-            globalQueueSize: globalQueue.length,
-            streamBreakdown: {
-              localPostsInFinal: finalPosts.filter((p, i) => postSources.get(p.id)?.stream === 'local').length,
-              globalPostsInFinal: finalPosts.filter((p, i) => postSources.get(p.id)?.stream === 'global').length
-            }
-          }, '[FeedService] Interleaving merge complete');
-
-          // STEP 4: Build DUAL cursor ONLY from posts that actually appear in finalPosts
-          // CRITICAL FIX: Don't use queue indices (li, gi) - those don't map to final posts!
-          // Instead, find the LAST post from each stream that actually appears in finalPosts
+        // 🔥 PROGRESSIVE RADIUS
+        // First return posts within 50km
+        // When those are exhausted, expand to 1500km
+        const NEARBY_RADIUS_KM = 50.0;
+        const MAX_RADIUS_KM = 1500.0;
+        const MAX_FETCH_ATTEMPTS = 5;
+        
+        const userLat = parseFloat(latitude);
+        const userLng = parseFloat(longitude);
+        const hasUserLocation = !isNaN(userLat) && !isNaN(userLng);
+        
+        // Check if we're expanding radius based on cursor hint
+        const isExpandingRadius = cursor?._expandRadius === true;
+        const currentRadius = isExpandingRadius ? MAX_RADIUS_KM : NEARBY_RADIUS_KM;
+        
+        // Collect posts with distances
+        let allPostsWithDistance = [];
+        let currentCursor = cursor;
+        let hasMoreGlobal = true;
+        let lastDoc = null;
+        let attempts = 0;
+        
+        // Fetch batches
+        while (allPostsWithDistance.length < pageSize && hasMoreGlobal && attempts < MAX_FETCH_ATTEMPTS) {
+          attempts++;
           
-          // Find last local post in final posts
-          let lastLocalPost = null;
-          for (let i = finalPosts.length - 1; i >= 0; i--) {
-            const source = postSources.get(finalPosts[i].id);
-            if (source?.stream === 'local') {
-              lastLocalPost = finalPosts[i];
-              break;
-            }
+          const result = await postRepository.getGlobalFeed({
+            pageSize: pageSize * 2,
+            lastDocSnapshot: currentCursor,
+            mediaType
+          });
+          
+          let posts = result.posts;
+          hasMoreGlobal = result.hasMore;
+          lastDoc = result.lastDoc;
+          
+          if (posts.length === 0) break;
+          
+          if (userContext && userContext.mutedUserIds) {
+            posts = posts.filter(p => !userContext.mutedUserIds.has(p.authorId));
           }
           
-          // Find last global post in final posts
-          let lastGlobalPost = null;
-          for (let i = finalPosts.length - 1; i >= 0; i--) {
-            const source = postSources.get(finalPosts[i].id);
-            if (source?.stream === 'global') {
-              lastGlobalPost = finalPosts[i];
-              break;
+          // Calculate distances
+          posts = posts.map(post => {
+            let distance = Infinity;
+            if (hasUserLocation) {
+              const lat = post.latitude ?? post.location?.lat;
+              const lng = post.longitude ?? post.location?.lng;
+              if (lat != null && lng != null) {
+                distance = this.calculateDistance(userLat, userLng, lat, lng);
+              }
+            }
+            return { ...post, normalizedCreatedAt: this.normalizeTimestamp(post.createdAt), distance };
+          });
+          
+          // Filter by current radius
+          const postsInRadius = posts.filter(post => post.distance <= currentRadius);
+          allPostsWithDistance = [...allPostsWithDistance, ...postsInRadius];
+          
+          // Update cursor
+          if (lastDoc) {
+            if (typeof lastDoc.data === 'function') {
+              const data = lastDoc.data();
+              currentCursor = { createdAt: this.normalizeTimestamp(data.createdAt), id: lastDoc.id, postId: lastDoc.id };
+            } else {
+              currentCursor = { createdAt: this.normalizeTimestamp(lastDoc.createdAt), id: lastDoc.id, postId: lastDoc.id };
             }
           }
-          
-          const nextCursor = {
-            // Local stream cursor (for distance-sorted feed)
-            localCursor: lastLocalPost ? {
-              createdAt: lastLocalPost.normalizedCreatedAt || this.normalizeTimestamp(lastLocalPost.createdAt),
-              id: lastLocalPost.id,
-              distance: lastLocalPost.distance // Include distance for local stream
-            } : null,
-            
-            // Global stream cursor (for trending-sorted feed)
-            globalCursor: lastGlobalPost ? {
-              createdAt: lastGlobalPost.normalizedCreatedAt || this.normalizeTimestamp(lastGlobalPost.createdAt),
-              id: lastGlobalPost.id,
-              score: lastGlobalPost.score // Include trending score for global stream
-            } : null
-          };
-
-          logger.info({
-            nextCursor,
-            lastLocalId: lastLocalPost?.id,
-            lastGlobalId: lastGlobalPost?.id,
-            cursorBuildMethod: 'FROM_FINAL_POSTS_ONLY',
-            previousQueueMethod: `li=${li}, gi=${gi} (NOT USED - source of bug!)`
-          }, '[FeedService] Built dual cursor for next page (FIXED: using finalPosts, not queue indices)');
-
-        return {
-          posts: finalPosts,
-          nextCursor,
-          hasMore: localResult.hasMore || globalResult.hasMore,
-          pagination: {
-            nextCursor,
-            hasMore: localResult.hasMore || globalResult.hasMore
+        }
+        
+        // Sort by distance
+        allPostsWithDistance.sort((a, b) => {
+          if (a.distance !== b.distance) return a.distance - b.distance;
+          return b.normalizedCreatedAt - a.normalizedCreatedAt;
+        });
+        
+        // Take page size
+        const finalPosts = allPostsWithDistance.slice(0, pageSize);
+        const remainingCount = allPostsWithDistance.length - finalPosts.length;
+        
+        // 🔥 DETERMINE HAS MORE LOGIC
+        let effectiveHasMore = false;
+        let nextCursor = null;
+        let shouldExpandRadius = false;
+        
+        logger.info({
+          currentRadius,
+          finalPostsLength: finalPosts.length,
+          remainingCount,
+          hasMoreGlobal,
+          NEARBY_RADIUS_KM,
+          MAX_RADIUS_KM
+        }, '[FeedService] DEBUG hasMore logic inputs');
+        
+        if (remainingCount > 0) {
+          // More posts available in current radius
+          effectiveHasMore = true;
+          const lastPost = finalPosts[finalPosts.length - 1];
+          nextCursor = { createdAt: lastPost.normalizedCreatedAt, id: lastPost.id, postId: lastPost.id };
+          logger.info('[FeedService] DEBUG: remainingCount > 0, hasMore=true');
+        } else if (currentRadius === NEARBY_RADIUS_KM) {
+          // 50km radius exhausted - EXPAND to 1500km
+          effectiveHasMore = true;
+          shouldExpandRadius = true;
+          nextCursor = currentCursor ? { ...currentCursor, _expandRadius: true } : { _expandRadius: true };
+          logger.info('[FeedService] DEBUG: expanding from 50km to 1500km');
+        } else if (currentRadius === MAX_RADIUS_KM) {
+          // At max radius (1500km)
+          if (finalPosts.length > 0 && hasMoreGlobal) {
+            effectiveHasMore = true;
+            const lastPost = finalPosts[finalPosts.length - 1];
+            nextCursor = { createdAt: lastPost.normalizedCreatedAt, id: lastPost.id, postId: lastPost.id };
+            logger.info('[FeedService] DEBUG: 1500km with posts, hasMore=true');
+          } else {
+            // No posts within 1500km - STOP LOOPING
+            effectiveHasMore = false;
+            nextCursor = null;
+            logger.info('[FeedService] DEBUG: 1500km NO POSTS - STOPPING, hasMore=false');
           }
-        };
+        } else {
+          // Should not reach here
+          effectiveHasMore = false;
+          nextCursor = null;
+          logger.info({ currentRadius }, '[FeedService] DEBUG: UNEXPECTED radius - stopping');
+        }
+
+        logger.info({
+          attempts,
+          radiusUsed: currentRadius,
+          postsFound: allPostsWithDistance.length,
+          returned: finalPosts.length,
+          nearestDistance: finalPosts.length > 0 ? finalPosts[0].distance.toFixed(1) : null,
+          willExpandRadius: shouldExpandRadius,
+          hasMore: effectiveHasMore
+        }, '[FeedService] Progressive radius feed');
+
+        return { posts: finalPosts, nextCursor, hasMore: effectiveHasMore, pagination: { nextCursor, hasMore: effectiveHasMore } };
       } catch (error) {
-       logger.error(
-         { latitude, longitude, error },
-         '[FeedService] Error getting hybrid feed'
-       );
-       throw error;
-     }
-   }
+        logger.error({ latitude, longitude, error }, '[FeedService] Error getting hybrid feed');
+        throw error;
+      }
+    }
 
    /**
     * Get explore grid content (MIXED RATIO)

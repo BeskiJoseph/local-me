@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../config/app_theme.dart';
 import '../widgets/feed/paginated_feed_list.dart';
-import '../services/location_service.dart';
 import '../core/state/post_state.dart';
 
 /// Premium feed screen with Local and Global tabs

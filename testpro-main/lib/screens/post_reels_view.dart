@@ -4,25 +4,26 @@ import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:testpro/core/state/post_state.dart';
 import 'package:video_player/video_player.dart';
+import 'package:testpro/config/app_theme.dart';
 import 'package:testpro/models/post.dart';
 import 'package:testpro/services/post_service.dart';
-import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/auth_service.dart';
-import 'package:testpro/utils/proxy_helper.dart';
-import 'package:testpro/utils/safe_error.dart';
+import 'package:testpro/core/utils/haptic_service.dart';
 import 'package:testpro/core/utils/navigation_utils.dart';
+import 'package:testpro/utils/proxy_helper.dart';
+import 'package:testpro/utils/debounce.dart';
+import 'package:testpro/services/interaction_service.dart';
+import 'package:testpro/widgets/feed/paginated_feed_list.dart';
+import 'package:testpro/widgets/comments_bottom_sheet.dart';
+import 'package:testpro/core/state/post_state.dart';
 import 'package:testpro/shared/widgets/user_avatar.dart';
 import 'package:testpro/shared/widgets/heart_pop_overlay.dart';
-import 'package:testpro/core/utils/haptic_service.dart';
 import 'package:intl/intl.dart';
-import 'package:testpro/widgets/comments_bottom_sheet.dart';
 import 'package:testpro/shared/widgets/expandable_text.dart';
 import 'package:testpro/widgets/event_card/event_details_section.dart';
 import 'package:testpro/widgets/event_card/event_attendance_section.dart';
 import 'package:visibility_detector/visibility_detector.dart';
-import 'package:testpro/widgets/feed/paginated_feed_list.dart';
 import 'artizone_page.dart';
 
 class PostReelsView extends StatefulWidget {
@@ -107,12 +108,12 @@ class _PostReelsViewState extends State<PostReelsView> {
               controller: _horizontalController,
               onPageChanged: _onPageChanged,
               children: [
-                // LOCAL TAB
+                // LOCAL TAB (handles both 'local' and 'hybrid' feed types)
                 ReelsVerticalFeed(
-                  feedType: 'local',
-                  initialPosts: widget.feedType == 'local' ? widget.posts : [],
-                  startIndex: widget.feedType == 'local' ? widget.startIndex : 0,
-                  postId: widget.feedType == 'local' ? widget.postId : null,
+                  feedType: 'hybrid',
+                  initialPosts: (widget.feedType == 'local' || widget.feedType == 'hybrid') ? widget.posts : [],
+                  startIndex: (widget.feedType == 'local' || widget.feedType == 'hybrid') ? widget.startIndex : 0,
+                  postId: (widget.feedType == 'local' || widget.feedType == 'hybrid') ? widget.postId : null,
                   userCity: widget.userCity,
                   userCountry: widget.userCountry,
                   initialHasMore: widget.initialHasMore,
@@ -274,12 +275,15 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
         if (!mounted) return;
         ref
             .read(postStoreProvider.notifier)
-            .registerPosts(widget.initialPosts, forFeedType: widget.feedType);
+            .registerPosts(widget.initialPosts, forFeedType: widget.feedType, prepend: false);
       });
     }
   }
 
   Future<void> _loadFeed() async {
+    // 🔥 Reset state before fetching to clear hasMore/error flags
+    ref.read(postStoreProvider.notifier).resetFeedState(widget.feedType);
+    
     try {
       final response = (widget.authorId != null)
           ? await PostService.getFilteredPostsPaginated(
@@ -297,7 +301,7 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
       if (mounted) {
         ref
             .read(postStoreProvider.notifier)
-            .registerPosts(response.data, forFeedType: widget.feedType);
+            .registerPosts(response.data, forFeedType: widget.feedType, prepend: false);
       }
     } catch (e) {
       debugPrint('Error loading Reels: $e');
@@ -362,7 +366,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
       if (mounted) {
         ref.read(postStoreProvider.notifier).registerPosts([
           widget.post,
-        ], forFeedType: 'reels');
+        ], forFeedType: 'reels', prepend: false);
       }
     });
   }
@@ -375,7 +379,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
     if (oldWidget.post.id != widget.post.id) {
       ref.read(postStoreProvider.notifier).registerPosts([
         widget.post,
-      ], forFeedType: 'reels');
+      ], forFeedType: 'reels', prepend: false);
     }
 
     if (widget.isCurrentPage && !oldWidget.isCurrentPage) {
@@ -425,87 +429,19 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
   }
 
   Future<void> _toggleLike() async {
-    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
-    final bool isLiked = post.isLiked;
-    final int likeCount = post.likeCount;
-    final bool newTarget = !isLiked;
-    final int newCount = (likeCount + (newTarget ? 1 : -1)).clamp(0, 1 << 30);
-
-    if (newTarget) HapticService.medium();
-
-    final version = DateTime.now().millisecondsSinceEpoch;
-    final postId = widget.post.id;
-
-    // 1. Optimistic Update
-    final notifier = ref.read(postStoreProvider.notifier);
-    notifier.setActionVersion(postId, 'like', version);
-    notifier.updatePostPartially(postId, {
-      'isLiked': newTarget,
-      'likeCount': newCount,
-    });
-
-    try {
-      final response = await BackendService.toggleLike(postId);
-      if (!mounted) return;
-
-      // 2. Race Check
-      final latestVersion = ref.read(
-        postActionVersionProvider((postId, 'like')),
-      );
-      if (latestVersion != version) return;
-
-      if (!response.success) {
-        // Rollback
-        notifier.updatePostPartially(postId, {
-          'isLiked': isLiked,
-          'likeCount': likeCount,
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        notifier.updatePostPartially(postId, {
-          'isLiked': isLiked,
-          'likeCount': likeCount,
-        });
-      }
-    }
+    await InteractionService.toggleLike(
+      postId: widget.post.id,
+      ref: ref,
+    );
   }
 
   Future<void> _toggleFollow() async {
-    final post = ref.read(postProvider(widget.post.id)) ?? widget.post;
-    final bool currentFollowing = post.isFollowing;
-    final bool newState = !currentFollowing;
-
-    HapticFeedback.selectionClick();
-
-    final version = DateTime.now().millisecondsSinceEpoch;
-    final postId = widget.post.id;
-    final authorId = widget.post.authorId;
-
-    // 1. Optimistic
-    final notifier = ref.read(postStoreProvider.notifier);
-    notifier.setActionVersion(postId, 'follow', version);
-    notifier.updatePostPartially(postId, {'isFollowing': newState});
-
-    try {
-      final res = await BackendService.toggleFollow(authorId);
-      if (!mounted) return;
-
-      // 2. Race Check
-      final latestVersion = ref.read(
-        postActionVersionProvider((postId, 'follow')),
-      );
-      if (latestVersion != version) return;
-
-      if (!res.success) {
-        // Rollback
-        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
-      }
-    } catch (_) {
-      if (mounted) {
-        notifier.updatePostPartially(postId, {'isFollowing': currentFollowing});
-      }
-    }
+    await InteractionService.toggleFollow(
+      targetUserId: widget.post.authorId,
+      postId: widget.post.id,
+      authorId: widget.post.authorId,
+      ref: ref,
+    );
   }
 
   @override
@@ -683,8 +619,8 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
                         widget.post.authorId,
                       ),
                       child: UserAvatar(
-                        imageUrl: widget.post.authorProfileImage,
-                        name: widget.post.authorName,
+                        imageUrl: widget.post.authorProfileImage ?? '',
+                        name: widget.post.authorName.isNotEmpty ? widget.post.authorName : 'Unknown',
                         radius: 18,
                         initialsColor: Colors.white,
                       ),
@@ -692,7 +628,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        widget.post.authorName,
+                        widget.post.authorName.isNotEmpty ? widget.post.authorName : 'Unknown',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
@@ -998,8 +934,8 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
                 Row(
                   children: [
                     UserAvatar(
-                      imageUrl: widget.post.authorProfileImage,
-                      name: widget.post.authorName,
+                      imageUrl: widget.post.authorProfileImage ?? '',
+                      name: widget.post.authorName.isNotEmpty ? widget.post.authorName : 'Unknown',
                       radius: 18,
                     ),
                     const SizedBox(width: 10),
@@ -1008,7 +944,7 @@ class _ReelPostItemState extends ConsumerState<ReelPostItem>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            widget.post.authorName,
+                            widget.post.authorName.isNotEmpty ? widget.post.authorName : 'Unknown',
                             style: const TextStyle(
                               fontWeight: FontWeight.w700,
                               color: Color(0xFF1A1A1A),

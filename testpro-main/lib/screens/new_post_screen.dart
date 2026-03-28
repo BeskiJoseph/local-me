@@ -1,36 +1,38 @@
 import 'package:flutter/foundation.dart';
-
 import 'package:flutter/material.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:io';
 
 import '../config/app_theme.dart';
-import 'package:file_picker/file_picker.dart';
 import 'create_event_screen.dart';
 import 'write_article_screen.dart';
+import 'personal_account.dart';
+import '../widgets/feed/paginated_feed_list.dart';
 import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
 import '../services/location_service.dart';
 import '../services/user_service.dart';
 import '../services/geocoding_service.dart';
 import '../services/post_service.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:geolocator/geolocator.dart';
-import 'dart:io';
+import '../core/state/post_state.dart';
 
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
 import '../core/utils/haptic_service.dart';
 import '../utils/safe_error.dart';
 
-class NewPostScreen extends StatefulWidget {
+class NewPostScreen extends ConsumerStatefulWidget {
   const NewPostScreen({super.key});
 
   @override
-  State<NewPostScreen> createState() => _NewPostScreenState();
+  ConsumerState<NewPostScreen> createState() => _NewPostScreenState();
 }
 
-class _NewPostScreenState extends State<NewPostScreen> {
+class _NewPostScreenState extends ConsumerState<NewPostScreen> {
   final TextEditingController _contentController = TextEditingController();
   final FocusNode _captionFocus = FocusNode();
   String? _currentLocation = 'Detecting location...';
@@ -85,20 +87,7 @@ class _NewPostScreenState extends State<NewPostScreen> {
 
   Future<void> _detectLocation() async {
     try {
-      final user = AuthService.currentUser;
-      if (user != null) {
-        final profile = await UserService.getUserProfile(user.uid);
-        if (profile?.location != null && profile!.location!.isNotEmpty) {
-          if (mounted) {
-            setState(() {
-              _currentLocation = profile.location!.split(',')[0].trim();
-            });
-            return; // Use stored location from profile
-          }
-        }
-      }
-
-      // Fallback to fresh detection if profile location is missing
+      // 🔥 FIX: Get ACTUAL GPS location first (not profile location)
       final position = await Geolocator.getCurrentPosition();
       final place = await GeocodingService.getPlace(position.latitude, position.longitude);
       if (mounted) {
@@ -107,9 +96,25 @@ class _NewPostScreenState extends State<NewPostScreen> {
         });
       }
     } catch (e) {
+      // Fallback to profile location if GPS fails
+      try {
+        final user = AuthService.currentUser;
+        if (user != null) {
+          final profile = await UserService.getUserProfile(user.uid);
+          if (profile?.location != null && profile!.location!.isNotEmpty) {
+            if (mounted) {
+              setState(() {
+                _currentLocation = profile.location!.split(',')[0].trim();
+              });
+            }
+            return;
+          }
+        }
+      } catch (_) {}
+      
       if (mounted) {
         setState(() {
-          _currentLocation = 'Unknown Location'; // Fallback
+          _currentLocation = 'Unknown Location';
         });
       }
     }
@@ -426,6 +431,29 @@ class _NewPostScreenState extends State<NewPostScreen> {
         });
         HapticService.success();
         await Future.delayed(const Duration(milliseconds: 300));
+        
+        // 🔥 REGISTER NEW POST TO FEED - make it appear immediately
+        if (mounted) {
+          final store = ref.read(postStoreProvider.notifier);
+          // Register to both hybrid and user's own profile feed with prepend=true
+          store.batchUpdate(() {
+            store.registerPosts([post], forFeedType: 'hybrid', prepend: true);
+            store.registerPosts([post], forFeedType: 'global', prepend: true);
+          });
+          if (kDebugMode) debugPrint('[NewPost] ✅ Registered new post to feeds');
+          
+          // 🔥 SYNC TO HOME FEED - add to feed UI immediately via PaginatedFeedList
+          PaginatedFeedList.addNewPost(post, ref);
+          if (kDebugMode) debugPrint('[NewPost] ✅ Synced new post to home feed');
+          
+          // 🔥 SYNC TO PROFILE PAGE - add to user's profile immediately
+          final profileState = PersonalAccount.profileKey.currentState;
+          if (profileState != null) {
+            profileState.addNewPost(post);
+            if (kDebugMode) debugPrint('[NewPost] ✅ Synced new post to profile page');
+          }
+        }
+        
         if (mounted) Navigator.pop(context, true);
       } else {
         if (kDebugMode) debugPrint('❌ Post creation failed');

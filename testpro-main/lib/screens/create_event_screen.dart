@@ -6,8 +6,6 @@ import '../config/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
 import '../services/post_service.dart';
-import '../services/backend_service.dart';
-import '../models/post.dart';
 import 'package:geolocator/geolocator.dart';
 import 'group_chat_screen.dart';
 import '../utils/safe_error.dart';
@@ -148,10 +146,47 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     
     try {
       Position? position;
-      try {
+      // 🔥 IMPROVED: Check location permission before requesting position
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          // Permission denied - show message but continue without location
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Location permission denied. Event will be created without precise location.')),
+            );
+          }
+        }
+      }
+      
+      if (permission == LocationPermission.deniedForever) {
+        // Permanently denied - show settings dialog
+        if (mounted) {
+          final shouldOpenSettings = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Location Permission Required'),
+              content: const Text('Location permission is permanently denied. Please enable it in settings to add location to your event.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Open Settings'),
+                ),
+              ],
+            ),
+          );
+          
+          if (shouldOpenSettings == true) {
+            await Geolocator.openAppSettings();
+          }
+        }
+      } else if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
         position = await Geolocator.getCurrentPosition().timeout(const Duration(seconds: 5));
-      } catch (e) {
-        if (kDebugMode) debugPrint('Location detection failed (optional): $e');
       }
       
       String? coverImageUrl;

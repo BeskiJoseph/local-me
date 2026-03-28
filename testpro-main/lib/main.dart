@@ -21,8 +21,9 @@ import 'package:testpro/core/state/feed_session.dart';
 import 'package:testpro/core/auth/auth_event_stream.dart';
 import 'package:testpro/services/connectivity_service.dart';
 import 'package:testpro/core/state/provider_container.dart';
-
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+import 'package:testpro/core/state/post_state.dart';
+import 'package:testpro/services/post_service.dart';
+import 'package:testpro/services/interaction_service.dart';
 
 void main() {
   // 🚀 Initialize Riverpod ProviderContainer for static services ABSOLUTE FIRST
@@ -91,14 +92,17 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> {
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   StreamSubscription? _authSub;
   StreamSubscription? _eventSub;
   StreamSubscription? _connectivitySub;
+  Timer? _memoryCheckTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _startMemoryMonitoring();
     _authSub = BackendService.onAuthFailure.listen((_) {
       _handleAuthFailure();
     });
@@ -112,7 +116,7 @@ class _MyAppState extends State<MyApp> {
     _connectivitySub = ConnectivityService.connectivityStream.listen((
       connected,
     ) {
-      final context = navigatorKey.currentContext;
+      final context = ErrorHandler.navigatorKey.currentContext;
       if (context == null) return;
       if (!connected) {
         ConnectivityService.showOfflineBanner(context);
@@ -122,13 +126,79 @@ class _MyAppState extends State<MyApp> {
     });
   }
 
+  /// 🔥 Memory pressure monitoring - check every 30 seconds
+  void _startMemoryMonitoring() {
+    _memoryCheckTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _checkMemoryPressure();
+    });
+  }
+
+  void _checkMemoryPressure() {
+    try {
+      // Check image cache size as a proxy for memory pressure
+      final imageCache = PaintingBinding.instance.imageCache;
+      final currentSize = imageCache.currentSize;
+      final maxSize = imageCache.maximumSize;
+      
+      if (kDebugMode) {
+        debugPrint('[MemoryMonitor] Image cache: $currentSize / $maxSize images');
+      }
+      
+      // 🔥 If image cache is over 70% full, trigger cleanup
+      if (maxSize > 0 && currentSize / maxSize > 0.7) {
+        debugPrint('[MemoryMonitor] ⚠️ Image cache high, triggering cleanup');
+        _triggerMemoryCleanup();
+      }
+    } catch (e) {
+      // Memory monitoring not available on all platforms
+    }
+  }
+
+  void _triggerMemoryCleanup() {
+    // Clear image cache
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    
+    // Clear PostService interaction cache
+    PostService.clearInteractionCache();
+    
+    if (kDebugMode) {
+      debugPrint('[MemoryMonitor] 🧹 Image cache cleared');
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // 🔥 When app goes to background, clear session buffer and image cache
+    if (state == AppLifecycleState.paused) {
+      if (kDebugMode) debugPrint('[MemoryMonitor] App paused - clearing caches');
+      PaintingBinding.instance.imageCache.clear();
+      _triggerMemoryCleanup();
+      clearSessionBuffer();
+    }
+  }
+
+  /// 🔥 Clear session buffer when app goes to background
+  void clearSessionBuffer() {
+    try {
+      final container = GlobalProviderContainer.instance;
+      if (container != null) {
+        final notifier = container.read(postStoreProvider.notifier);
+        notifier.clearSessionBuffer();
+      }
+    } catch (e) {
+      debugPrint('[MemoryMonitor] Failed to clear session buffer: $e');
+    }
+  }
+
   void _handleAuthFailure() {
     debugPrint('🚨 Global Auth Failure detected! Redirecting to login.');
     AuthService.signOut();
     UserSession.clear();
     FeedSession.instance.resetAll();
 
-    navigatorKey.currentState?.pushAndRemoveUntil(
+    ErrorHandler.navigatorKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const WelcomeScreen()),
       (route) => false,
     );
@@ -145,7 +215,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: navigatorKey,
+      navigatorKey: ErrorHandler.navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'LocalMe',
       theme: AppTheme.lightTheme.copyWith(

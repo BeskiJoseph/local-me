@@ -1,13 +1,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import '../services/post_service.dart';
 import '../config/app_theme.dart';
-import 'package:geolocator/geolocator.dart';
-import '../services/geocoding_service.dart';
-import '../services/user_service.dart';
 import '../services/notification_data_service.dart';
-import '../services/auth_service.dart';
 import 'search_screen.dart';
 import 'activity_screen.dart';
 import 'personal_account.dart';
@@ -16,12 +11,10 @@ import '../widgets/feed/paginated_feed_list.dart';
 import '../widgets/feed/feed_shimmer.dart';
 import '../widgets/bottom_nav_bar.dart';
 import 'new_post_screen.dart';
-import '../core/session/user_session.dart';
 import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/location_service.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:testpro/core/state/post_state.dart';
-import '../utils/safe_error.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -36,9 +29,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isLoadingLocation = true;
   String? _locationError;
   
-  // Cache profile to avoid duplicate API calls
-  dynamic _cachedProfile;
-
   // 0 = Nearby/Local, 1 = Global
   int _feedToggleIndex = 0;
 
@@ -53,6 +43,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void initState() {
+    super.initState();
     // Activate custom backend session layer (bridging Firebase Auth)
     BackendService.syncCustomTokens();
     _initApp();
@@ -69,11 +60,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
            _currentCountry = LocationService.currentCountry;
            _isLoadingLocation = false;
         });
-        ref.read(postStoreProvider.notifier).loadMore(
-          feedType: 'local',
-          latitude: LocationService.currentPosition?.latitude,
-          longitude: LocationService.currentPosition?.longitude,
-        );
+        // 🔥 Stagger feed initialization to prevent memory spike
+        // Delay first feed load to allow UI to render first
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (mounted) {
+          ref.read(postStoreProvider.notifier).loadMore(
+            feedType: 'hybrid',
+            latitude: LocationService.currentPosition?.latitude,
+            longitude: LocationService.currentPosition?.longitude,
+          );
+        }
       }
     } catch (e) {
       if (kDebugMode) debugPrint('Error initializing app location: $e');
@@ -88,7 +84,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (kDebugMode) debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
     
     // Clear the store's cursors and seen IDs for a fresh start on refresh
-    ref.read(postStoreProvider.notifier).clearSeen();
+    final notifier = ref.read(postStoreProvider.notifier);
+    notifier.clearSeen();
+    notifier.resetFeedState('hybrid');
+    notifier.resetFeedState('global');
     
     setState(() {
       _feedRevision++;
@@ -103,11 +102,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         MaterialPageRoute(builder: (_) => const NewPostScreen()),
       ).then((result) async {
         if (result == true) {
-          if (kDebugMode) debugPrint('📝 Post creation confirmed, triggering feed refresh');
-          await Future.delayed(const Duration(milliseconds: 200));
-          if (mounted) {
-            _refreshFeeds();
-          }
+          if (kDebugMode) debugPrint('📝 Post created - no full refresh needed, post already registered to feed');
+          // 🔥 DON'T refresh - new post is already inserted at top via registerPosts()
         }
       });
       return;
@@ -123,12 +119,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.dispose();
   }
 
-  void _refreshFeedsInternal() {
-    _refreshFeeds();
-  }
-
-
-
   Widget _buildHomeTab() {
     return Column(
       children: [
@@ -138,8 +128,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           onToggleChanged: (i) => setState(() {
             _feedToggleIndex = i;
             _visitedFeedIndexes.add(i);
+            // 🔥 Stagger global feed loading - only load when first visited and delay
             if (i == 1 && _visitedFeedIndexes.length == 2) {
-                ref.read(postStoreProvider.notifier).loadMore(feedType: 'global');
+              Future.delayed(const Duration(milliseconds: 500), () {
+                if (mounted) {
+                  ref.read(postStoreProvider.notifier).loadMore(feedType: 'global');
+                }
+              });
             }
           }),
           onNotificationTap: () => Navigator.push(
@@ -161,7 +156,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         )
                       : PaginatedFeedList(
                           key: ValueKey('nearby_$_feedRevision'),
-                          feedType: 'local',
+                          feedType: 'hybrid',
                           userCity: _currentCity,
                           userCountry: _currentCountry,
                           onRefresh: _refreshFeeds,
@@ -193,7 +188,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             _visitedNavIndexes.contains(1) ? const SearchScreen() : const SizedBox.shrink(),      // Index 1: Explore
             const SizedBox.shrink(),   // Index 2: Placeholder for Create (modal)
             _visitedNavIndexes.contains(3) ? CommunityScreen() : const SizedBox.shrink(),         // Index 3: Groups
-            _visitedNavIndexes.contains(4) ? PersonalAccount() : const SizedBox.shrink(),         // Index 4: Me
+            _visitedNavIndexes.contains(4) ? PersonalAccount(key: PersonalAccount.profileKey) : const SizedBox.shrink(),         // Index 4: Me
           ],
         ),
       ),

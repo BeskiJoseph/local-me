@@ -5,7 +5,6 @@ import 'package:testpro/models/post.dart';
 import 'package:testpro/models/comment.dart';
 import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/post_service.dart';
-import 'package:testpro/models/api_response.dart';
 import 'package:geolocator/geolocator.dart';
 
 
@@ -28,6 +27,9 @@ class PostStoreState {
   final int localRadiusIndex;       // current index into radiusSteps
   final Set<String> localSeenIds;   // dedup across radius expansions
   final bool isLoading;             // tracks initial/global loading state
+  final Map<String, bool> isLoadingByFeedType;
+  final Map<String, bool> hasMoreByFeedType; // 🔥 Track hasMore per feed type
+  final Map<String, String?> errorByFeedType; // 🔥 Track error per feed type
 
   PostStoreState({
     this.posts = const {},
@@ -40,6 +42,9 @@ class PostStoreState {
     this.localRadiusIndex = 0,
     this.localSeenIds = const {},
     this.isLoading = false,
+    this.isLoadingByFeedType = const {},
+    this.hasMoreByFeedType = const {},
+    this.errorByFeedType = const {},
   });
 
   PostStoreState copyWith({
@@ -53,6 +58,9 @@ class PostStoreState {
     int? localRadiusIndex,
     Set<String>? localSeenIds,
     bool? isLoading,
+    Map<String, bool>? isLoadingByFeedType,
+    Map<String, bool>? hasMoreByFeedType,
+    Map<String, String?>? errorByFeedType,
   }) {
     return PostStoreState(
       posts: posts ?? this.posts,
@@ -65,6 +73,9 @@ class PostStoreState {
       localRadiusIndex: localRadiusIndex ?? this.localRadiusIndex,
       localSeenIds: localSeenIds ?? this.localSeenIds,
       isLoading: isLoading ?? this.isLoading,
+      isLoadingByFeedType: isLoadingByFeedType ?? this.isLoadingByFeedType,
+      hasMoreByFeedType: hasMoreByFeedType ?? this.hasMoreByFeedType,
+      errorByFeedType: errorByFeedType ?? this.errorByFeedType,
     );
   }
 
@@ -118,7 +129,14 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
 
   // --- Registration & Updates ---
 
-  void registerPosts(List<Post> newPosts, {required String forFeedType}) {
+  /// 🔥 Register posts with control over insertion order
+  /// [prepend] = true for new posts (insert at beginning)
+  /// [prepend] = false for pagination (append to end)
+  void registerPosts(
+    List<Post> newPosts, {
+    required String forFeedType,
+    bool prepend = true,  // 🔥 Default to prepend for new posts
+  }) {
     // 🔥 CRITICAL: feedType MUST be provided - never allow "unknown"
     if (forFeedType.isEmpty || forFeedType == 'unknown') {
       throw Exception(
@@ -144,7 +162,7 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
         } else {
           // Merge logic: only update if something meaningful changed
           final existing = updatedPosts[post.id]!;
-          updatedPosts[post.id] = existing.copyWith(
+          final merged = existing.copyWith(
             mediaUrl: post.mediaUrl,
             thumbnailUrl: post.thumbnailUrl,
             body: post.body,
@@ -155,11 +173,15 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
             computedStatus: post.computedStatus,
             scope: post.scope,
           );
+          if (merged != existing) {
+            changed = true;
+          }
+          updatedPosts[post.id] = merged;
         }
       }
 
       if (changed || _isBatching) {
-        // 🔥 FIX: Maintain stable order while appending new IDs
+        // 🔥 FIX: Insert new IDs at BEGINNING so newest posts appear first (Instagram-style)
         final List<String> currentIds = _isBatching
             ? _batchState!.postIds
             : state.postIds;
@@ -173,7 +195,12 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
           }
         }
 
-        final List<String> finalIds = [...currentIds, ...newIds];
+        // 🔥 INSERT AT BEGINNING or END based on prepend flag
+        // prepend=true: new posts go first (Instagram-style)
+        // prepend=false: pagination posts go last
+        final List<String> finalIds = prepend
+            ? [...newIds, ...currentIds]  // New posts first
+            : [...currentIds, ...newIds]; // Pagination: append to end
 
         if (kDebugMode) {
           print("[PostStore] UI FINAL IDS: $finalIds");
@@ -189,23 +216,24 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
               : state.postIdsByFeedType,
         );
 
-        if (forFeedType != null) {
-          final currentFeedIds = updatedFeedIds[forFeedType] ?? [];
-          final feedIdSet = currentFeedIds.toSet();
-          
-          // 🔥 FIX: Register IDs to this feed even if they are already known globally
-          final newFeedIds = newPosts
-              .map((p) => p.id)
-              .where((id) => !feedIdSet.contains(id))
-              .toList();
-              
-          updatedFeedIds[forFeedType] = [...currentFeedIds, ...newFeedIds];
+        final currentFeedIds = updatedFeedIds[forFeedType] ?? [];
+        final feedIdSet = currentFeedIds.toSet();
 
-          if (kDebugMode) {
-            print(
-              "[PostStore] Feed '$forFeedType' now has ${updatedFeedIds[forFeedType]!.length} posts",
-            );
-          }
+        // 🔥 FIX: Register IDs to this feed even if they are already known globally
+        final newFeedIds = newPosts
+            .map((p) => p.id)
+            .where((id) => !feedIdSet.contains(id))
+            .toList();
+
+        // 🔥 INSERT AT BEGINNING or END for feed-specific IDs too
+        updatedFeedIds[forFeedType] = prepend
+            ? [...newFeedIds, ...currentFeedIds]  // New posts first
+            : [...currentFeedIds, ...newFeedIds]; // Pagination: append to end
+
+        if (kDebugMode) {
+          print(
+            "[PostStore] Feed '$forFeedType' now has ${updatedFeedIds[forFeedType]!.length} posts",
+          );
         }
 
 
@@ -228,8 +256,19 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     double? latitude,
     double? longitude,
   }) async {
-    if (state.isLoading) return;
-    _updateState(state.copyWith(isLoading: true));
+    if (state.isLoadingByFeedType[feedType] == true) return;
+    
+    // 🔥 Clear error state when starting a new load
+    final errors = Map<String, String?>.from(state.errorByFeedType);
+    errors[feedType] = null;
+
+    final loadingByFeed = Map<String, bool>.from(state.isLoadingByFeedType);
+    loadingByFeed[feedType] = true;
+    _updateState(state.copyWith(
+      isLoading: true, 
+      isLoadingByFeedType: loadingByFeed,
+      errorByFeedType: errors,
+    ));
 
     try {
       if (feedType == 'local') {
@@ -248,9 +287,20 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
         );
       }
     } catch (e) {
-      debugPrint('[PostStore] ❌ Load more error: $e');
+      debugPrint('[PostStore] ❌ Load more error ($feedType): $e');
+      final errors = Map<String, String?>.from(state.errorByFeedType);
+      errors[feedType] = e.toString();
+      _updateState(state.copyWith(errorByFeedType: errors));
     } finally {
-      _updateState(state.copyWith(isLoading: false));
+      final updatedLoadingByFeed = Map<String, bool>.from(state.isLoadingByFeedType);
+      updatedLoadingByFeed[feedType] = false;
+      final hasAnyLoading = updatedLoadingByFeed.values.any((v) => v);
+      _updateState(
+        state.copyWith(
+          isLoading: hasAnyLoading,
+          isLoadingByFeedType: updatedLoadingByFeed,
+        ),
+      );
     }
   }
 
@@ -290,12 +340,16 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
         longitude: longitude,
       );
 
+      final hasMoreMap = Map<String, bool>.from(state.hasMoreByFeedType);
+      hasMoreMap['local'] = response.hasMore;
+      _updateState(state.copyWith(hasMoreByFeedType: hasMoreMap));
+
       _localHasMore = response.hasMore;
       
       if (response.data.isNotEmpty) {
         // Register internally first
         batchUpdate(() {
-          registerPosts(response.data, forFeedType: 'all_known');
+          registerPosts(response.data, forFeedType: 'all_known', prepend: false);
           
           if (response.cursor != null) {
             final updatedCursors = Map<String, Map<String, dynamic>>.from(state.lastCursors);
@@ -311,7 +365,7 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
              return p.copyWith(distance: d / 1000);
           }
           return p.copyWith(distance: 99999);
-        }).where((p) => !state.localSeenIds.contains(p.id)).toList();
+        }).where((p) => !state.localSeenIds.contains(p.id) && (p.distance ?? 99999) <= 50.0).toList();
 
         if (newlyFetched.isNotEmpty) {
            debugPrint('[PostStore] ✅ Showing ${newlyFetched.length} newly fetched posts');
@@ -344,6 +398,11 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
       localSeenIds: const {},
       localRadiusIndex: 0,
     ));
+    
+    final hasMoreMap = Map<String, bool>.from(state.hasMoreByFeedType);
+    hasMoreMap['local'] = true;
+    _updateState(state.copyWith(hasMoreByFeedType: hasMoreMap));
+
     _localHasMore = true;
     _localRetryCount = 0;
 
@@ -373,38 +432,70 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     }
   }
 
-  /// Get ALL posts from store with distance computed, sorted by distance ASC
-  List<Post> _getAllPostsWithDistance(double latitude, double longitude) {
+  /// 🔥 NEAREST-FIRST with Unseen Priority AND Distance Filter
+  /// Sorts: Unseen posts first (by distance), then seen posts (by distance)
+  /// Filters: Only posts within maxRadiusKm (default 50km for local feed)
+  List<Post> _getAllPostsWithDistance(double latitude, double longitude, {double maxRadiusKm = 50.0}) {
     final currentPosts = _isBatching ? _batchState!.posts : state.posts;
 
     final withDistance = <Post>[];
+    int excludedCount = 0;
+    int noCoordsCount = 0;
+    
     for (final p in currentPosts.values) {
       if (p.latitude != null && p.longitude != null) {
+        double d;
         if (p.distance != null) {
-          withDistance.add(p);
+          d = p.distance!;
         } else {
-          final d = Geolocator.distanceBetween(
+          d = Geolocator.distanceBetween(
             latitude, longitude, p.latitude!, p.longitude!,
           ) / 1000;
+        }
+        
+        // 🔥 FILTER: Only include posts within maxRadiusKm
+        if (d <= maxRadiusKm) {
           withDistance.add(p.copyWith(distance: d));
+        } else {
+          excludedCount++;
+          if (kDebugMode && excludedCount <= 3) {
+            debugPrint('[PostStore] 🚫 Excluding post ${p.id.substring(0, 8)}... from ${p.city ?? 'unknown'} at ${d.toStringAsFixed(1)}km (max: ${maxRadiusKm}km)');
+          }
         }
       } else {
-        // Posts without coordinates → add at end with max distance
-        withDistance.add(p.copyWith(distance: 99999));
+        noCoordsCount++;
+        // Posts without coordinates → only include if maxRadius is very large
+        if (maxRadiusKm >= 99999) {
+          withDistance.add(p.copyWith(distance: 99999));
+        }
       }
     }
+    
+    if (kDebugMode) {
+      debugPrint('[PostStore] 📍 Distance filter: ${withDistance.length}/${currentPosts.length} posts within ${maxRadiusKm}km (excluded: $excludedCount far, $noCoordsCount no coords)');
+    }
 
-    // Sort: closest first (with 100m tolerance), then by createdAt for ties
+    // 🔥 SORT: Unseen first, then by distance, then by recency
     const distanceTolerance = 0.1; // 100 meters
     withDistance.sort((a, b) {
-      final da = a.distance ?? double.infinity;
-      final db = b.distance ?? double.infinity;
+      // 1. First: Check if seen vs unseen
+      final aSeen = state.localSeenIds.contains(a.id) || state.seenIds.containsKey(a.id);
+      final bSeen = state.localSeenIds.contains(b.id) || state.seenIds.containsKey(b.id);
       
-      final diff = da - db;
-      if (diff.abs() > distanceTolerance) {
-        return diff.compareTo(0);
+      if (aSeen != bSeen) {
+        return aSeen ? 1 : -1; // Unseen (-1) comes before Seen (1)
       }
       
+      // 2. Both in same group (both seen or both unseen) → Sort by distance
+      final da = a.distance ?? double.infinity;
+      final db = b.distance ?? double.infinity;
+      final diff = da - db;
+      
+      if (diff.abs() > distanceTolerance) {
+        return diff.compareTo(0); // Nearest first
+      }
+      
+      // 3. Same distance → Newest first
       return b.createdAt.compareTo(a.createdAt);
     });
 
@@ -414,26 +505,57 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
   /// Show a batch of local posts and mark as seen
   void _showLocalBatch(List<Post> batch) {
     final newSeenIds = Set<String>.from(state.localSeenIds);
+    final now = DateTime.now();
     for (final p in batch) {
       newSeenIds.add(p.id);
+      _localSeenTimestamps[p.id] = now;
     }
 
     batchUpdate(() {
-      registerPosts(batch, forFeedType: 'local');
+      registerPosts(batch, forFeedType: 'local', prepend: false);
       _updateState((_isBatching ? _batchState! : state).copyWith(
         localSeenIds: newSeenIds,
       ));
     });
 
-    debugPrint('[PostStore] ✅ Showed ${batch.length} posts (dist: ${batch.first.distance?.toStringAsFixed(1)}km → ${batch.last.distance?.toStringAsFixed(1)}km, seen: ${newSeenIds.length})');
+    // 🔥 DEBUG: Show sort breakdown
+    final unseenCount = batch.where((p) => 
+      !state.localSeenIds.contains(p.id) && !state.seenIds.containsKey(p.id)
+    ).length;
+    final seenCount = batch.length - unseenCount;
+    final nearestDist = batch.isNotEmpty ? batch.first.distance?.toStringAsFixed(1) : '-';
+    final farthestDist = batch.isNotEmpty ? batch.last.distance?.toStringAsFixed(1) : '-';
+    
+    debugPrint('[PostStore] ✅ Nearest-First Feed: ${batch.length} posts '
+        '(unseen: $unseenCount, seen: $seenCount, nearest: ${nearestDist}km, farthest: ${farthestDist}km)');
   }
 
-  /// Expand to next radius ring (kept for compatibility)
-  void _expandRadius() {
-    final nextIdx = state.localRadiusIndex + 1;
-    _updateState(state.copyWith(localRadiusIndex: nextIdx));
+  /// 🔥 SMART SORT for hybrid/global feeds: Unseen first, then by trending/recency
+  List<Post> _sortSmartForFeed(List<Post> posts, String feedType) {
+    // Sort: Unseen posts first, then by trending score (or recency as fallback)
+    posts.sort((a, b) {
+      // 1. First: Check if seen vs unseen
+      final aSeen = state.seenIds.containsKey(a.id);
+      final bSeen = state.seenIds.containsKey(b.id);
+      
+      if (aSeen != bSeen) {
+        return aSeen ? 1 : -1; // Unseen (-1) comes before Seen (1)
+      }
+      
+      // 2. Both in same group → Sort by trending score (or recency)
+      final scoreA = a.trendingScore ?? (a.likeCount * 2 + a.commentCount * 3);
+      final scoreB = b.trendingScore ?? (b.likeCount * 2 + b.commentCount * 3);
+      
+      if (scoreB != scoreA) {
+        return scoreB.compareTo(scoreA); // Higher score first
+      }
+      
+      // 3. Same score → Newest first
+      return b.createdAt.compareTo(a.createdAt);
+    });
+    
+    return posts;
   }
-
 
   // ─────────────────────────────────────────────────────────
   // ☁️ STANDARD BACKEND PAGINATION (global, filtered, etc.)
@@ -445,56 +567,80 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     double? latitude,
     double? longitude,
   }) async {
-    final currentCursors = (state.lastCursors[feedType]?.isEmpty ?? true)
-        ? null
-        : state.lastCursors[feedType];
+    int retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        final currentCursors = (state.lastCursors[feedType]?.isEmpty ?? true)
+            ? null
+            : state.lastCursors[feedType];
 
-    final response = (authorId != null)
-        ? await PostService.getFilteredPostsPaginated(
-            authorId: authorId,
-            limit: 15,
-            lastCursors: currentCursors,
-          )
-        : await PostService.getPostsPaginated(
-            feedType: feedType,
-            limit: 15,
-            lastCursors: currentCursors,
-            mediaType: mediaType,
-            latitude: latitude,
-            longitude: longitude,
-          );
+        final response = (authorId != null)
+            ? await PostService.getFilteredPostsPaginated(
+                authorId: authorId,
+                limit: 15,
+                lastCursors: currentCursors,
+              )
+            : await PostService.getPostsPaginated(
+                feedType: feedType,
+                limit: 15,
+                lastCursors: currentCursors,
+                mediaType: mediaType,
+                latitude: latitude,
+                longitude: longitude,
+              );
 
-    if (response.data.isNotEmpty) {
-      // Loop detection
-      final firstNewPostId = response.data.first.id;
-      final feedSpecificIds = state.postIdsByFeedType[feedType] ?? [];
-      if (feedSpecificIds.contains(firstNewPostId)) {
-        debugPrint('[PostStore] ⚠️ PAGINATION LOOP DETECTED for $feedType');
-        return;
-      }
+        final hasMoreMap = Map<String, bool>.from(state.hasMoreByFeedType);
+        hasMoreMap[feedType] = response.hasMore;
+        _updateState(state.copyWith(hasMoreByFeedType: hasMoreMap));
+        debugPrint('[PostStore] ℹ️ Updated hasMoreByFeedType[$feedType] to ${response.hasMore}');
 
-      batchUpdate(() {
-        registerPosts(response.data, forFeedType: feedType);
+        if (response.data.isNotEmpty) {
+          final feedSpecificIds = state.postIdsByFeedType[feedType] ?? [];
+          final unseenPosts = response.data
+              .where((p) => !feedSpecificIds.contains(p.id))
+              .toList();
 
-        // Update cursor
-        if (response.cursor != null) {
-          final updatedCursors = Map<String, Map<String, dynamic>>.from(
-            (_isBatching ? _batchState! : state).lastCursors,
-          );
-          updatedCursors[feedType] = response.cursor!;
-          _updateState((_isBatching ? _batchState! : state).copyWith(
-            lastCursors: updatedCursors,
-          ));
+          if (unseenPosts.isEmpty && response.cursor == null) {
+            debugPrint('[PostStore] ⚠️ No unseen posts and no cursor for $feedType');
+            return;
+          }
+
+          if (unseenPosts.isNotEmpty) {
+            // 🔥 SMART SORT: Apply unseen-first sorting for all feeds
+            final sortedPosts = _sortSmartForFeed(unseenPosts, feedType);
+            // 🔥 Pagination: append to end, don't prepend
+            registerPosts(sortedPosts, forFeedType: feedType, prepend: false);
+          }
+
+          // Update cursor
+          if (response.cursor != null) {
+            final updatedCursors = Map<String, Map<String, dynamic>>.from(
+              (_isBatching ? _batchState! : state).lastCursors,
+            );
+            updatedCursors[feedType] = response.cursor!;
+            _updateState((_isBatching ? _batchState! : state).copyWith(
+              lastCursors: updatedCursors,
+            ));
+          }
         }
-      });
+        return; // Success - exit retry loop
+      } catch (e) {
+        retryCount++;
+        debugPrint('[PostStore] ❌ Load more error ($feedType, attempt $retryCount/$maxRetries): $e');
+        
+        if (retryCount >= maxRetries) {
+          // Set error state after all retries failed
+          final errors = Map<String, String?>.from(state.errorByFeedType);
+          errors[feedType] = e.toString();
+          _updateState(state.copyWith(errorByFeedType: errors));
+        } else {
+          // Wait before retry (exponential backoff)
+          await Future.delayed(Duration(milliseconds: 500 * retryCount));
+        }
+      }
     }
-  }
-
-  bool _hasPendingAction(String postId, String actionType) {
-    final versions = _isBatching
-        ? _batchState!.actionVersions
-        : state.actionVersions;
-    return (versions[postId]?[actionType] ?? 0) > 0;
   }
 
   void updatePostPartially(String postId, Map<String, dynamic> updates) {
@@ -583,17 +729,25 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
 
   // --- Action Versioning (Race Condition Protection) ---
 
+  /// 🔥 Atomic action versioning with race condition protection
   void setActionVersion(String postId, String actionType, int version) {
-    final currentVersions = _isBatching
-        ? _batchState!.actionVersions
-        : state.actionVersions;
-    final versions = Map<String, Map<String, int>>.from(currentVersions);
-    final postVersions = Map<String, int>.from(versions[postId] ?? {});
-    postVersions[actionType] = version;
-    versions[postId] = postVersions;
-    _updateState(
-      (_isBatching ? _batchState! : state).copyWith(actionVersions: versions),
-    );
+    batchUpdate(() {
+      final currentVersions = _isBatching
+          ? _batchState!.actionVersions
+          : state.actionVersions;
+      final versions = Map<String, Map<String, int>>.from(currentVersions);
+      final postVersions = Map<String, int>.from(versions[postId] ?? {});
+      
+      // 🔥 FIX: Only update if new version is higher (prevents race condition overwrites)
+      final currentVersion = postVersions[actionType] ?? 0;
+      if (version > currentVersion) {
+        postVersions[actionType] = version;
+        versions[postId] = postVersions;
+        _updateState(
+          (_isBatching ? _batchState! : state).copyWith(actionVersions: versions),
+        );
+      }
+    });
   }
 
   // --- Seen Tracking (Soft Seen System) ---
@@ -672,10 +826,12 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     );
   }
 
-  /// Visibility-aware LRU: Keep 100 most recent visible + 400 total cached.
+  /// Visibility-aware LRU: Keep 50 most recent visible + 100 total cached.
+  static const int _maxCachedPosts = 150;
+
   void _checkMemoryLimits() {
     final currentState = _isBatching ? _batchState! : state;
-    if (currentState.posts.length <= 500) return;
+    if (currentState.posts.length <= _maxCachedPosts) return;
 
     // Sort by creation time (proxy for LRU in this app)
     final sortedIds = currentState.posts.keys.toList()
@@ -691,7 +847,7 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
     );
 
     int removedCount = 0;
-    final targetToRemove = currentState.posts.length - 500;
+    final targetToRemove = currentState.posts.length - _maxCachedPosts;
 
     for (final id in sortedIds) {
       if (removedCount >= targetToRemove) break;
@@ -716,6 +872,41 @@ class PostStoreNotifier extends StateNotifier<PostStoreState> {
         postIds: finalIds,
       ),
     );
+
+    debugPrint('[PostStore] 🧹 Memory cleanup: removed $removedCount posts, ${updatedPosts.length} remaining');
+  }
+
+  /// 🔥 Public method to trigger memory cleanup from outside
+  void pruneOldPosts() {
+    _checkMemoryLimits();
+  }
+
+  /// 🔥 Clear session buffer periodically to prevent unbounded growth
+  void clearSessionBuffer() {
+    _sessionSeenBuffer.clear();
+    debugPrint('[PostStore] 🧹 Session buffer cleared');
+  }
+
+  void resetFeedState(String feedType) {
+    final hasMoreMap = Map<String, bool>.from(state.hasMoreByFeedType);
+    final errorMap = Map<String, String?>.from(state.errorByFeedType);
+    final loadingMap = Map<String, bool>.from(state.isLoadingByFeedType);
+    final cursorsMap = Map<String, Map<String, dynamic>>.from(state.lastCursors);
+    final feedIdsMap = Map<String, List<String>>.from(state.postIdsByFeedType);
+
+    hasMoreMap[feedType] = true;
+    errorMap[feedType] = null;
+    loadingMap[feedType] = false;
+    cursorsMap[feedType] = {};
+    feedIdsMap[feedType] = [];
+
+    _updateState(state.copyWith(
+      hasMoreByFeedType: hasMoreMap,
+      errorByFeedType: errorMap,
+      isLoadingByFeedType: loadingMap,
+      lastCursors: cursorsMap,
+      postIdsByFeedType: feedIdsMap,
+    ));
   }
 }
 
@@ -756,7 +947,7 @@ class PostInteractionNotifier extends StateNotifier<Map<String, Post>> {
     // Single post from detail view - track as 'detail' feed type
     ref.read(postStoreProvider.notifier).registerPosts([
       post,
-    ], forFeedType: 'detail');
+    ], forFeedType: 'detail', prepend: false);
   }
 
   void updatePost(String postId, Map<String, dynamic> updates) {
@@ -800,9 +991,19 @@ class CommentCacheNotifier extends StateNotifier<Map<String, CommentCache>> {
     bool isAppend = false,
   }) {
     final existing = state[postId];
-    List<Comment> updated = (isAppend && existing != null)
-        ? [...existing.comments, ...comments]
-        : comments;
+    List<Comment> updated;
+    if (isAppend && existing != null) {
+      final mergedById = <String, Comment>{};
+      for (final c in existing.comments) {
+        mergedById[c.id] = c;
+      }
+      for (final c in comments) {
+        mergedById[c.id] = c;
+      }
+      updated = mergedById.values.toList();
+    } else {
+      updated = comments;
+    }
     state = {
       ...state,
       postId: CommentCache(
@@ -816,6 +1017,13 @@ class CommentCacheNotifier extends StateNotifier<Map<String, CommentCache>> {
   void addComment(String postId, Comment comment) {
     final existing = state[postId];
     if (existing == null) return;
+    
+    // 🔥 Dedup Protection
+    if (existing.comments.any((c) => c.id == comment.id)) {
+      debugPrint('[CommentCache] 🛑 Skipping duplicate comment ${comment.id}');
+      return;
+    }
+
     state = {
       ...state,
       postId: CommentCache(

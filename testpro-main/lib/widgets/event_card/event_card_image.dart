@@ -25,7 +25,10 @@ class EventCardImage extends StatelessWidget {
             child: CachedNetworkImage(
               imageUrl: ProxyHelper.getUrl(post.mediaUrl!),
               fit: BoxFit.cover,
+              maxHeightDiskCache: 1080,
+              maxWidthDiskCache: 1080,
               memCacheWidth: 800,
+              memCacheHeight: 800,
               placeholder: (context, url) => Container(
                 color: Colors.grey.shade100,
                 child: const Center(

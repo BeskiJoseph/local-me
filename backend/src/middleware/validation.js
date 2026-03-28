@@ -46,7 +46,7 @@ export const schemas = {
     mediaType: Joi.string().valid('none', 'image', 'video', 'audio').allow(null, ''),
     sid: Joi.string().allow(null, ''), // Session ID
     cursor: Joi.string().allow(null, ''), // Composite cursor
-    feedType: Joi.string().valid('local', 'global', 'filtered').allow(null, ''),
+    feedType: Joi.string().valid('local', 'global', 'hybrid', 'filtered').allow(null, ''),
     authorId: Joi.string().allow(null, ''),
     category: Joi.string().allow(null, ''),
     city: Joi.string().allow(null, ''),

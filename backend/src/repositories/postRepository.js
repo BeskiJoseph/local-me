@@ -166,7 +166,13 @@ class PostRepository {
 
         const hasMore = docs.length > pageSize;
         const finalDocs = docs.slice(0, pageSize);
-        const posts = finalDocs.map(doc => mapDocToPost(doc));
+        let posts = finalDocs.map(doc => mapDocToPost(doc));
+        if (geoHashMin && geoHashMax) {
+          posts = posts.filter(post => {
+            if (!post.geoHash) return false;
+            return post.geoHash >= geoHashMin && post.geoHash <= geoHashMax;
+          });
+        }
 
         // 🔥 CRITICAL: lastDoc is from FIRESTORE ORDER (createdAt DESC)
         // NOT from any re-sorted order.

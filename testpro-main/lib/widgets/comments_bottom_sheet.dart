@@ -5,7 +5,6 @@ import 'package:testpro/models/comment.dart';
 import 'package:testpro/services/auth_service.dart';
 import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/socket_service.dart';
-import 'package:testpro/core/session/user_session.dart';
 import 'package:testpro/shared/widgets/user_avatar.dart';
 import 'package:testpro/core/utils/time_utils.dart';
 import 'package:testpro/utils/safe_error.dart';
@@ -48,18 +47,169 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
   final FocusNode _commentFocus = FocusNode();
   final ScrollController _scrollController = ScrollController();
   
-  List<Comment> _comments = [];
+  // Remove local _comments and _nextCursor as we will use the global cache
   bool _isLoading = true;
   bool _isLoadingMore = false;
-  int _addedCommentCount = 0;
   bool _isSending = false;
-  String? _nextCursor;
   String _sortVersion = 'newest'; // 'newest' or 'top'
+  
+  StreamSubscription? _socketSub;
   
   // Track expanded replies
   final Map<String, List<Comment>> _repliesMap = {};
   final Set<String> _loadingReplies = {};
   final Set<String> _expandedReplies = {};
+
+  void _setPostCommentCountDelta(int delta) {
+    final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    final nextCount = (postInStore.commentCount + delta).clamp(0, 1 << 30);
+    ref
+        .read(postStoreProvider.notifier)
+        .updatePostPartially(widget.post.id, {'commentCount': nextCount});
+  }
+
+  void _setPostCommentCountExact(int count) {
+    final normalized = count.clamp(0, 1 << 30);
+    ref
+        .read(postStoreProvider.notifier)
+        .updatePostPartially(widget.post.id, {'commentCount': normalized});
+  }
+
+  void _upsertOptimisticTopLevelComment(Comment optimisticComment) {
+    final cache = ref.read(commentCacheProvider)[widget.post.id];
+    final existingComments = cache?.comments ?? const <Comment>[];
+    final alreadyExists = existingComments.any((c) => c.id == optimisticComment.id);
+    if (alreadyExists) return;
+
+    ref.read(commentCacheProvider.notifier).updateCache(
+      widget.post.id,
+      [optimisticComment, ...existingComments],
+      nextCursor: cache?.nextCursor,
+    );
+    _setPostCommentCountDelta(1);
+  }
+
+  void _removeOptimisticTopLevelComment(String optimisticId) {
+    final cache = ref.read(commentCacheProvider)[widget.post.id];
+    if (cache == null) return;
+
+    final hadOptimistic = cache.comments.any((c) => c.id == optimisticId);
+    if (!hadOptimistic) return;
+
+    final updated = cache.comments.where((c) => c.id != optimisticId).toList();
+    ref.read(commentCacheProvider.notifier).updateCache(
+      widget.post.id,
+      updated,
+      nextCursor: cache.nextCursor,
+    );
+    _setPostCommentCountDelta(-1);
+  }
+
+  void _replaceOptimisticWithReal({
+    required String optimisticId,
+    required Comment realComment,
+  }) {
+    final cache = ref.read(commentCacheProvider)[widget.post.id];
+    if (cache == null) {
+      ref.read(commentCacheProvider.notifier).updateCache(
+        widget.post.id,
+        [realComment],
+      );
+      return;
+    }
+
+    final hasReal = cache.comments.any((c) => c.id == realComment.id);
+    if (hasReal) {
+      final withoutOptimistic = cache.comments
+          .where((c) => c.id != optimisticId)
+          .toList();
+      ref.read(commentCacheProvider.notifier).updateCache(
+        widget.post.id,
+        withoutOptimistic,
+        nextCursor: cache.nextCursor,
+      );
+      return;
+    }
+
+    final optimisticIndex = cache.comments.indexWhere((c) => c.id == optimisticId);
+    if (optimisticIndex != -1) {
+      final updated = List<Comment>.from(cache.comments);
+      updated[optimisticIndex] = realComment;
+      ref.read(commentCacheProvider.notifier).updateCache(
+        widget.post.id,
+        updated,
+        nextCursor: cache.nextCursor,
+      );
+      return;
+    }
+
+    ref.read(commentCacheProvider.notifier).updateCache(
+      widget.post.id,
+      [realComment, ...cache.comments],
+      nextCursor: cache.nextCursor,
+    );
+  }
+
+  void _handleIncomingSocketComment(Comment incoming) {
+    final cache = ref.read(commentCacheProvider)[widget.post.id];
+    final currentUserId = AuthService.currentUser?.uid;
+    final isReply = incoming.parentId != null;
+
+    if (isReply) {
+      final parentId = incoming.parentId!;
+      final existingReplies = _repliesMap[parentId];
+      if (existingReplies != null) {
+        final alreadyExists = existingReplies.any((c) => c.id == incoming.id);
+        if (!alreadyExists) {
+          setState(() {
+            _repliesMap[parentId] = [incoming, ...existingReplies];
+          });
+        }
+      }
+      return;
+    }
+
+    if (cache == null) {
+      ref.read(commentCacheProvider.notifier).updateCache(
+        widget.post.id,
+        [incoming],
+      );
+      _setPostCommentCountDelta(1);
+      return;
+    }
+
+    // Dedup by real server ID first.
+    if (cache.comments.any((c) => c.id == incoming.id)) return;
+
+    // Reconcile "temp_*" optimistic comment from current user to avoid double count.
+    final maybeTempIndex = cache.comments.indexWhere(
+      (c) =>
+          c.id.startsWith('temp_') &&
+          c.authorId == currentUserId &&
+          c.authorId == incoming.authorId &&
+          c.text == incoming.text &&
+          incoming.createdAt.difference(c.createdAt).abs() <
+              const Duration(seconds: 30),
+    );
+
+    if (maybeTempIndex != -1) {
+      final updated = List<Comment>.from(cache.comments);
+      updated[maybeTempIndex] = incoming;
+      ref.read(commentCacheProvider.notifier).updateCache(
+        widget.post.id,
+        updated,
+        nextCursor: cache.nextCursor,
+      );
+      return;
+    }
+
+    ref.read(commentCacheProvider.notifier).updateCache(
+      widget.post.id,
+      [incoming, ...cache.comments],
+      nextCursor: cache.nextCursor,
+    );
+    _setPostCommentCountDelta(1);
+  }
 
   @override
   void initState() {
@@ -69,14 +219,31 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     
     // Join socket room for live updates
     SocketService.joinPost(widget.post.id);
+
+    // 🔥 Listen for real-time updates
+    _socketSub = SocketService.updates.listen((data) {
+      if (!mounted) return;
+      
+      // Match the backend payload: { postId, commentCount, newComment: { ... } }
+      if (data['postId'] == widget.post.id) {
+        final serverCount = data['commentCount'];
+        if (serverCount is int) {
+          _setPostCommentCountExact(serverCount);
+        }
+        if (data['newComment'] != null) {
+          final newComment = Comment.fromJson(
+            Map<String, dynamic>.from(data['newComment']),
+          );
+          _handleIncomingSocketComment(newComment);
+        }
+      }
+    });
     
     // 🔥 Cache-First Strategy
     final cacheMap = ref.read(commentCacheProvider);
     final cache = cacheMap[widget.post.id];
     
     if (cache != null) {
-      _comments = List.from(cache.comments);
-      _nextCursor = cache.nextCursor;
       _isLoading = false;
       
       final age = DateTime.now().difference(cache.lastFetched);
@@ -87,7 +254,6 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     } else {
       _loadComments(refresh: true);
     }
-    
 
     Future.microtask(() {
       if (mounted) _commentFocus.requestFocus();
@@ -95,9 +261,12 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
   }
 
   void _scrollListener() {
-    // 🔥 Improved pagination trigger: 3 items from bottom (approx 200px and check index)
+    final cache = ref.read(commentCacheProvider)[widget.post.id];
+    final nextCursor = cache?.nextCursor;
+
+    // 🔥 Improved pagination trigger: 3 items from bottom (approx 400px)
     if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400 &&
-        !_isLoadingMore && _nextCursor != null) {
+        !_isLoadingMore && nextCursor != null) {
       _loadComments(refresh: false);
     }
   }
@@ -107,16 +276,19 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     _commentController.dispose();
     _commentFocus.dispose();
     _scrollController.dispose();
+    _socketSub?.cancel();
     SocketService.leavePost(widget.post.id);
     super.dispose();
   }
 
   Future<void> _loadComments({required bool refresh, bool background = false}) async {
+    final cache = ref.read(commentCacheProvider)[widget.post.id];
+    final currentCursor = refresh ? null : cache?.nextCursor;
+
     if (refresh) {
       if (!background) {
         setState(() {
           _isLoading = true;
-          _nextCursor = null;
         });
       }
     } else {
@@ -127,7 +299,7 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     try {
       final response = await BackendService.getComments(
         widget.post.id, 
-        afterId: _nextCursor,
+        afterId: currentCursor,
         sort: _sortVersion,
         limit: 20
       );
@@ -137,29 +309,18 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
         final String? cursor = response.pagination?.cursor;
 
         if (mounted) {
+          // 🔥 Sync to global cache
+          ref.read(commentCacheProvider.notifier).updateCache(
+            widget.post.id, 
+            newCommentsList, 
+            nextCursor: cursor,
+            isAppend: !refresh,
+          );
+
           setState(() {
-            if (refresh) {
-              _comments = newCommentsList;
-            } else {
-              // Deduplicate
-              for (var c in newCommentsList) {
-                if (!_comments.any((existing) => existing.id == c.id)) {
-                  _comments.add(c);
-                }
-              }
-            }
-            _nextCursor = cursor;
             _isLoading = false;
             _isLoadingMore = false;
           });
-          
-          // 🔥 Sync back to global cache
-          ref.read(commentCacheProvider.notifier).updateCache(
-            widget.post.id, 
-            _comments, 
-            nextCursor: _nextCursor,
-            isAppend: !refresh,
-          );
         }
       } else {
         if (mounted) {
@@ -189,8 +350,21 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     if (text.isEmpty || user == null) return;
 
     // --- Local Spam Filter ---
-    final spamKeywords = ['spam', 'buy bitcoin', 'free followers'];
-    if (spamKeywords.any((k) => text.toLowerCase().contains(k))) {
+    // 🔥 IMPROVED: More sophisticated spam detection with word boundaries and repetition check
+    final spamPatterns = [
+      RegExp(r'\b(buy\s+bitcoin|crypto|investment\s+scheme)\b', caseSensitive: false),
+      RegExp(r'\bfree\s+(followers|likes|money|gift)\b', caseSensitive: false),
+      RegExp(r'\b(click\s+here|limited\s+time|act\s+now)\b', caseSensitive: false),
+    ];
+    
+    // Check for spam patterns
+    final hasSpamPattern = spamPatterns.any((pattern) => pattern.hasMatch(text));
+    
+    // Check for excessive repetition (e.g., "!!!!!!!!!" or "buy buy buy")
+    final hasExcessiveRepetition = RegExp(r'(.)\1{4,}').hasMatch(text) || // 5+ same chars
+        RegExp(r'\b(\w+)\s+\1\s+\1', caseSensitive: false).hasMatch(text); // repeated words
+    
+    if (hasSpamPattern || hasExcessiveRepetition) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Your comment contains prohibited content.')),
       );
@@ -218,7 +392,8 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
 
     setState(() {
       if (parentId == null) {
-        _comments.insert(0, optimisticComment); // Newest comments first
+        _upsertOptimisticTopLevelComment(optimisticComment);
+        
         Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted && _scrollController.hasClients) {
             _scrollController.animateTo(
@@ -245,38 +420,30 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
       if (response.success) {
         final realComment = Comment.fromJson(response.data!);
         if (mounted) {
-          setState(() {
-            if (parentId == null) {
-               final idx = _comments.indexWhere((c) => c.id == optimisticComment.id);
-               if (idx != -1) _comments[idx] = realComment;
-            } else {
-               final idx = _repliesMap[parentId]!.indexWhere((c) => c.id == optimisticComment.id);
-               if (idx != -1) _repliesMap[parentId]![idx] = realComment;
-            }
-          });
-        }
-        // 🚀 Global State Sync: Update comment count in PostStore
-        if (mounted) {
-          final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
-          final newCount = postInStore.commentCount + 1;
-          
-          ref.read(postStoreProvider.notifier).updatePostPartially(
-            widget.post.id, 
-            {'commentCount': newCount}
-          );
+          if (parentId == null) {
+             _replaceOptimisticWithReal(
+               optimisticId: optimisticComment.id,
+               realComment: realComment,
+             );
+          } else {
+             setState(() {
+                final idx = _repliesMap[parentId]!.indexWhere((c) => c.id == optimisticComment.id);
+                if (idx != -1) _repliesMap[parentId]![idx] = realComment;
+             });
+          }
         }
       } else {
         throw Exception(response.error);
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          if (parentId == null) {
-            _comments.removeWhere((c) => c.id == optimisticComment.id);
-          } else {
+        if (parentId == null) {
+          _removeOptimisticTopLevelComment(optimisticComment.id);
+        } else {
+          setState(() {
             _repliesMap[parentId]!.removeWhere((c) => c.id == optimisticComment.id);
-          }
-        });
+          });
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(safeErrorMessage(e))),
         );
@@ -324,25 +491,47 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     final int newCount = currentlyLiked ? comment.likeCount - 1 : comment.likeCount + 1;
     final updated = comment.copyWith(isLiked: !currentlyLiked, likeCount: newCount);
 
-    setState(() {
-      if (comment.parentId == null) {
-        final idx = _comments.indexWhere((c) => c.id == comment.id);
-        if (idx != -1) _comments[idx] = updated;
-      } else {
-        final idx = _repliesMap[comment.parentId]!.indexWhere((c) => c.id == comment.id);
-        if (idx != -1) _repliesMap[comment.parentId]![idx] = updated;
+    // 1. Optimistic Update
+    if (comment.parentId == null) {
+      // Top-level comment: Update global cache for reactivity
+      final cache = ref.read(commentCacheProvider)[widget.post.id];
+      if (cache != null) {
+        final updatedList = cache.comments.map((c) => c.id == comment.id ? updated : c).toList();
+        ref.read(commentCacheProvider.notifier).updateCache(widget.post.id, updatedList);
       }
-    });
+    } else {
+      // Reply: Update local replies map
+      setState(() {
+        final idx = _repliesMap[comment.parentId]?.indexWhere((c) => c.id == comment.id) ?? -1;
+        if (idx != -1) {
+          _repliesMap[comment.parentId]![idx] = updated;
+        }
+      });
+    }
 
     try {
       await BackendService.toggleCommentLike(comment.id);
+      
+      // If top-level, we might want to sync back to cache (though current implementation only modifies local if you refresh)
+      // Since we want full reactivity, let's update global cache if it's there
+      if (comment.parentId == null) {
+        final cache = ref.read(commentCacheProvider)[widget.post.id];
+        if (cache != null) {
+          final updatedComments = cache.comments.map((c) => c.id == comment.id ? updated : c).toList();
+          ref.read(commentCacheProvider.notifier).updateCache(widget.post.id, updatedComments);
+        }
+      }
     } catch (e) {
       // Rollback
       if (mounted) {
         setState(() {
           if (comment.parentId == null) {
-            final idx = _comments.indexWhere((c) => c.id == comment.id);
-            if (idx != -1) _comments[idx] = comment;
+             // Rollback cache
+             final cache = ref.read(commentCacheProvider)[widget.post.id];
+             if (cache != null) {
+               final rolledBack = cache.comments.map((c) => c.id == comment.id ? comment : c).toList();
+               ref.read(commentCacheProvider.notifier).updateCache(widget.post.id, rolledBack);
+             }
           } else {
             final idx = _repliesMap[comment.parentId]!.indexWhere((c) => c.id == comment.id);
             if (idx != -1) _repliesMap[comment.parentId]![idx] = comment;
@@ -356,6 +545,11 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // 🔥 Watch global cache for reactivity
+    final cacheMap = ref.watch(commentCacheProvider);
+    final cache = cacheMap[widget.post.id];
+    final comments = cache?.comments ?? [];
+
     return Column(
       children: [
         // Header
@@ -368,7 +562,7 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
         Expanded(
           child: _isLoading 
             ? const Center(child: CircularProgressIndicator(color: Color(0xFF006D6D)))
-            : _buildCommentsList(),
+            : _buildCommentsList(comments),
         ),
 
         // Input
@@ -426,8 +620,8 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
     );
   }
 
-  Widget _buildCommentsList() {
-    if (_comments.isEmpty && !_isLoading) {
+  Widget _buildCommentsList(List<Comment> comments) {
+    if (comments.isEmpty && !_isLoading) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -446,21 +640,21 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
 
     return ListView.builder(
       controller: _scrollController,
-      itemCount: _comments.length + (_isLoadingMore ? 1 : 0),
+      itemCount: comments.length + (_isLoadingMore ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index == _comments.length) {
+        if (index == comments.length) {
           return const Padding(
             padding: EdgeInsets.all(16.0),
             child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
           );
         }
         return _CommentThread(
-          comment: _comments[index],
-          replies: _repliesMap[_comments[index].id] ?? [],
-          isExpanded: _expandedReplies.contains(_comments[index].id),
-          isLoadingReplies: _loadingReplies.contains(_comments[index].id),
-          onLike: () => _toggleCommentLike(_comments[index]),
-          onReplyClick: () => _loadReplies(_comments[index].id),
+          comment: comments[index],
+          replies: _repliesMap[comments[index].id] ?? [],
+          isExpanded: _expandedReplies.contains(comments[index].id),
+          isLoadingReplies: _loadingReplies.contains(comments[index].id),
+          onLike: () => _toggleCommentLike(comments[index]),
+          onReplyClick: () => _loadReplies(comments[index].id),
           onLikeReply: (r) => _toggleCommentLike(r),
         );
       },

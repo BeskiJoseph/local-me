@@ -59,7 +59,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
       return;
     }
 
-    _debounce = Timer(const Duration(milliseconds: 300), () async {
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
       if (!mounted) return;
       
       setState(() {

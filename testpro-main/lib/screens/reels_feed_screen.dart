@@ -31,7 +31,6 @@ class ReelsFeedScreen extends StatefulWidget {
 
 class _ReelsFeedScreenState extends State<ReelsFeedScreen> {
   late PageController _pageController;
-  int _currentIndex = 0;
   List<Post> _posts = [];
   bool _isLoading = true;
 
@@ -200,7 +199,12 @@ class _ReelPostItemState extends State<ReelPostItem> {
 
   @override
   void dispose() {
-    _videoController?.dispose();
+    // 🔥 FIX: Safe dispose with mounted check
+    if (_videoController != null) {
+      _videoController!.pause();
+      _videoController!.dispose();
+      _videoController = null;
+    }
     _commentController.dispose();
     super.dispose();
   }
@@ -280,8 +284,8 @@ class _ReelPostItemState extends State<ReelPostItem> {
                               child: Row(
                                 children: [
                                   UserAvatar(
-                                    imageUrl: widget.post.authorProfileImage,
-                                    name: widget.post.authorName,
+                                    imageUrl: widget.post.authorProfileImage ?? '',
+                                    name: widget.post.authorName.isNotEmpty ? widget.post.authorName : 'Unknown',
                                     radius: 20,
                                     initialsColor: Colors.white,
                                   ),
@@ -292,7 +296,7 @@ class _ReelPostItemState extends State<ReelPostItem> {
                                           CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          widget.post.authorName,
+                                          widget.post.authorName.isNotEmpty ? widget.post.authorName : 'Unknown',
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.bold,
@@ -519,7 +523,10 @@ class _ReelPostItemState extends State<ReelPostItem> {
       return CachedNetworkImage(
         imageUrl: ProxyHelper.getUrl(widget.post.mediaUrl!),
         fit: BoxFit.cover,
+        maxHeightDiskCache: 1080,
+        maxWidthDiskCache: 1080,
         memCacheWidth: 1080,
+        memCacheHeight: 1080,
         placeholder: (context, url) => Container(
           color: Colors.grey[900],
           child: const Center(
