@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:testpro/services/post_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:testpro/utils/safe_error.dart';
+import 'package:testpro/config/feed_constants.dart';
 import '../../models/post.dart';
 import '../../models/paginated_response.dart';
 import '../../config/app_theme.dart';
@@ -153,7 +154,7 @@ class _HomeFeedListState extends State<HomeFeedList>
             feedType: widget.feedType,
             userCity: widget.userCity,
             userCountry: widget.userCountry,
-            limit: 20, // Initial load limit
+            limit: FeedConstants.initialLoadLimit,
           ).then((response) {
             // Populate liked posts map
             for (var p in response.data) {

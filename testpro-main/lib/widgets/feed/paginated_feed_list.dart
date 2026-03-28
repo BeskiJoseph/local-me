@@ -5,6 +5,7 @@ import '../../models/post.dart';
 import '../../core/state/post_state.dart';
 import '../post/post_card.dart';
 import '../../services/location_service.dart';
+import '../../config/feed_constants.dart';
 
 
 enum FeedLayoutType { list, paged }
@@ -38,7 +39,7 @@ class PaginatedFeedList extends ConsumerStatefulWidget {
     this.mediaType,
     this.userCity,
     this.userCountry,
-    this.pageSize = 15,
+    this.pageSize = FeedConstants.defaultPageSize,
     this.onRefresh,
     this.onLoadMore,
     this.layoutType = FeedLayoutType.list,
@@ -53,11 +54,12 @@ class PaginatedFeedList extends ConsumerStatefulWidget {
   ConsumerState<PaginatedFeedList> createState() => _PaginatedFeedListState();
 
   /// 🔥 Static method to add new post to feed immediately
-  static void addNewPost(Post post, WidgetRef ref) {
+  static void addNewPost(Post post, WidgetRef ref, {String? feedType}) {
     debugPrint('➕ PaginatedFeedList.addNewPost: ${post.id}');
     // Register to store with prepend=true (new posts go first)
-    ref.read(postStoreProvider.notifier).registerPosts([post], forFeedType: 'hybrid', prepend: true);
-    ref.read(postStoreProvider.notifier).registerPosts([post], forFeedType: 'global', prepend: true);
+    // Use provided feedType or default to global
+    final targetFeed = feedType ?? 'global';
+    ref.read(postStoreProvider.notifier).registerPosts([post], forFeedType: targetFeed, prepend: true);
     // The ref.listen in the widget will pick up the change and rebuild
   }
 }
@@ -168,42 +170,50 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
 
     setState(() => _isRefilling = true);
     try {
+      final store = ref.read(postStoreProvider);
+      final feedType = widget.feedType ?? 'global';
+      final freshIds = widget.feedType != null
+          ? (store.postIdsByFeedType[widget.feedType!] ?? [])
+          : store.postIds;
+
+      // CRITICAL FIX: If completely empty, trigger initial load IMMEDIATELY
+      // Don't wait in the loop - this prevents the delay before first API call
+      if (freshIds.isEmpty && _displayIds.isEmpty) {
+        debugPrint('[PaginatedFeedList] >>> Initial load for $feedType - triggering immediately');
+        final isCurrentlyLoading = store.isLoadingByFeedType[feedType] ?? store.isLoading;
+        if (!isCurrentlyLoading) {
+          await _triggerLoadMore();
+        }
+        return; // Exit after initial load, let ref.listen handle updates
+      }
+
+      // 🔥 For refill (already have some posts), use loop with conservative delays
       while (mounted) {
         final store = ref.read(postStoreProvider);
         final feedType = widget.feedType ?? 'global';
         final freshIds = widget.feedType != null
             ? (store.postIdsByFeedType[widget.feedType!] ?? [])
             : store.postIds;
-        
-        // 🔥 STOP if we already know there are no more posts
+
+        // STOP if we already know there are no more posts
         final hasMore = store.hasMoreByFeedType[feedType] ?? true;
-        debugPrint('[PaginatedFeedList] 🔍 Checking $feedType: hasMore=$hasMore, length=${freshIds.length}, isLoading=${store.isLoadingByFeedType[feedType]}');
-        
-        if (!hasMore) {
-          debugPrint('[PaginatedFeedList] 🛑 Stopping refill: No more posts for $feedType');
-          break;
-        }
+        if (!hasMore) break;
 
-        // 🔥 STOP if the last request resulted in an error
+        // STOP if the last request resulted in an error
         final hasError = store.errorByFeedType[feedType] != null;
-        if (hasError) {
-          debugPrint('[PaginatedFeedList] 🛑 Stopping refill: Error encountered for $feedType');
-          break;
-        }
+        if (hasError) break;
 
-        if (freshIds.length >= widget.pageSize) {
-          break;
-        }
+        // STOP if we have enough posts
+        if (freshIds.length >= widget.pageSize) break;
 
-        // 🔥 Avoid overlapping loadMore calls
-        if (store.isLoadingByFeedType[feedType] == true) {
+        // Avoid overlapping loadMore calls
+        final isCurrentlyLoading = store.isLoadingByFeedType[feedType] ?? store.isLoading;
+        if (isCurrentlyLoading) {
           await Future.delayed(const Duration(milliseconds: 200));
           continue;
         }
 
         await _triggerLoadMore();
-        
-        // 🔥 Increase delay to be more conservative and allow state to propagate
         await Future.delayed(const Duration(milliseconds: 500));
       }
     } finally {
@@ -231,8 +241,15 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
     // 🔥 Don't show loading if we have initialPosts - prevents flash
     final hasInitialPosts = widget.initialPosts != null && widget.initialPosts!.isNotEmpty;
     
-    if (_displayIds.isEmpty && !hasInitialPosts && (store.isLoading || _isRefilling)) {
-      return const Center(child: CircularProgressIndicator());
+    // 🔥 CRITICAL FIX: Check if feed is loading - check both feed-specific and global loading
+    final isFeedLoading = store.isLoadingByFeedType[widget.feedType] ?? store.isLoading;
+    
+    // 🔥 CRITICAL FIX: Also check if we're in initial loading state (empty display with no data yet)
+    final isInitiallyLoading = _displayIds.isEmpty && !hasInitialPosts && store.postIdsByFeedType[widget.feedType]?.isEmpty != false;
+    
+    // 🔥 Return empty container while loading - parent (HomeScreen) already shows FeedShimmer
+    if ((isFeedLoading || isInitiallyLoading || _isRefilling) && _displayIds.isEmpty && !hasInitialPosts) {
+      return const SizedBox.shrink();
     }
 
     // 🔥 CRITICAL FIX: If _displayIds is empty but we have initialPosts,
