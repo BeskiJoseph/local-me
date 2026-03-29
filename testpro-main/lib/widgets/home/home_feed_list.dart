@@ -91,54 +91,71 @@ class _HomeFeedListState extends ConsumerState<HomeFeedList>
       return const Center(child: Text('Waiting for location...'));
     }
 
-    return PaginatedFeedList(
-      feedType: widget.feedType,
-      userCity: widget.userCity,
-      userCountry: widget.userCountry,
-      // We pass down a custom builder so we can filter locally by searchQuery
-      // and render EventPostCard vs NextdoorStylePostCard accurately.
-      itemBuilder: (context, post, index, isCurrent) {
-        // Local Filter Logic
-        if (post.isEvent && post.computedStatus == 'archived') return const SizedBox.shrink();
-        
-        if (widget.searchQuery.isNotEmpty) {
-          final q = widget.searchQuery.toLowerCase();
-          final matches = post.title.toLowerCase().contains(q) ||
-                post.body.toLowerCase().contains(q) ||
-                post.authorName.toLowerCase().contains(q) ||
-                post.category.toLowerCase().contains(q);
-          if (!matches) return const SizedBox.shrink();
-        }
+    // 🔥 Use Consumer to access store for passing posts to reels view
+    return Consumer(
+      builder: (context, ref, _) {
+        final store = ref.watch(postStoreProvider);
+        final feedPostIds = store.postIdsByFeedType[widget.feedType] ?? [];
+        final posts = feedPostIds
+            .map((id) => store.posts[id])
+            .where((post) => post != null)
+            .cast<Post>()
+            .toList();
 
-        if (post.isEvent || post.category.toLowerCase() == 'events') {
-          return EventPostCard(post: post);
-        }
+        return PaginatedFeedList(
+          feedType: widget.feedType,
+          userCity: widget.userCity,
+          userCountry: widget.userCountry,
+          // We pass down a custom builder so we can filter locally by searchQuery
+          // and render EventPostCard vs NextdoorStylePostCard accurately.
+          itemBuilder: (context, post, index, isCurrent) {
+            // Local Filter Logic
+            if (post.isEvent && post.computedStatus == 'archived') return const SizedBox.shrink();
+            
+            if (widget.searchQuery.isNotEmpty) {
+              final q = widget.searchQuery.toLowerCase();
+              final matches = post.title.toLowerCase().contains(q) ||
+                    post.body.toLowerCase().contains(q) ||
+                    post.authorName.toLowerCase().contains(q) ||
+                    post.category.toLowerCase().contains(q);
+              if (!matches) return const SizedBox.shrink();
+            }
 
-        return NextdoorStylePostCard(
-          post: post,
-          currentCity: widget.userCity,
-          onTap: () {
-             Navigator.push(
-               context,
-               MaterialPageRoute(
-                 builder: (_) => PostReelsView(
-                   posts: const [], // PostReelsView handles fetching from Riverpod now 
-                   startIndex: index,
-                   feedType: widget.feedType,
-                   initialHasMore: true,
-                 ),
-               ),
+            if (post.isEvent || post.category.toLowerCase() == 'events') {
+              return EventPostCard(post: post);
+            }
+
+            return NextdoorStylePostCard(
+              post: post,
+              currentCity: widget.userCity,
+              onTap: () {
+                 // 🔥 FIX: Find the correct index of this post in the posts list
+                 final postIndex = posts.indexWhere((p) => p.id == post.id);
+                 final actualIndex = postIndex >= 0 ? postIndex : 0;
+                 debugPrint('[HomeFeedList] Opening reels view - posts: ${posts.length}, post.id: ${post.id}, actualIndex: $actualIndex');
+                 Navigator.push(
+                   context,
+                   MaterialPageRoute(
+                     builder: (_) => PostReelsView(
+                       posts: posts, // 🔥 Pass actual posts from store
+                       startIndex: actualIndex,
+                       feedType: widget.feedType,
+                       initialHasMore: true,
+                     ),
+                   ),
+                 );
+              },
+            );
+          },
+          onRefresh: () async {
+             // Reload via store
+             await ref.read(postStoreProvider.notifier).loadMore(
+               feedType: widget.feedType,
+               latitude: null, // the PaginatedFeedList internal logic will attach LocationService coordinates
+               longitude: null,
              );
           },
         );
-      },
-      onRefresh: () async {
-         // Reload via store
-         await ref.read(postStoreProvider.notifier).loadMore(
-           feedType: widget.feedType,
-           latitude: null, // the PaginatedFeedList internal logic will attach LocationService coordinates
-           longitude: null,
-         );
       },
     );
   }

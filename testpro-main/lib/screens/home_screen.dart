@@ -46,6 +46,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     super.initState();
     // Activate custom backend session layer (bridging Firebase Auth)
     BackendService.syncCustomTokens();
+    
+    // 🔥 CRITICAL: Reset feed state on fresh app start to fetch new posts
+    // This prevents showing cached posts from previous session
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final notifier = ref.read(postStoreProvider.notifier);
+      notifier.clearSeen();
+      notifier.resetFeedState('hybrid');
+      notifier.resetFeedState('global');
+      debugPrint('🔄 Fresh app start: Reset feed states and cleared seen posts');
+    });
+    
     _initApp();
     // Fetch initial notification badge count (fire-and-forget)
     NotificationDataService.fetchNotifications();

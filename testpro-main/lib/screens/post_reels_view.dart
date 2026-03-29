@@ -65,7 +65,7 @@ class _PostReelsViewState extends State<PostReelsView> {
   @override
   void initState() {
     super.initState();
-    debugPrint('📽️ REELS OPENED: hasMore=${widget.initialHasMore}');
+    debugPrint('📽️ REELS OPENED: posts=${widget.posts.length}, startIndex=${widget.startIndex}, feedType=${widget.feedType}, hasMore=${widget.initialHasMore}');
     _activeTabIndex = widget.feedType == 'global' ? 1 : 0;
     _horizontalController = PageController(initialPage: _activeTabIndex);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -264,26 +264,33 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
   @override
   void initState() {
     super.initState();
-    // 🔥 PURE ARCHITECTURE: Fetch from Screen/Controller
-    if (widget.initialPosts.isEmpty) {
-      Future.microtask(() {
-        if (!mounted) return;
+    debugPrint('[ReelsVerticalFeed] initState - feedType: ${widget.feedType}, initialPosts: ${widget.initialPosts.length}, startIndex: ${widget.startIndex}');
+    Future.microtask(() {
+      if (!mounted) return;
+      
+      final store = ref.read(postStoreProvider);
+      final existingIds = store.postIdsByFeedType[widget.feedType] ?? [];
+      
+      debugPrint('[ReelsVerticalFeed] Store has ${existingIds.length} posts for ${widget.feedType}');
+      
+      // 🔥 FIX: Only fetch if store is empty for this feed type
+      // Otherwise, use existing store posts (they were loaded by main feed)
+      if (existingIds.isEmpty) {
+        debugPrint('[ReelsVerticalFeed] Store empty, calling _loadFeed()');
         _loadFeed();
-      });
-    } else {
-      Future.microtask(() {
-        if (!mounted) return;
+      } else if (widget.initialPosts.isNotEmpty) {
+        debugPrint('[ReelsVerticalFeed] Registering ${widget.initialPosts.length} initial posts');
+        // Register any initial posts passed in (for profile mode)
         ref
             .read(postStoreProvider.notifier)
             .registerPosts(widget.initialPosts, forFeedType: widget.feedType, prepend: false);
-      });
-    }
+      } else {
+        debugPrint('[ReelsVerticalFeed] Using existing store posts, no registration needed');
+      }
+    });
   }
 
   Future<void> _loadFeed() async {
-    // 🔥 Reset state before fetching to clear hasMore/error flags
-    ref.read(postStoreProvider.notifier).resetFeedState(widget.feedType);
-    
     try {
       final response = (widget.authorId != null)
           ? await PostService.getFilteredPostsPaginated(
@@ -311,6 +318,18 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    
+    // 🔥 Get posts from store for this feed type
+    final store = ref.watch(postStoreProvider);
+    final feedPostIds = store.postIdsByFeedType[widget.feedType] ?? [];
+    final posts = feedPostIds
+        .map((id) => store.posts[id])
+        .where((post) => post != null)
+        .cast<Post>()
+        .toList();
+    
+    debugPrint('[ReelsVerticalFeed] build - ${widget.feedType}: ${posts.length} posts from store, startIndex: ${widget.startIndex}');
+    
     return PaginatedFeedList(
       feedType: widget.feedType,
       authorId: widget.authorId,
@@ -318,7 +337,8 @@ class _ReelsVerticalFeedState extends ConsumerState<ReelsVerticalFeed>
       userCountry: widget.userCountry,
       layoutType: FeedLayoutType.paged,
       mediaType: 'video',
-      initialPosts: widget.initialPosts,
+      // 🔥 Pass actual posts from store
+      initialPosts: posts.isNotEmpty ? posts : null,
       startIndex: widget.startIndex,
       initialHasMore: widget.initialHasMore,
       onRefresh: _loadFeed,

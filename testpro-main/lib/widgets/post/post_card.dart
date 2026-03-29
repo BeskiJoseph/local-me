@@ -65,6 +65,7 @@ class _PostCardState extends ConsumerState<PostCard> {
               .toList();
               
           final index = allPosts.indexWhere((p) => p.id == post.id);
+          debugPrint('[PostCard] post.id=${post.id}, allPosts.length=${allPosts.length}, foundIndex=$index');
 
 
           Navigator.push(

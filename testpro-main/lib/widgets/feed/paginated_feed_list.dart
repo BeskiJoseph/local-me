@@ -76,6 +76,8 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
     super.initState();
     _scrollController.addListener(_scrollListener);
     
+    debugPrint('[PaginatedFeedList] initState - feedType: ${widget.feedType}, initialPosts: ${widget.initialPosts?.length ?? 0}, startIndex: ${widget.startIndex}, layout: ${widget.layoutType}');
+    
     // 🔥 CRITICAL FIX: Initialize _displayIds IMMEDIATELY with initialPosts
     if (widget.initialPosts?.isNotEmpty ?? false) {
       _displayIds = widget.initialPosts!.map((p) => p.id).toList();
@@ -93,11 +95,20 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
               forFeedType: widget.feedType ?? 'global',
               prepend: false,
             );
+        // 🔥 CRITICAL FIX: Jump to correct page after registration
+        if (widget.layoutType == FeedLayoutType.paged &&
+            widget.startIndex < _displayIds.length) {
+          if (_pageController != null && _pageController!.hasClients) {
+            debugPrint('[PaginatedFeedList] Post-registration jump to page ${widget.startIndex}');
+            _pageController!.jumpToPage(widget.startIndex);
+          }
+        }
       });
     } else {
       _displayIds = [];
       if (widget.layoutType == FeedLayoutType.paged) {
         _pageController = PageController(initialPage: widget.startIndex);
+        debugPrint('[PaginatedFeedList] Created PageController with initialPage: ${widget.startIndex}, empty _displayIds');
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _syncDisplayIds();
@@ -137,9 +148,25 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
         );
       }
       setState(() {
-        // 🔥 REBUILD _displayIds to match store order: add new IDs at BEGINNING
-        _displayIds = [...newIds, ..._displayIds];
+        // 🔥 FIX: Append new IDs at END for pagination (not prepend)
+        _displayIds = [..._displayIds, ...newIds];
       });
+
+      // 🔥 CRITICAL FIX: After syncing IDs, jump to correct initial page for paged layout
+      // Use post-frame callback to ensure PageView is built with new item count
+      if (widget.layoutType == FeedLayoutType.paged &&
+          widget.startIndex < _displayIds.length) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_pageController != null &&
+              _pageController!.hasClients &&
+              widget.startIndex < _displayIds.length) {
+            debugPrint('[PaginatedFeedList] Jumping to page ${widget.startIndex} of ${_displayIds.length}');
+            _pageController!.jumpToPage(widget.startIndex);
+          } else {
+            debugPrint('[PaginatedFeedList] Cannot jump - controller: ${_pageController != null}, hasClients: ${_pageController?.hasClients}, startIndex: ${widget.startIndex}, displayIds: ${_displayIds.length}');
+          }
+        });
+      }
     }
   }
 
@@ -280,6 +307,10 @@ class _PaginatedFeedListState extends ConsumerState<PaginatedFeedList> {
         if (widget.onRefresh != null) {
           await widget.onRefresh!();
         } else if (widget.feedType != null) {
+          // 🔥 CRITICAL FIX: Reset feed state to clear cursor so we fetch page 1, not next page
+          ref.read(postStoreProvider.notifier).resetFeedState(widget.feedType!);
+          // 🔥 Also clear local _displayIds to prevent duplicates on refresh
+          setState(() => _displayIds = []);
           // If no custom refresh, trigger a standard loadMore for the feedType
           await ref
               .read(postStoreProvider.notifier)

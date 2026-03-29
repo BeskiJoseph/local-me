@@ -730,6 +730,13 @@ class _ReelPostItemState extends State<ReelPostItem> {
           return const Center(child: Text('No comments yet. Be the first!'));
         }
 
+        // 🔥 Scroll to bottom when comments are loaded to show latest
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (scrollController.hasClients && comments.isNotEmpty) {
+            scrollController.jumpTo(scrollController.position.maxScrollExtent);
+          }
+        });
+
         return ListView.builder(
           controller: scrollController,
           itemCount: comments.length,

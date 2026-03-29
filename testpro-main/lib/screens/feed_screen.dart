@@ -76,12 +76,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       // IndexedStack keeps both tabs alive
       body: _currentTabIndex == 0
           ? const PaginatedFeedList(
-              key: ValueKey('local_feed'),
-              feedType: 'local',
+              key: ValueKey('feed_tab_local'),
+              feedType: 'feed_tab_local',
             )
           : const PaginatedFeedList(
-              key: ValueKey('global_feed'),
-              feedType: 'global',
+              key: ValueKey('feed_tab_global'),
+              feedType: 'feed_tab_global',
             ),
     );
   }
