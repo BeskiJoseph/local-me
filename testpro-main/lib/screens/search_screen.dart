@@ -6,12 +6,13 @@ import '../services/auth_service.dart';
 import '../services/search_service.dart';
 import '../widgets/user_search_card.dart';
 import 'package:testpro/widgets/nextdoor_post_card.dart';
-import '../models/post.dart';
+import '../core_feed/models/post.dart' as new_model;
 import '../utils/proxy_helper.dart';
 import '../models/api_response.dart';
 import '../models/paginated_response.dart';
 import 'post_reels_view.dart';
 import '../services/post_service.dart';
+import '../core_feed/models/post.dart'; // ✅ Direct import for easy access
 
 /// Simple search screen with user and content search
 class SearchScreen extends StatefulWidget {

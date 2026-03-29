@@ -16,6 +16,8 @@ import 'event_post_card.dart';
 import 'post_reels_view.dart';
 import '../services/interaction_service.dart';
 import '../mixins/post_loader_mixin.dart';
+import 'package:testpro/core_feed/components/paginated_feed.dart';
+import 'package:testpro/core_feed/controllers/feed_controller.dart';
 
 class PersonalAccount extends ConsumerStatefulWidget {
   final String? userId;
@@ -662,56 +664,8 @@ class _PersonalAccountState extends ConsumerState<PersonalAccount>
   }
 
   Widget _buildPostsTab() {
-    final postOnlyItems = _posts.where((p) {
-      final category = p.category.toLowerCase();
-      final isArticle = category == 'article' || category == 'artizone';
-      final isEvent = p.isEvent || category == 'events';
-      final hasVisualMedia = p.mediaType == 'image' || p.mediaType == 'video';
-      return !isArticle && !isEvent && hasVisualMedia;
-    }).toList();
-
-    if (postOnlyItems.isEmpty && !_isLoadingPosts) {
-      return const EmptyStateWidget(
-        icon: Icons.photo_library_outlined,
-        title: 'No photo/video posts yet',
-        subtitle: 'Posts with images or videos will appear here.',
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      itemCount: postOnlyItems.length + (_hasMore ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == postOnlyItems.length) {
-          if (!_isLoadingPosts && _hasMore) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              loadPosts();
-            });
-          }
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
-        }
-        final post = postOnlyItems[index];
-        return NextdoorStylePostCard(
-          post: post,
-          initialIsLiked: _likedPostIds[post.id],
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => PostReelsView(
-                posts: postOnlyItems,
-                startIndex: index,
-                authorId: profileUserId,
-                initialHasMore: _hasMore,
-              ),
-            ),
-          ),
-        );
-      },
+    return PaginatedFeed(
+      controllerProvider: authorFeedControllerProvider(profileUserId),
     );
   }
 
@@ -755,7 +709,6 @@ class _PersonalAccountState extends ConsumerState<PersonalAccount>
                 posts: mediaPosts,
                 startIndex: index,
                 authorId: profileUserId,
-                initialHasMore: _hasMore,
               ),
             ),
           ),
@@ -788,7 +741,6 @@ class _PersonalAccountState extends ConsumerState<PersonalAccount>
                 posts: eventPosts,
                 startIndex: index,
                 authorId: profileUserId,
-                initialHasMore: _hasMore,
               ),
             ),
           ),

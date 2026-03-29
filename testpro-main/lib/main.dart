@@ -26,20 +26,15 @@ import 'package:testpro/services/post_service.dart';
 import 'package:testpro/services/interaction_service.dart';
 
 void main() {
-  // 🚀 Initialize Riverpod ProviderContainer for static services ABSOLUTE FIRST
   final container = ProviderContainer();
   GlobalProviderContainer.initialize(container);
 
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-
-      // 1. Critical: Initialize Firebase first
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
-
-      // 2. Non-critical: Initialize other services in parallel or background
       unawaited(
         NotificationService.initialize().then(
           (_) => NotificationDataService.initialize(),
@@ -126,7 +121,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     });
   }
 
-  /// 🔥 Memory pressure monitoring - check every 30 seconds
   void _startMemoryMonitoring() {
     _memoryCheckTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _checkMemoryPressure();
@@ -135,51 +129,29 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   void _checkMemoryPressure() {
     try {
-      // Check image cache size as a proxy for memory pressure
       final imageCache = PaintingBinding.instance.imageCache;
       final currentSize = imageCache.currentSize;
       final maxSize = imageCache.maximumSize;
-      
-      if (kDebugMode) {
-        debugPrint('[MemoryMonitor] Image cache: $currentSize / $maxSize images');
-      }
-      
-      // 🔥 If image cache is over 70% full, trigger cleanup
       if (maxSize > 0 && currentSize / maxSize > 0.7) {
-        debugPrint('[MemoryMonitor] ⚠️ Image cache high, triggering cleanup');
         _triggerMemoryCleanup();
       }
-    } catch (e) {
-      // Memory monitoring not available on all platforms
-    }
+    } catch (e) {}
   }
 
   void _triggerMemoryCleanup() {
-    // Clear image cache
     PaintingBinding.instance.imageCache.clear();
     PaintingBinding.instance.imageCache.clearLiveImages();
-    
-    // Clear PostService interaction cache
     PostService.clearInteractionCache();
-    
-    if (kDebugMode) {
-      debugPrint('[MemoryMonitor] 🧹 Image cache cleared');
-    }
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    // 🔥 When app goes to background, clear session buffer and image cache
     if (state == AppLifecycleState.paused) {
-      if (kDebugMode) debugPrint('[MemoryMonitor] App paused - clearing caches');
-      PaintingBinding.instance.imageCache.clear();
       _triggerMemoryCleanup();
       clearSessionBuffer();
     }
   }
 
-  /// 🔥 Clear session buffer when app goes to background
   void clearSessionBuffer() {
     try {
       final container = GlobalProviderContainer.instance;
@@ -187,17 +159,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         final notifier = container.read(postStoreProvider.notifier);
         notifier.clearSessionBuffer();
       }
-    } catch (e) {
-      debugPrint('[MemoryMonitor] Failed to clear session buffer: $e');
-    }
+    } catch (e) {}
   }
 
   void _handleAuthFailure() {
-    debugPrint('🚨 Global Auth Failure detected! Redirecting to login.');
     AuthService.signOut();
     UserSession.clear();
     FeedSession.instance.resetAll();
-    SocketService.dispose(); // BUG-025 FIX: Disconnect socket on auth failure
+    SocketService.dispose();
 
     ErrorHandler.navigatorKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const WelcomeScreen()),
@@ -210,8 +179,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     _authSub?.cancel();
     _eventSub?.cancel();
     _connectivitySub?.cancel();
-    _memoryCheckTimer?.cancel(); // BUG-026 FIX: Cancel timer to prevent setState on unmounted widget
-    SocketService.dispose(); // BUG-025 FIX: Clean up socket on app disposal
+    _memoryCheckTimer?.cancel();
+    SocketService.dispose();
     super.dispose();
   }
 
@@ -238,7 +207,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                 name: user.displayName,
                 avatar: user.photoURL,
               );
-              // Initialize Authenticated Socket
               user.getIdToken().then((token) {
                 if (token != null) SocketService.init(token);
               });
