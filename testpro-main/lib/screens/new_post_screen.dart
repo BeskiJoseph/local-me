@@ -16,9 +16,10 @@ import '../services/auth_service.dart';
 import '../services/media_upload_service.dart';
 import '../services/location_service.dart';
 import '../services/user_service.dart';
-import '../services/geocoding_service.dart';
-import '../services/post_service.dart';
-import '../core/state/post_state.dart';
+import '../services/geocoding_service.dart'; // ✅ Added
+import '../core_feed/services/post_interaction_service.dart';
+import '../core_feed/services/post_lifecycle_service.dart';
+import '../core_feed/models/post.dart' as new_model;
 
 import '../shared/widgets/user_avatar.dart';
 import '../core/session/user_session.dart';
@@ -404,60 +405,26 @@ class _NewPostScreenState extends ConsumerState<NewPostScreen> {
 
       if (_cancelUpload) throw _UploadCancelled();
 
-      // Step 3: Create post
+      // Step 3: Create post using the NEW synchronized service
       setState(() {
         _uploadStep = 'Publishing...';
-        _uploadProgress = 0.85;
+        _uploadProgress = 0.9;
       });
-      final post = await PostService.createPost(
+
+      // 🧱 Burn-in: Use the new cross-screen sync service
+      await ref.read(postInteractionProvider).createPost(
         title: _contentController.text.trim(),
         body: _contentController.text.trim(),
         city: _currentLocation,
-        category: 'General',
         mediaUrl: mediaUrl,
         mediaType: _mediaType,
-        thumbnailUrl: thumbnailUrl,
         latitude: position.latitude,
         longitude: position.longitude,
       );
 
-      if (!mounted) return;
-
-      if (post.id.isNotEmpty) {
-        if (kDebugMode) debugPrint('✅ Post created successfully with ID: ${post.id}');
-        setState(() {
-          _uploadStep = 'Done!';
-          _uploadProgress = 1.0;
-        });
+      if (mounted) {
         HapticService.success();
-        await Future.delayed(const Duration(milliseconds: 300));
-        
-        // 🔥 REGISTER NEW POST TO FEED - make it appear immediately
-        if (mounted) {
-          final store = ref.read(postStoreProvider.notifier);
-          // Register to both hybrid and user's own profile feed with prepend=true
-          store.batchUpdate(() {
-            store.registerPosts([post], forFeedType: 'hybrid', prepend: true);
-            store.registerPosts([post], forFeedType: 'global', prepend: true);
-          });
-          if (kDebugMode) debugPrint('[NewPost] ✅ Registered new post to feeds');
-          
-          // 🔥 SYNC TO HOME FEED - add to feed UI immediately via PaginatedFeedList
-          PaginatedFeedList.addNewPost(post, ref);
-          if (kDebugMode) debugPrint('[NewPost] ✅ Synced new post to home feed');
-          
-          // 🔥 SYNC TO PROFILE PAGE - add to user's profile immediately
-          final profileState = PersonalAccount.profileKey.currentState;
-          if (profileState != null) {
-            profileState.addNewPost(post);
-            if (kDebugMode) debugPrint('[NewPost] ✅ Synced new post to profile page');
-          }
-        }
-        
-        if (mounted) Navigator.pop(context, true);
-      } else {
-        if (kDebugMode) debugPrint('❌ Post creation failed');
-        throw Exception('Failed to create post');
+        Navigator.pop(context, true);
       }
     } catch (e) {
       if (e is _UploadCancelled) {

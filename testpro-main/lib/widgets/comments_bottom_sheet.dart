@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:testpro/models/post.dart';
+import 'package:testpro/core_feed/models/post.dart';
+import 'package:testpro/core_feed/store/post_store.dart';
 import 'package:testpro/models/comment.dart';
 import 'package:testpro/services/auth_service.dart';
 import 'package:testpro/services/backend_service.dart';
@@ -8,7 +9,6 @@ import 'package:testpro/services/socket_service.dart';
 import 'package:testpro/shared/widgets/user_avatar.dart';
 import 'package:testpro/core/utils/time_utils.dart';
 import 'package:testpro/utils/safe_error.dart';
-import 'package:testpro/core/state/post_state.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'dart:async';
 
@@ -61,18 +61,18 @@ class _CommentsBottomSheetState extends ConsumerState<CommentsBottomSheet> {
   final Set<String> _expandedReplies = {};
 
   void _setPostCommentCountDelta(int delta) {
-    final postInStore = ref.read(postProvider(widget.post.id)) ?? widget.post;
+    final postInStore = ref.read(individualPostProvider(widget.post.id)) ?? widget.post;
     final nextCount = (postInStore.commentCount + delta).clamp(0, 1 << 30);
     ref
         .read(postStoreProvider.notifier)
-        .updatePostPartially(widget.post.id, {'commentCount': nextCount});
+        .updatePost(widget.post.id, (p) => p.copyWith(commentCount: nextCount));
   }
 
   void _setPostCommentCountExact(int count) {
     final normalized = count.clamp(0, 1 << 30);
     ref
         .read(postStoreProvider.notifier)
-        .updatePostPartially(widget.post.id, {'commentCount': normalized});
+        .updatePost(widget.post.id, (p) => p.copyWith(commentCount: normalized));
   }
 
   void _upsertOptimisticTopLevelComment(Comment optimisticComment) {

@@ -16,7 +16,8 @@ import 'event_post_card.dart';
 import 'post_reels_view.dart';
 import '../services/interaction_service.dart';
 import '../mixins/post_loader_mixin.dart';
-import '../widgets/feed/paginated_feed_list.dart';
+import 'package:testpro/core_feed/components/paginated_feed.dart';
+import 'package:testpro/core_feed/controllers/feed_controller.dart';
 
 class PersonalAccount extends ConsumerStatefulWidget {
   final String? userId;
@@ -663,9 +664,8 @@ class _PersonalAccountState extends ConsumerState<PersonalAccount>
   }
 
   Widget _buildPostsTab() {
-    return PaginatedFeedList(
-      authorId: profileUserId,
-      feedType: 'profile',
+    return PaginatedFeed(
+      controllerProvider: authorFeedControllerProvider(profileUserId),
     );
   }
 
@@ -709,7 +709,6 @@ class _PersonalAccountState extends ConsumerState<PersonalAccount>
                 posts: mediaPosts,
                 startIndex: index,
                 authorId: profileUserId,
-                initialHasMore: _hasMore,
               ),
             ),
           ),
@@ -742,7 +741,6 @@ class _PersonalAccountState extends ConsumerState<PersonalAccount>
                 posts: eventPosts,
                 startIndex: index,
                 authorId: profileUserId,
-                initialHasMore: _hasMore,
               ),
             ),
           ),

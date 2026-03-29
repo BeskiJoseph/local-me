@@ -14,6 +14,8 @@ import 'new_post_screen.dart';
 import 'package:testpro/services/backend_service.dart';
 import 'package:testpro/services/location_service.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:testpro/core_feed/config/feature_flags.dart';
+import 'package:testpro/core_feed/screens/home_feed_screen.dart';
 import 'package:testpro/core/state/post_state.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -29,36 +31,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isLoadingLocation = true;
   String? _locationError;
   
-  // 0 = Nearby/Local, 1 = Global
   int _feedToggleIndex = 0;
-
-  // Bottom nav: 0=Home, 1=Explore, 2=Create, 3=Groups, 4=Me
   int _bottomNavIndex = 0;
 
   final Set<int> _visitedNavIndexes = {0};
   final Set<int> _visitedFeedIndexes = {0};
-
-  // Incrementing forces HomeFeedList recreation → fresh feed fetch
   int _feedRevision = 0;
 
   @override
   void initState() {
     super.initState();
-    // Activate custom backend session layer (bridging Firebase Auth)
     BackendService.syncCustomTokens();
     
-    // 🔥 CRITICAL: Reset feed state on fresh app start to fetch new posts
-    // This prevents showing cached posts from previous session
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final notifier = ref.read(postStoreProvider.notifier);
       notifier.clearSeen();
       notifier.resetFeedState('hybrid');
       notifier.resetFeedState('global');
-      debugPrint('🔄 Fresh app start: Reset feed states and cleared seen posts');
     });
     
     _initApp();
-    // Fetch initial notification badge count (fire-and-forget)
     NotificationDataService.fetchNotifications();
   }
 
@@ -71,8 +63,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
            _currentCountry = LocationService.currentCountry;
            _isLoadingLocation = false;
         });
-        // 🔥 Stagger feed initialization to prevent memory spike
-        // Delay first feed load to allow UI to render first
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) {
           ref.read(postStoreProvider.notifier).loadMore(
@@ -83,39 +73,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         }
       }
     } catch (e) {
-      if (kDebugMode) debugPrint('Error initializing app location: $e');
       if (mounted) {
         setState(() => _isLoadingLocation = false);
       }
     }
   }
 
-
   Future<void> _refreshFeeds() async {
-    if (kDebugMode) debugPrint('🔄 Refreshing feeds, revision: $_feedRevision -> ${_feedRevision + 1}');
-    
-    // Clear the store's cursors and seen IDs for a fresh start on refresh
     final notifier = ref.read(postStoreProvider.notifier);
     notifier.clearSeen();
     notifier.resetFeedState('hybrid');
     notifier.resetFeedState('global');
-    
     setState(() {
       _feedRevision++;
     });
   }
 
   void _onNavTap(int index) {
-    // Index 2 is now the dedicated Create button
     if (index == 2) {
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const NewPostScreen()),
       ).then((result) async {
-        if (result == true) {
-          if (kDebugMode) debugPrint('📝 Post created - no full refresh needed, post already registered to feed');
-          // 🔥 DON'T refresh - new post is already inserted at top via registerPosts()
-        }
+        if (result == true) {}
       });
       return;
     }
@@ -125,21 +105,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
   Widget _buildHomeTab() {
+    // 🔥 Phase 0: Lock Safety - Feature Flag check
+    if (FeatureFlags.useNewFeed) {
+      return const HomeFeedScreen();
+    }
+
     return Column(
       children: [
-        // ── AppBar ─────────────────────────────────────────
         _HomeAppBar(
           feedToggleIndex: _feedToggleIndex,
           onToggleChanged: (i) => setState(() {
             _feedToggleIndex = i;
             _visitedFeedIndexes.add(i);
-            // 🔥 Stagger global feed loading - only load when first visited and delay
             if (i == 1 && _visitedFeedIndexes.length == 2) {
               Future.delayed(const Duration(milliseconds: 500), () {
                 if (mounted) {
@@ -153,7 +131,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             MaterialPageRoute(builder: (_) => const ActivityScreen()),
           ),
         ),
-        // ── Feed ───────────────────────────────────────────
         Expanded(
           child: IndexedStack(
             index: _feedToggleIndex,
@@ -195,11 +172,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         child: IndexedStack(
           index: _bottomNavIndex,
           children: [
-            _visitedNavIndexes.contains(0) ? _buildHomeTab() : const SizedBox.shrink(),           // Index 0: Home
-            _visitedNavIndexes.contains(1) ? const SearchScreen() : const SizedBox.shrink(),      // Index 1: Explore
-            const SizedBox.shrink(),   // Index 2: Placeholder for Create (modal)
-            _visitedNavIndexes.contains(3) ? CommunityScreen() : const SizedBox.shrink(),         // Index 3: Groups
-            _visitedNavIndexes.contains(4) ? PersonalAccount(key: PersonalAccount.profileKey) : const SizedBox.shrink(),         // Index 4: Me
+            _visitedNavIndexes.contains(0) ? _buildHomeTab() : const SizedBox.shrink(),
+            _visitedNavIndexes.contains(1) ? const SearchScreen() : const SizedBox.shrink(),
+            const SizedBox.shrink(),
+            _visitedNavIndexes.contains(3) ? CommunityScreen() : const SizedBox.shrink(),
+            _visitedNavIndexes.contains(4) ? PersonalAccount(key: PersonalAccount.profileKey) : const SizedBox.shrink(),
           ],
         ),
       ),
@@ -211,10 +188,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Home AppBar: Nearby/Global toggle + notification bell
-// Pixel-matched to screenshot
-// ─────────────────────────────────────────────────────────────
 class _HomeAppBar extends StatelessWidget {
   final int feedToggleIndex;
   final ValueChanged<int> onToggleChanged;
@@ -229,18 +202,15 @@ class _HomeAppBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      // White background matching screenshot
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
       child: Row(
         children: [
-          // ── Nearby | Global pill toggle ──────────────────────
           _FeedToggle(
             selectedIndex: feedToggleIndex,
             onChanged: onToggleChanged,
           ),
           const Spacer(),
-          // ── Notification bell + red badge ────────────────────
           GestureDetector(
             onTap: onNotificationTap,
             child: Stack(
@@ -256,7 +226,6 @@ class _HomeAppBar extends StatelessWidget {
                     size: 26,
                   ),
                 ),
-                // Dynamic notification badge from stream - cached to avoid rebuilds
                 const _NotificationBadge(),
               ],
             ),
@@ -267,11 +236,6 @@ class _HomeAppBar extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Nearby | Global pill toggle — matches screenshot exactly:
-// Selected = green filled pill with white text
-// Unselected = plain text, no background
-// ─────────────────────────────────────────────────────────────
 class _FeedToggle extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onChanged;
@@ -338,7 +302,6 @@ class _ToggleItem extends StatelessWidget {
   }
 }
 
-// Extracted widget to prevent stream recreation on parent rebuild
 class _NotificationBadge extends StatelessWidget {
   const _NotificationBadge();
 
@@ -375,11 +338,6 @@ class _NotificationBadge extends StatelessWidget {
   }
 }
 
-
-
-// ─────────────────────────────────────────────────────────────
-// Location Error State — cleaner UX
-// ─────────────────────────────────────────────────────────────
 class _LocationErrorState extends StatelessWidget {
   final String error;
   final VoidCallback onRetry;
