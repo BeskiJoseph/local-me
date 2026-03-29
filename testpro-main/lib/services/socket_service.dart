@@ -105,5 +105,9 @@ class SocketService {
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;
+    _currentRooms.clear();
+    // BUG-012 related: Close stream controllers to prevent resource leaks
+    _roomController.close();
+    _typingController.close();
   }
 }

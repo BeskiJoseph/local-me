@@ -1,18 +1,19 @@
 import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
 import { logSecurityEvent } from '../utils/logger.js';
+import { globalLimiterStore } from '../services/MemoryLimiterService.js';
 
-// In-memory store for user-specific rate limiting
-const userRateLimits = new Map();
-
-// Helper to check user-specific rate limit
+// Helper to check user-specific rate limit using unified MemoryLimiterService
 export const checkUserRateLimit = (userId, action, maxAttempts = 5, windowMs = 15 * 60 * 1000) => {
-    const key = `${userId}:${action}`;
+    const key = `user_limit:${userId}:${action}`;
     const now = Date.now();
-    const userLimit = userRateLimits.get(key);
     
-    if (!userLimit || now > userLimit.resetTime) {
-        userRateLimits.set(key, { count: 1, resetTime: now + windowMs });
+    // globalLimiterStore.get returns the data payload automatically tracking TTL
+    let userLimit = globalLimiterStore.get(key);
+    
+    if (!userLimit) {
+        userLimit = { count: 1, resetTime: now + windowMs };
+        globalLimiterStore.set(key, userLimit, windowMs);
         return { allowed: true, remaining: maxAttempts - 1 };
     }
     
@@ -21,6 +22,7 @@ export const checkUserRateLimit = (userId, action, maxAttempts = 5, windowMs = 1
     }
     
     userLimit.count++;
+    globalLimiterStore.set(key, userLimit, userLimit.resetTime - now);
     return { allowed: true, remaining: maxAttempts - userLimit.count };
 };
 

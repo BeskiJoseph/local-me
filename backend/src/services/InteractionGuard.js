@@ -1,17 +1,5 @@
 import logger from '../utils/logger.js';
-
-// In-Memory store for Single-VM deployment. (Replace with Redis if scaling horizontally)
-const actionStore = new Map();
-
-// Periodic cleanup every 5 minutes to prevent memory leaks
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, record] of actionStore.entries()) {
-        if (now > record.expiresAt) {
-            actionStore.delete(key);
-        }
-    }
-}, 5 * 60 * 1000);
+import { globalLimiterStore } from './MemoryLimiterService.js';
 
 /**
  * 🛡️ Interaction Guard (Layer 4 Graph Integrity)
@@ -24,10 +12,10 @@ export class InteractionGuard {
     // Internal generic counter
     static _incrementCounter(key, ttlMs) {
         const now = Date.now();
-        let record = actionStore.get(key);
+        let record = globalLimiterStore.get(key);
 
-        if (!record || now > record.expiresAt) {
-            record = { count: 1, expiresAt: now + ttlMs, history: [now] };
+        if (!record) {
+            record = { count: 1, history: [now] };
         } else {
             record.count += 1;
             record.history.push(now);
@@ -36,7 +24,7 @@ export class InteractionGuard {
             record.count = record.history.length;
         }
 
-        actionStore.set(key, record);
+        globalLimiterStore.set(key, record, ttlMs);
         return record.count;
     }
 
@@ -48,10 +36,10 @@ export class InteractionGuard {
         const key = `${prefix}:${userId}:${targetId}`;
         const now = Date.now();
 
-        let record = actionStore.get(key);
-        if (!record || now > record.expiresAt) {
+        let record = globalLimiterStore.get(key);
+        if (!record) {
             // First time or expired cooldown
-            actionStore.set(key, { lastToggle: now, cycleCount: 1, expiresAt: now + cycleWindowMs });
+            globalLimiterStore.set(key, { lastToggle: now, cycleCount: 1 }, cycleWindowMs);
             return { action: 'allow' };
         }
 
@@ -59,7 +47,7 @@ export class InteractionGuard {
         if (now - record.lastToggle < cooldownMs) {
             logger.warn({ userId, targetId, prefix }, 'Pair toggle cooldown hit (Shadow Suppressed)');
             record.lastToggle = now;
-            actionStore.set(key, record);
+            globalLimiterStore.set(key, record, cycleWindowMs);
             return { action: 'shadow' };
         }
 
@@ -70,12 +58,11 @@ export class InteractionGuard {
         if (record.cycleCount >= cycleLimit) {
             logger.error({ userId, targetId, prefix }, 'Graph Abuse: Cycling detected. Blocking user action.');
             // Penalize by extending expiration window
-            record.expiresAt = now + (5 * 60 * 1000); // Block from this pair for 5 mins
-            actionStore.set(key, record);
+            globalLimiterStore.set(key, record, 5 * 60 * 1000); // Block from this pair for 5 mins
             return { action: 'block' }; // 429
         }
 
-        actionStore.set(key, record);
+        globalLimiterStore.set(key, record, cycleWindowMs);
         return { action: 'allow' };
     }
 

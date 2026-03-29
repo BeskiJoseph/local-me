@@ -1,6 +1,6 @@
 class SignupData {
   String? email;
-  String? password;
+  String? password; // TODO BUG-032: Clear password immediately after Firebase auth creation to minimize in-memory exposure
 
   String? username;
   String? firstName;

@@ -236,4 +236,71 @@ router.post('/:chatId/read', authenticate, async (req, res, next) => {
     }
 });
 
+/**
+ * BUG-017 FIX: GET /api/chats/:chatId/messages - Retrieve chat message history
+ * @desc    Get paginated messages for a chat with participant authorization
+ */
+router.get('/:chatId/messages', authenticate, async (req, res, next) => {
+    try {
+        const { chatId } = req.params;
+        const userId = req.user.uid;
+        const { limit = 50, before } = req.query;
+
+        // Verify participant authorization
+        const chatDoc = await db.collection('chats').doc(chatId).get();
+        if (!chatDoc.exists) {
+            return res.status(404).json({
+                success: false,
+                error: { message: 'Chat not found' }
+            });
+        }
+
+        const participants = chatDoc.data().participants;
+        if (!participants.includes(userId)) {
+            return res.status(403).json({
+                success: false,
+                error: { message: 'Unauthorized: You are not a participant in this chat' }
+            });
+        }
+
+        const pageSize = Math.min(parseInt(limit), 100);
+        let query = db.collection('chats').doc(chatId).collection('messages')
+            .orderBy('timestamp', 'desc')
+            .limit(pageSize + 1);
+
+        // Cursor-based pagination: fetch messages before a given message ID
+        if (before) {
+            const beforeDoc = await db.collection('chats').doc(chatId)
+                .collection('messages').doc(before).get();
+            if (beforeDoc.exists) {
+                query = query.startAfter(beforeDoc);
+            }
+        }
+
+        const snapshot = await query.get();
+        const hasMore = snapshot.docs.length > pageSize;
+        const messageDocs = snapshot.docs.slice(0, pageSize);
+
+        const messages = messageDocs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            timestamp: doc.data().timestamp?.toDate?.()?.toISOString?.(),
+            createdAt: doc.data().createdAt?.toDate?.()?.toISOString?.()
+        }));
+
+        return res.json({
+            success: true,
+            data: messages,
+            pagination: {
+                hasMore,
+                cursor: hasMore && messages.length > 0 ? messages[messages.length - 1].id : null
+            },
+            error: null
+        });
+    } catch (err) {
+        logger.error({ err: err.message }, '[CHATS] Get messages failed');
+        next(err);
+    }
+});
+
 export default router;

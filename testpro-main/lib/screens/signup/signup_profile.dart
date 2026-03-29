@@ -155,6 +155,9 @@ class _SignupProfileScreenState extends State<SignupProfileScreen> {
       }
 
       if (result != null) {
+        // BUG-032 FIX: Clear password immediately after Firebase auth creation
+        // to minimize in-memory exposure for the rest of the app session.
+        widget.data.password = null;
         await _handleAuthSuccess(result);
       } else {
         if (mounted) {

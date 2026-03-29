@@ -197,6 +197,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     AuthService.signOut();
     UserSession.clear();
     FeedSession.instance.resetAll();
+    SocketService.dispose(); // BUG-025 FIX: Disconnect socket on auth failure
 
     ErrorHandler.navigatorKey.currentState?.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const WelcomeScreen()),
@@ -209,6 +210,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     _authSub?.cancel();
     _eventSub?.cancel();
     _connectivitySub?.cancel();
+    _memoryCheckTimer?.cancel(); // BUG-026 FIX: Cancel timer to prevent setState on unmounted widget
+    SocketService.dispose(); // BUG-025 FIX: Clean up socket on app disposal
     super.dispose();
   }
 
