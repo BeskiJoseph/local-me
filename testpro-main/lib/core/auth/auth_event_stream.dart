@@ -25,4 +25,9 @@ class AuthEventStream {
   static void emitSessionExpired() {
     _controller.add(AuthEvent(AuthEventType.sessionExpired, message: 'Your session has expired. Please sign in again.'));
   }
+
+  // BUG-012 FIX: Dispose the StreamController to prevent resource leaks
+  static void dispose() {
+    _controller.close();
+  }
 }

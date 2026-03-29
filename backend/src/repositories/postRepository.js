@@ -24,6 +24,10 @@ class PostRepository {
   async getPostById(postId) {
     try {
       const doc = await db.collection('posts').doc(postId).get();
+      if (!doc.exists) return null;
+      // BUG-016 FIX: Don't return soft-deleted posts
+      const data = doc.data();
+      if (data.status === 'deleted') return null;
       return mapDocToPost(doc);
     } catch (error) {
       logger.error({ postId, error }, '[PostRepo] Error fetching post by ID');
@@ -115,8 +119,8 @@ class PostRepository {
    *   - Graceful Fallback: If cursor post deleted, skip gracefully
    */
    async getLocalFeed({
-     geoHashMin,
-     geoHashMax,
+     geoHashMin, // TODO BUG-027: Remove unused geoHash params from pipeline (controller → feedService → repository)
+     geoHashMax, // TODO BUG-027: Same — no longer used after BUG-005 fix
      pageSize = 20,
      lastDocSnapshot = null,
      mediaType = null
@@ -167,12 +171,9 @@ class PostRepository {
         const hasMore = docs.length > pageSize;
         const finalDocs = docs.slice(0, pageSize);
         let posts = finalDocs.map(doc => mapDocToPost(doc));
-        if (geoHashMin && geoHashMax) {
-          posts = posts.filter(post => {
-            if (!post.geoHash) return false;
-            return post.geoHash >= geoHashMin && post.geoHash <= geoHashMax;
-          });
-        }
+        // BUG-005 FIX: Removed post-pagination geoHash filter.
+        // Frontend handles ALL distance sorting — server-side geo filter after
+        // pagination broke page sizes (requesting 20, returning 3 with hasMore=false).
 
         // 🔥 CRITICAL: lastDoc is from FIRESTORE ORDER (createdAt DESC)
         // NOT from any re-sorted order.
@@ -472,6 +473,85 @@ class PostRepository {
       return results;
     } catch (error) {
       logger.error({ postIds, error }, '[PostRepo] Error bulk fetching posts');
+      throw error;
+    }
+  }
+
+  /**
+   * BUG-028 FIX: Get event chat messages securely
+   */
+  async getEventChatMessages(postId, limit = 50) {
+    try {
+      const messagesSnapshot = await db.collection('posts')
+        .doc(postId)
+        .collection('messages')
+        .orderBy('timestamp', 'desc')
+        .limit(limit)
+        .get();
+
+      return messagesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        timestamp: doc.data().timestamp?.toDate?.()?.toISOString?.() || new Date().toISOString()
+      }));
+    } catch (error) {
+      logger.error({ postId, error }, '[PostRepo] Error fetching event chat messages');
+      throw error;
+    }
+  }
+
+  /**
+   * BUG-028 FIX: Get post insights
+   */
+  async getPostInsights(postId, limit = 100) {
+    try {
+      const viewsSnapshot = await db.collection('posts')
+        .doc(postId)
+        .collection('views')
+        .orderBy('viewedAt', 'desc')
+        .limit(limit)
+        .get();
+
+      return viewsSnapshot.docs.map(doc => ({
+        ...doc.data(),
+        viewedAt: doc.data().viewedAt?.toDate?.()?.toISOString?.()
+      }));
+    } catch (error) {
+      logger.error({ postId, error }, '[PostRepo] Error fetching post insights');
+      throw error;
+    }
+  }
+
+  /**
+   * BUG-028 FIX: Record a report and conditionally flag the post
+   */
+  async createReport(reportId, reportData, postId) {
+    try {
+      const reportRef = db.collection('reports').doc(reportId);
+      const existingReport = await reportRef.get();
+      if (existingReport.exists) {
+        throw new Error('Duplicate report');
+      }
+
+      await reportRef.set(reportData);
+      
+      await db.collection('posts').doc(postId).update({
+        reportCount: admin.firestore.FieldValue.increment(1),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      const updatedPost = await db.collection('posts').doc(postId).get();
+      if ((updatedPost.data().reportCount || 0) >= 5) {
+        await db.collection('posts').doc(postId).update({
+          visibility: 'flagged',
+          flaggedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        logger.warn({ postId }, '[Posts] Post auto-flagged');
+      }
+    } catch (error) {
+      if (error.message !== 'Duplicate report') {
+        logger.error({ postId, error }, '[PostRepo] Error creating report');
+      }
       throw error;
     }
   }

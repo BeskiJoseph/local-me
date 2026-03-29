@@ -26,6 +26,8 @@ const SEARCH_CACHE_MAX = 200;
 
 function cacheSet(key, data) {
     if (_searchCache.size >= SEARCH_CACHE_MAX) {
+        // BUG-020 FIX: Now correctly evicts least-recently-used entries
+        // because cacheGet moves accessed entries to end of map
         const keysToDelete = [..._searchCache.keys()].slice(0, 50);
         keysToDelete.forEach(k => _searchCache.delete(k));
     }
@@ -35,6 +37,9 @@ function cacheSet(key, data) {
 function cacheGet(key) {
     const cached = _searchCache.get(key);
     if (cached && (Date.now() - cached.timestamp < SEARCH_CACHE_TTL)) {
+        // BUG-020 FIX: Move accessed entry to end of map for true LRU
+        _searchCache.delete(key);
+        _searchCache.set(key, cached);
         return cached.data;
     }
     if (cached) _searchCache.delete(key);

@@ -58,10 +58,9 @@ class _NewPostScreenState extends ConsumerState<NewPostScreen> {
   bool get _hasDraft =>
       _contentController.text.isNotEmpty || _mediaBytes != null;
 
-  // Post button enabled only when form is valid
+  // BUG-023 FIX: Media is optional — allow text-only posts
   bool get _canPost =>
       !_isSubmitting &&
-      _mediaBytes != null &&
       _contentController.text.trim().isNotEmpty &&
       (_mediaType == 'document' || _contentController.text.length <= _maxChars);
 
@@ -337,9 +336,10 @@ class _NewPostScreenState extends ConsumerState<NewPostScreen> {
     final user = AuthService.currentUser;
     if (user == null) return;
 
-    // Normal posts REQUIRE image or video - text only not allowed
-    if (_mediaBytes == null) {
-      _showErrorSnackBar('Please add an image or video to post');
+    // BUG-023 FIX: Media is optional for text-only posts
+    // Only show error if neither media nor text is available
+    if (_mediaBytes == null && _contentController.text.trim().isEmpty) {
+      _showErrorSnackBar('Please add content or media to post');
       return;
     }
 

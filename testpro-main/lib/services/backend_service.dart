@@ -42,8 +42,8 @@ class BackendService {
   ) => _instance.updatePost(postId, data);
   static Future<ApiResponse<bool>> deletePost(String postId) =>
       _instance.deletePost(postId);
-  static Future<ApiResponse<List<dynamic>>> getMessages(String eventId) =>
-      _instance.getMessages(eventId);
+  static Future<ApiResponse<List<dynamic>>> getEventMessages(String eventId) =>
+      _instance.getEventMessages(eventId);
   static Future<ApiResponse<bool>> sendEventMessage(
     String eventId,
     String text,
@@ -616,7 +616,13 @@ class BackendClient {
           body: jsonEncode({'targetUserId': targetUserId}),
         ),
       );
-      return _processResponse(resp, (_) => true);
+      // BUG-013 FIX: Parse isFollowing from server response instead of hardcoding true
+      return _processResponse(resp, (d) {
+        if (d is Map<String, dynamic> && d.containsKey('isFollowing')) {
+          return d['isFollowing'] as bool;
+        }
+        return true; // Fallback for backwards compatibility
+      });
     } catch (e) {
       return ApiResponse(success: false, error: e.toString());
     }
@@ -669,7 +675,9 @@ class BackendClient {
     }
   }
 
-  Future<ApiResponse<List<dynamic>>> getMessages(String eventId) async {
+  // BUG-018 FIX: Renamed from getMessages to getEventMessages for clarity.
+  // This calls /api/posts/{eventId}/messages (event-specific chat), NOT /api/chats.
+  Future<ApiResponse<List<dynamic>>> getEventMessages(String eventId) async {
     try {
       final resp = await _sendRequest(
         (token) async => await _client.get(

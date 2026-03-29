@@ -42,6 +42,9 @@ function cleanupSessions() {
   }
 }
 
+// BUG-009 FIX: Periodic cleanup prevents memory leak when no new sessions are created
+setInterval(cleanupSessions, 10 * 60 * 1000);
+
 /**
  * Middleware to manage session seen IDs
  * 
@@ -172,6 +175,46 @@ router.post(
     }
   );
 
+// BUG-001 FIX: /new-since MUST be registered BEFORE /:id to prevent route shadowing
+/**
+ * GET /api/posts/new-since - Check for new posts since timestamp
+ * TODO: Refactor to use repository layer
+ */
+router.get('/new-since', authenticate, async (req, res, next) => {
+  try {
+    const { since } = req.query;
+    
+    if (!since) {
+      return res.status(400).json({
+        success: false,
+        error: 'Since timestamp required'
+      });
+    }
+
+    const sinceDate = new Date(parseInt(since));
+    const query = db.collection('posts')
+      .where('visibility', '==', 'public')
+      .where('status', '==', 'active')
+      .where('createdAt', '>', sinceDate)
+      .orderBy('createdAt', 'desc')
+      .limit(50);
+
+    const snapshot = await query.get();
+    const posts = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    return res.json({
+      success: true,
+      data: posts,
+      error: null
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /**
  * Get a single post by ID
  * GET /api/posts/:id
@@ -230,94 +273,19 @@ router.delete(
  */
 router.post('/:id/view', authenticate, async (req, res, next) => {
   try {
-    const postId = req.params.id;
-    const userId = req.user.uid;
-
-    const viewRef = db.collection('posts').doc(postId).collection('views').doc(userId);
-    const existingView = await viewRef.get();
-    const isFirstView = !existingView.exists;
-
-    const userDoc = await db.collection('users').doc(userId).get();
-    const userData = userDoc.data();
-
-    const viewData = {
-      userId,
-      userName: buildDisplayName({
-        displayName: req.user.displayName,
-        username: userData?.username,
-        firstName: userData?.firstName,
-        lastName: userData?.lastName,
-        email: userData?.email || req.user.email,
-        fallback: 'User'
-      }),
-      userAvatar: req.user.photoURL,
-      location: userData?.city || null,
-      viewedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-
-    await viewRef.set(viewData, { merge: true });
-
-    if (isFirstView) {
-      await db.collection('posts').doc(postId).update({
-        viewCount: admin.firestore.FieldValue.increment(1)
-      });
-    }
-
-    return res.json({
-      success: true,
-      data: { viewed: true, firstView: isFirstView },
-      error: null
-    });
+    await postController.viewPost(req, res, next);
   } catch (err) {
     next(err);
   }
 });
 
 // ============================================================
-// LEGACY ENDPOINTS - Preserved from old system
+// LEGACY ENDPOINTS - Refactored to Controller (BUG-028)
 // ============================================================
-
-/**
- * GET /api/posts/new-since - Check for new posts since timestamp
- * TODO: Refactor to use repository layer
- */
-router.get('/new-since', authenticate, async (req, res, next) => {
-  try {
-    const { since } = req.query;
-    
-    if (!since) {
-      return res.status(400).json({
-        success: false,
-        error: 'Since timestamp required'
-      });
-    }
-
-    const sinceDate = new Date(parseInt(since));
-    const query = db.collection('posts')
-      .where('visibility', '==', 'public')
-      .where('status', '==', 'active')
-      .where('createdAt', '>', sinceDate)
-      .orderBy('createdAt', 'desc')
-      .limit(50);
-
-    const snapshot = await query.get();
-    const posts = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
-
-    return res.json({
-      success: true,
-      data: posts,
-      error: null
-    });
-  } catch (err) {
-    next(err);
-  }
-});
 
 /**
  * POST /api/posts/:id/messages - Add message to post
+ * TODO: Move this specifically into interaction service or controller
  */
 router.post('/:id/messages', authenticate, async (req, res, next) => {
   try {
@@ -360,24 +328,7 @@ router.post('/:id/messages', authenticate, async (req, res, next) => {
  */
 router.get('/:id/messages', authenticate, async (req, res, next) => {
   try {
-    const snapshot = await db.collection('posts')
-      .doc(req.params.id)
-      .collection('messages')
-      .orderBy('timestamp', 'desc')
-      .limit(100)
-      .get();
-
-    const messages = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      timestamp: doc.data().timestamp?.toDate?.()?.toISOString?.()
-    }));
-
-    return res.json({
-      success: true,
-      data: messages,
-      error: null
-    });
+    await postController.getEventChatMessages(req, res, next);
   } catch (err) {
     next(err);
   }
@@ -388,43 +339,7 @@ router.get('/:id/messages', authenticate, async (req, res, next) => {
  */
 router.get('/:id/insights', authenticate, async (req, res, next) => {
   try {
-    const postDoc = await db.collection('posts').doc(req.params.id).get();
-    
-    if (!postDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        error: 'Post not found'
-      });
-    }
-
-    const postData = postDoc.data();
-    if (postData.authorId !== req.user.uid) {
-      return res.status(403).json({
-        success: false,
-        error: 'You can only view insights for your own posts'
-      });
-    }
-
-    const viewsSnapshot = await db.collection('posts')
-      .doc(req.params.id)
-      .collection('views')
-      .orderBy('viewedAt', 'desc')
-      .limit(100)
-      .get();
-
-    const viewers = viewsSnapshot.docs.map(doc => ({
-      ...doc.data(),
-      viewedAt: doc.data().viewedAt?.toDate?.()?.toISOString?.()
-    }));
-
-    return res.json({
-      success: true,
-      data: {
-        viewCount: postData.viewCount || 0,
-        viewers
-      },
-      error: null
-    });
+    await postController.getPostInsights(req, res, next);
   } catch (err) {
     next(err);
   }
@@ -435,89 +350,11 @@ router.get('/:id/insights', authenticate, async (req, res, next) => {
  */
 router.post('/:id/report', authenticate, async (req, res, next) => {
   try {
-    const postId = req.params.id;
-    const reporterId = req.user.uid;
-    const { reason } = req.body;
-
-    const validReasons = [
-      'Spam or misleading',
-      'Harassment or hate speech',
-      'Violence or dangerous content',
-      'Nudity or sexual content',
-      'False information',
-      'Intellectual property violation',
-      'Something else'
-    ];
-
-    if (!reason || !validReasons.includes(reason)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid report reason'
-      });
-    }
-
-    const postDoc = await db.collection('posts').doc(postId).get();
-    if (!postDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        error: 'Post not found'
-      });
-    }
-
-    const postData = postDoc.data();
-    if (postData.authorId === reporterId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Cannot report your own post'
-      });
-    }
-
-    const reportData = {
-      postId,
-      postAuthorId: postData.authorId,
-      reporterId,
-      reporterName: buildDisplayName({
-        displayName: req.user.displayName,
-        email: req.user.email,
-        fallback: 'User'
-      }),
-      reason,
-      status: 'pending',
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      postTitle: postData.title || postData.body?.substring(0, 100) || 'Untitled',
-      postMediaUrl: postData.mediaUrl || null
-    };
-
-    const reportRef = await db.collection('reports').add(reportData);
-    await db.collection('posts').doc(postId).update({
-      reportCount: admin.firestore.FieldValue.increment(1),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    const updatedPost = await db.collection('posts').doc(postId).get();
-    if ((updatedPost.data().reportCount || 0) >= 5) {
-      await db.collection('posts').doc(postId).update({
-        visibility: 'flagged',
-        flaggedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-      logger.warn({ postId }, '[Posts] Post auto-flagged');
-    }
-
-    await AuditService.logAction({
-      userId: reporterId,
-      action: 'POST_REPORTED',
-      metadata: { postId, reason, reportId: reportRef.id },
-      req
-    });
-
-    return res.json({
-      success: true,
-      data: { reported: true, reportId: reportRef.id, postId },
-      error: null
-    });
+    await postController.reportPost(req, res, next);
   } catch (err) {
     next(err);
   }
 });
+
 
 export default router;

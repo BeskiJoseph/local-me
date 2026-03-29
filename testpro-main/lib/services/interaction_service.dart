@@ -166,10 +166,8 @@ class InteractionService {
     });
   }
 
-  static void _rollbackFollow(String postId, WidgetRef ref, bool isFollowing) {
-    final notifier = ref.read(postStoreProvider.notifier);
-    notifier.updatePostPartially(postId, {'isFollowing': isFollowing});
-  }
+  // BUG-011: Removed dead _rollbackFollow method. Follow rollback uses
+  // notifier.updatePostPartiallyByAuthor() directly in toggleFollow.
 }
 
 /// Utility for error handling

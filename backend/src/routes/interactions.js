@@ -104,13 +104,13 @@ router.post(
                     }
                 }
                 wasLiked = likeDoc.exists;
-                // Calculate new count for real-time broadcast
-                const currentCount = postDoc.data().likeCount || 0;
-                newCount = Math.max(0, currentCount + (wasLiked ? -1 : 1));
-
-                // Broadcast to other users via WebSocket (Batched 2s)
-                broadcastLikeUpdate(postId, newCount, userId);
             });
+
+            // BUG-003 FIX: Broadcast AFTER transaction commits, not inside
+            // BUG-004/019 FIX: Re-read committed likeCount for accurate broadcast
+            const updatedPostDoc = await postRef.get();
+            newCount = updatedPostDoc.exists ? (updatedPostDoc.data().likeCount || 0) : 0;
+            broadcastLikeUpdate(postId, newCount, userId);
 
             // Trigger notification outside transaction for speed
             if (notificationPayload) {
@@ -433,7 +433,7 @@ router.post(
 
             return res.json({
                 success: true,
-                data: { status: 'active' },
+                data: { isFollowing: !wasFollowing },
                 error: null
             });
         } catch (error) {
@@ -639,8 +639,7 @@ router.get('/comments/:postId', authenticate, async (req, res, next) => {
         console.error("🔥 COMMENTS ERROR [GET /comments/:postId]:", err);
         return res.status(500).json({
             success: false,
-            error: err.message,
-            stack: err.stack,
+            error: 'Failed to fetch comments',
             requestId: req.params.postId
         });
     }
@@ -688,8 +687,7 @@ router.get('/comments/:commentId/replies', authenticate, async (req, res, next) 
         console.error("🔥 REPLIES ERROR [GET /comments/:commentId/replies]:", err);
         return res.status(500).json({
             success: false,
-            error: err.message,
-            stack: err.stack,
+            error: 'Failed to fetch replies',
             requestId: req.params.commentId
         });
     }
